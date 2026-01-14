@@ -1,0 +1,158 @@
+# ICT Strategy Configuration for ES (E-mini S&P 500 Futures)
+#
+# This configuration file contains parameters for running the ICT strategy
+# on ES futures. Includes session times, signal thresholds, risk parameters,
+# and instrument-specific settings optimized for S&P 500 futures.
+#
+# ES is generally less volatile than NQ, so risk limits can be slightly higher.
+
+# =============================================================================
+# Strategy Identification
+# =============================================================================
+
+name: "ICT_ES_Strategy"
+version: "1.0.0"
+description: "ICT methodology applied to E-mini S&P 500 futures"
+
+# =============================================================================
+# Timezone Configuration
+# =============================================================================
+# All times in this config are in Eastern Time (America/New_York).
+# The system automatically handles US daylight saving time transitions.
+
+timezone: "America/New_York"
+
+# =============================================================================
+# Killzone Configuration
+# =============================================================================
+# Killzones are specific time windows where ICT setups are most reliable.
+# Trading is only allowed during enabled killzones.
+#
+# Times are in 24-hour format (HH:MM) in the timezone specified above.
+# Start time is inclusive, end time is exclusive.
+
+# Master toggle for London killzone
+# Set to false if you only want to trade NY Open
+enable_london_killzone: true
+
+killzones:
+  # New York Open Killzone
+  # The highest probability window - US equity market open
+  # High volume, institutional order flow, best liquidity
+  NY_OPEN:
+    enabled: true
+    start: "09:30"
+    end: "11:00"
+    description: "NY equity market open - primary trading window"
+
+  # London Killzone
+  # European session start - good for overnight setups
+  # Can catch moves before US traders wake up
+  # Controlled by enable_london_killzone toggle above
+  LONDON:
+    enabled: true  # Also respects enable_london_killzone master toggle
+    start: "02:00"
+    end: "05:00"
+    description: "London session open - European institutional flow"
+
+# =============================================================================
+# Instrument Specifications
+# =============================================================================
+# Contract specifications for ES (E-mini S&P 500)
+# These values are fixed by the CME and should not be changed.
+
+instrument:
+  symbol: "ES"
+  exchange: "CME"
+  tick_size: 0.25          # Minimum price movement ($12.50 per tick)
+  tick_value: 12.50        # Dollar value of one tick
+  point_value: 50.00       # Dollar value of one point (4 ticks)
+  contract_months: "HMUZ"  # March, June, September, December
+
+# =============================================================================
+# Risk Management
+# =============================================================================
+# Risk parameters specific to ES trading.
+# ES is less volatile than NQ, allowing for slightly larger position sizes.
+
+risk:
+  # Maximum risk per trade as percentage of account
+  max_risk_per_trade_pct: 1.0
+
+  # Maximum number of contracts per trade
+  # Adjust based on account size
+  max_contracts: 4
+
+  # Maximum daily loss before stopping (percentage of account)
+  # ES is steadier, so we allow slightly more room
+  max_daily_loss_pct: 3.0
+
+  # Maximum number of trades per day
+  max_trades_per_day: 3
+
+  # Maximum number of consecutive losses before pausing
+  max_consecutive_losses: 2
+
+  # Minimum risk/reward ratio required for a trade
+  min_risk_reward: 2.0
+
+# =============================================================================
+# Signal Parameters
+# =============================================================================
+# Thresholds and settings for ICT signal detection.
+
+signals:
+  # Minimum FVG size in ticks to be considered valid
+  # Smaller gaps may not provide enough edge
+  fvg_min_size_ticks: 3
+
+  # Number of bars to look back for swing high/low detection
+  swing_lookback_bars: 10
+
+  # Minimum sweep size in ticks to be considered valid
+  # Price must exceed the level by at least this much
+  sweep_min_ticks: 2
+
+  # Require BOS confirmation after sweep before entry
+  require_bos: true
+
+  # Maximum bars to wait for BOS after sweep
+  bos_timeout_bars: 5
+
+# =============================================================================
+# Target Calculation
+# =============================================================================
+# How to calculate take-profit levels.
+
+targets:
+  # Use FVG levels as targets
+  use_fvg_targets: true
+
+  # Use liquidity levels (swing highs/lows) as targets
+  use_liquidity_targets: true
+
+  # Default target distances in points (if no structural targets found)
+  default_target_1_points: 4.0   # 16 ticks = $200 per contract
+  default_target_2_points: 8.0   # 32 ticks = $400 per contract
+
+  # Partial exit percentages at each target
+  target_1_exit_pct: 50  # Take 50% off at first target
+  target_2_exit_pct: 50  # Take remaining 50% at second target
+
+# =============================================================================
+# Stop Loss Configuration
+# =============================================================================
+
+stops:
+  # Place stop beyond the swept level
+  stop_beyond_sweep: true
+
+  # Additional buffer beyond sweep level in ticks
+  stop_buffer_ticks: 2
+
+  # Move to breakeven after reaching target 1
+  move_to_breakeven: true
+
+  # Trail stop after target 1 (in ticks behind price)
+  trail_after_target_1: false
+  trail_distance_ticks: 8

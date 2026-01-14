@@ -1,0 +1,168 @@
+# ICT Strategy Configuration for NQ (E-mini Nasdaq-100 Futures)
+#
+# This configuration file contains parameters for running the ICT strategy
+# on NQ futures. Includes session times, signal thresholds, risk parameters,
+# and instrument-specific settings optimized for Nasdaq-100 futures.
+#
+# NQ is MORE volatile than ES - larger moves, wider stops, tighter risk limits.
+# Tech-heavy index can have violent swings, especially during earnings season.
+
+# =============================================================================
+# Strategy Identification
+# =============================================================================
+
+name: "ICT_NQ_Strategy"
+version: "1.0.0"
+description: "ICT methodology applied to E-mini Nasdaq-100 futures"
+
+# =============================================================================
+# Timezone Configuration
+# =============================================================================
+# All times in this config are in Eastern Time (America/New_York).
+# The system automatically handles US daylight saving time transitions.
+
+timezone: "America/New_York"
+
+# =============================================================================
+# Killzone Configuration
+# =============================================================================
+# Killzones are specific time windows where ICT setups are most reliable.
+# Trading is only allowed during enabled killzones.
+#
+# Times are in 24-hour format (HH:MM) in the timezone specified above.
+# Start time is inclusive, end time is exclusive.
+
+# Master toggle for London killzone
+# NQ can be choppy in London - consider disabling if win rate is low
+enable_london_killzone: false
+
+killzones:
+  # New York Open Killzone
+  # Best window for NQ - tech stocks drive early morning momentum
+  # FAANG earnings often cause big moves at open
+  NY_OPEN:
+    enabled: true
+    start: "09:30"
+    end: "11:00"
+    description: "NY equity market open - primary trading window for NQ"
+
+  # London Killzone
+  # European session - NQ can be thin and choppy
+  # Disabled by default for NQ (see enable_london_killzone above)
+  LONDON:
+    enabled: true  # Controlled by enable_london_killzone master toggle
+    start: "02:00"
+    end: "05:00"
+    description: "London session - use with caution on NQ"
+
+# =============================================================================
+# Instrument Specifications
+# =============================================================================
+# Contract specifications for NQ (E-mini Nasdaq-100)
+# These values are fixed by the CME and should not be changed.
+
+instrument:
+  symbol: "NQ"
+  exchange: "CME"
+  tick_size: 0.25          # Minimum price movement ($5.00 per tick)
+  tick_value: 5.00         # Dollar value of one tick
+  point_value: 20.00       # Dollar value of one point (4 ticks)
+  contract_months: "HMUZ"  # March, June, September, December
+
+# =============================================================================
+# Risk Management
+# =============================================================================
+# Risk parameters specific to NQ trading.
+# NQ is MORE volatile than ES - use tighter limits!
+# A 50-point move on NQ ($1000/contract) is common in a single session.
+
+risk:
+  # Maximum risk per trade as percentage of account
+  # LOWER than ES due to higher volatility
+  max_risk_per_trade_pct: 0.75
+
+  # Maximum number of contracts per trade
+  # LOWER than ES - NQ moves can be violent
+  max_contracts: 2
+
+  # Maximum daily loss before stopping (percentage of account)
+  # TIGHTER than ES due to volatility
+  max_daily_loss_pct: 2.0
+
+  # Maximum number of trades per day
+  # Fewer trades on NQ - wait for quality setups
+  max_trades_per_day: 2
+
+  # Maximum number of consecutive losses before pausing
+  max_consecutive_losses: 2
+
+  # Minimum risk/reward ratio required for a trade
+  # Higher R:R requirement due to lower win rate potential
+  min_risk_reward: 2.5
+
+# =============================================================================
+# Signal Parameters
+# =============================================================================
+# Thresholds and settings for ICT signal detection.
+# NQ requires wider thresholds due to larger price swings.
+
+signals:
+  # Minimum FVG size in ticks to be considered valid
+  # LARGER than ES - NQ has bigger gaps
+  fvg_min_size_ticks: 5
+
+  # Number of bars to look back for swing high/low detection
+  swing_lookback_bars: 10
+
+  # Minimum sweep size in ticks to be considered valid
+  # LARGER than ES - need more confirmation on NQ
+  sweep_min_ticks: 4
+
+  # Require BOS confirmation after sweep before entry
+  require_bos: true
+
+  # Maximum bars to wait for BOS after sweep
+  bos_timeout_bars: 5
+
+# =============================================================================
+# Target Calculation
+# =============================================================================
+# How to calculate take-profit levels.
+# NQ targets are in points - note that 1 NQ point = $20 (vs $50 for ES)
+
+targets:
+  # Use FVG levels as targets
+  use_fvg_targets: true
+
+  # Use liquidity levels (swing highs/lows) as targets
+  use_liquidity_targets: true
+
+  # Default target distances in points (if no structural targets found)
+  # NQ moves bigger than ES, so larger point targets
+  default_target_1_points: 15.0   # 60 ticks = $300 per contract
+  default_target_2_points: 30.0   # 120 ticks = $600 per contract
+
+  # Partial exit percentages at each target
+  target_1_exit_pct: 50  # Take 50% off at first target
+  target_2_exit_pct: 50  # Take remaining 50% at second target
+
+# =============================================================================
+# Stop Loss Configuration
+# =============================================================================
+# NQ stops need to be wider to avoid getting stopped out by noise.
+
+stops:
+  # Place stop beyond the swept level
+  stop_beyond_sweep: true
+
+  # Additional buffer beyond sweep level in ticks
+  # WIDER than ES due to NQ volatility
+  stop_buffer_ticks: 4
+
+  # Move to breakeven after reaching target 1
+  move_to_breakeven: true
+
+  # Trail stop after target 1 (in ticks behind price)
+  # Wider trail for NQ
+  trail_after_target_1: false
+  trail_distance_ticks: 16
