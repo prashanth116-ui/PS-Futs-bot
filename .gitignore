@@ -11,3 +11,11 @@ Thumbs.db
 
 # Logs / temp
 *.log
+
+# Credentials - NEVER commit these
+config/.env
+config/tradingview.env
+.env
+*.pem
+*.key
+credentials.json
