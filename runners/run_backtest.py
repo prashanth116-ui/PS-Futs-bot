@@ -129,4 +129,5 @@ if __name__ == "__main__":
     today = date.today()
     symbols = ["ES", "NQ"]
 
-    run_backtest(symbols, today, interval="5m")
+    # Use 2-minute bars for more granular entries
+    run_backtest(symbols, today, interval="2m")

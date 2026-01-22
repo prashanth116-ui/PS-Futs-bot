@@ -5,16 +5,12 @@ Main strategy class that orchestrates ICT-based trading signals.
 Combines multiple ICT concepts (liquidity sweeps, BOS, FVG, etc.)
 to generate high-probability trade setups during optimal sessions.
 
-Signal Flow:
-    1. Session Filter - Only trade during killzones
-    2. Sweep Detection - Identify liquidity grabs
-    3. BOS Confirmation - Confirm direction after sweep
-    4. FVG Entry - Enter at optimal price level
-    5. Risk Approval - Validate with risk manager
-    6. Signal Emission - Return approved signal
+Complete Signal Flow:
+    swingFound → liquidityDefined → sweepConfirmed → displacement
+        → MSS → BOS → CISD → FVG → Entry
 
-This file orchestrates the pipeline but does NOT implement
-detection logic - that lives in sweep.py, bos.py, and fvg.py.
+Each step must be validated before progressing to the next.
+This file orchestrates the pipeline using the state machine.
 """
 
 import logging
@@ -52,6 +48,33 @@ from strategies.ict.signals.sweep import (
     find_swing_lows,
     get_most_significant_sweep,
     get_prior_session_levels,
+)
+from strategies.ict.signals.cisd import (
+    CISDEvent,
+    detect_cisd,
+    detect_cisd_on_bar,
+)
+from strategies.ict.signals.displacement import (
+    DisplacementEvent,
+    detect_displacement,
+    detect_displacement_with_fvg,
+    get_expected_displacement_direction,
+)
+from strategies.ict.signals.liquidity import (
+    LiquidityZone,
+    define_liquidity_zones,
+    check_liquidity_sweep,
+    get_nearest_liquidity,
+)
+from strategies.ict.signals.mss import (
+    MSSEvent,
+    detect_mss,
+    detect_mss_after_sweep,
+)
+from strategies.ict.state_machine import (
+    ICTStateMachine,
+    SetupContext,
+    SignalState,
 )
 
 if TYPE_CHECKING:
@@ -146,6 +169,9 @@ class ICTStrategy(Strategy):
         self._enable_session_filter: bool = config.get("enable_session_filter", True)
         self._require_sweep: bool = config.get("require_sweep", True)
         self._require_bos: bool = config.get("require_bos", True)
+        self._require_cisd: bool = config.get("require_cisd", False)
+        self._require_fvg_after_cisd: bool = config.get("require_fvg_after_cisd", False)
+        self._min_displacement_ticks: float = config.get("min_displacement_ticks", 4)
 
         # -----------------------------------------------------------------
         # State variables
@@ -175,6 +201,7 @@ class ICTStrategy(Strategy):
 
         # Confirmed BOS event (after sweep)
         self.pending_bos: BOSEvent | None = None
+        self.pending_cisd: CISDEvent | None = None
 
         # -----------------------------------------------------------------
         # Tracked zones
@@ -209,6 +236,7 @@ class ICTStrategy(Strategy):
         self.current_bias = None
         self.pending_sweep = None
         self.pending_bos = None
+        self.pending_cisd = None
 
         # -----------------------------------------------------------------
         # Clear zones and history
@@ -380,11 +408,12 @@ class ICTStrategy(Strategy):
         Args:
             reason: Why the setup was invalidated (for logging).
         """
-        if self.pending_sweep or self.pending_bos:
+        if self.pending_sweep or self.pending_bos or self.pending_cisd:
             logger.debug(f"ICTStrategy: Setup invalidated - {reason}")
 
         self.pending_sweep = None
         self.pending_bos = None
+        self.pending_cisd = None
         self.current_bias = None
 
     def on_bar(self, bar: "Bar") -> list[Signal]:
@@ -551,6 +580,50 @@ class ICTStrategy(Strategy):
                 return signals
 
         # -----------------------------------------------------------------
+        # STEP 5.5: CISD (CHANGE IN STATE OF DELIVERY) DETECTION
+        # -----------------------------------------------------------------
+        # CISD confirms the market has shifted direction with displacement.
+        # More stringent than BOS - requires a strong momentum candle.
+        #
+        # If CISD detected -> Store as pending_cisd
+        # CISD may also create an FVG that we can use for entry.
+        # -----------------------------------------------------------------
+
+        if self._require_cisd and self.pending_sweep and not self.pending_cisd:
+            cisd = detect_cisd(
+                bars=self._bars,
+                config=config,
+                sweep_event=self.pending_sweep,
+            )
+
+            if cisd and cisd.confirmed:
+                self.pending_cisd = cisd
+                self.current_bias = cisd.direction
+                logger.info(
+                    f"ICTStrategy: CISD confirmed - {cisd.direction} "
+                    f"displacement {cisd.displacement_size:.1f} ticks "
+                    f"broke {cisd.broken_level:.2f}"
+                )
+
+                # If CISD created an FVG, add it to our FVG list
+                if cisd.fvg_zone:
+                    from strategies.ict.signals.fvg import FVGZone
+                    cisd_fvg = FVGZone(
+                        direction=cisd.direction,
+                        low=cisd.fvg_zone[0],
+                        high=cisd.fvg_zone[1],
+                        midpoint=(cisd.fvg_zone[0] + cisd.fvg_zone[1]) / 2,
+                        created_at=cisd.timestamp,
+                        created_bar_index=cisd.displacement_bar_index,
+                        metadata={"source": "CISD"},
+                    )
+                    self._all_fvgs.append(cisd_fvg)
+                    logger.info(
+                        f"ICTStrategy: CISD created FVG - "
+                        f"{cisd_fvg.low:.2f} to {cisd_fvg.high:.2f}"
+                    )
+
+        # -----------------------------------------------------------------
         # STEP 6: FVG ENTRY CHECK
         # -----------------------------------------------------------------
         # If sweep/BOS required: After BOS confirmation, look for FVG entry.
@@ -567,9 +640,14 @@ class ICTStrategy(Strategy):
         # Determine if we should check for FVG entry
         check_fvg = False
         if self._require_sweep:
-            # Need sweep + BOS confirmation first
-            if self.pending_bos and self.current_bias:
-                check_fvg = True
+            if self._require_cisd:
+                # Need sweep + CISD confirmation
+                if self.pending_cisd and self.current_bias:
+                    check_fvg = True
+            else:
+                # Need sweep + BOS confirmation first
+                if self.pending_bos and self.current_bias:
+                    check_fvg = True
         else:
             # No sweep required - check FVG directly (both directions)
             check_fvg = True
@@ -587,6 +665,14 @@ class ICTStrategy(Strategy):
             else:
                 # No bias set (sweep not required) - check all active FVGs
                 matching_fvgs = active_fvgs
+
+            # If require_fvg_after_cisd, only consider FVGs formed after CISD
+            if self._require_fvg_after_cisd and self.pending_cisd:
+                cisd_bar_index = self.pending_cisd.displacement_bar_index
+                matching_fvgs = [
+                    fvg for fvg in matching_fvgs
+                    if fvg.created_bar_index >= cisd_bar_index
+                ]
 
             # Check each matching FVG for entry
             entry_fvg: FVGZone | None = None
@@ -626,7 +712,7 @@ class ICTStrategy(Strategy):
                 targets = self._calculate_targets(entry_price, stop_price, direction)
 
                 # Build reason dict with all contributing factors
-                # Includes: session, sweep, bos, fvg, liquidity, sdv
+                # Includes: session, sweep, bos, cisd, fvg, liquidity, sdv
                 reason = {
                     "session": self.current_session,
                     "sweep": (
@@ -638,6 +724,11 @@ class ICTStrategy(Strategy):
                         f"{self.pending_bos.direction} BOS at "
                         f"{self.pending_bos.broken_level:.2f}"
                     ) if self.pending_bos else "N/A (disabled)",
+                    "cisd": (
+                        f"{self.pending_cisd.direction} CISD "
+                        f"{self.pending_cisd.displacement_size:.1f} ticks "
+                        f"at {self.pending_cisd.broken_level:.2f}"
+                    ) if self.pending_cisd else "N/A (disabled)",
                     "fvg": (
                         f"{entry_fvg.direction} FVG "
                         f"{entry_fvg.low:.2f} - {entry_fvg.high:.2f}, "

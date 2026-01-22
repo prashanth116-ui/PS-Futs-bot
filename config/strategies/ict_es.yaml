@@ -22,11 +22,52 @@ description: "ICT methodology applied to E-mini S&P 500 futures"
 # Session filter - only trade during killzones (NY Open, London)
 enable_session_filter: false
 
-# Require liquidity sweep before entry
-require_sweep: false
+# Use full ICT state machine flow:
+# swingFound → liquidityDefined → sweepConfirmed → displacement → MSS → BOS → CISD → FVG → Entry
+use_state_machine: true
 
-# Require BOS confirmation after sweep (only applies if require_sweep is true)
+# Individual component toggles (when not using state machine)
+require_sweep: true
+require_displacement: true
+require_mss: true
 require_bos: true
+require_cisd: true
+require_fvg_after_cisd: true
+
+# =============================================================================
+# Displacement Settings
+# =============================================================================
+# Minimum displacement candle body size in ticks
+min_displacement_ticks: 4
+
+# Minimum body-to-range ratio for displacement (0.0-1.0)
+min_body_ratio: 0.6
+
+# =============================================================================
+# Liquidity Settings
+# =============================================================================
+# Ticks to cluster nearby swing points as same liquidity zone
+liquidity_cluster_ticks: 4
+
+# Buffer ticks beyond liquidity level to confirm sweep
+sweep_buffer_ticks: 1
+
+# =============================================================================
+# Structure Settings
+# =============================================================================
+# Lookback bars for MSS detection
+mss_lookback_bars: 20
+
+# =============================================================================
+# Timeout Settings (in bars)
+# =============================================================================
+# Max bars to wait for each stage after the previous
+sweep_timeout_bars: 50
+displacement_timeout_bars: 5
+mss_timeout_bars: 10
+bos_timeout_bars: 10
+cisd_timeout_bars: 10
+fvg_timeout_bars: 20
 
 # =============================================================================
 # Timezone Configuration
