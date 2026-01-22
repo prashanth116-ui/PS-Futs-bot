@@ -142,6 +142,11 @@ class ICTStrategy(Strategy):
         self._stop_buffer_ticks: int = config.get("stop_buffer_ticks", 2)
         self._rr_targets: list[float] = config.get("rr_targets", [1.0, 2.0, 3.0])
 
+        # Feature toggles
+        self._enable_session_filter: bool = config.get("enable_session_filter", True)
+        self._require_sweep: bool = config.get("require_sweep", True)
+        self._require_bos: bool = config.get("require_bos", True)
+
         # -----------------------------------------------------------------
         # State variables
         # -----------------------------------------------------------------
@@ -426,17 +431,18 @@ class ICTStrategy(Strategy):
         # Update current session label (for logging and signal metadata)
         self.current_session = current_session_label(bar.timestamp, self._killzones)
 
-        # If outside all killzones, skip processing
-        if not is_in_killzone(bar.timestamp, self._killzones):
-            # Optionally invalidate stale setups when session ends
-            if self.pending_sweep:
-                self._invalidate_pending_setup("Session ended")
-            return signals
+        # If outside all killzones, skip processing (if session filter enabled)
+        if self._enable_session_filter:
+            if not is_in_killzone(bar.timestamp, self._killzones):
+                # Optionally invalidate stale setups when session ends
+                if self.pending_sweep:
+                    self._invalidate_pending_setup("Session ended")
+                return signals
 
-        # Skip if we've already traded this session (optional, configurable)
-        max_trades_per_session = self.config.get("max_trades_per_session", 1)
-        if self.has_traded_session and max_trades_per_session == 1:
-            return signals
+            # Skip if we've already traded this session (optional, configurable)
+            max_trades_per_session = self.config.get("max_trades_per_session", 1)
+            if self.has_traded_session and max_trades_per_session == 1:
+                return signals
 
         # -----------------------------------------------------------------
         # STEP 2: UPDATE MARKET STRUCTURE
@@ -476,7 +482,7 @@ class ICTStrategy(Strategy):
         self._update_fvg_mitigations(bar, current_bar_index)
 
         # -----------------------------------------------------------------
-        # STEP 4: LIQUIDITY SWEEP DETECTION
+        # STEP 4: LIQUIDITY SWEEP DETECTION (if enabled)
         # -----------------------------------------------------------------
         # Look for liquidity sweeps (stop hunts) at key levels.
         # A sweep occurs when price takes out a swing high/low and reverses.
@@ -484,28 +490,29 @@ class ICTStrategy(Strategy):
         # If sweep detected -> Store as pending_sweep for BOS confirmation.
         # -----------------------------------------------------------------
 
-        sweeps = detect_sweep_on_bar(
-            current_bar=bar,
-            current_bar_index=current_bar_index,
-            swing_highs=self._swing_highs,
-            swing_lows=self._swing_lows,
-            prior_session=self._prior_session,
-            config=config,
-        )
+        if self._require_sweep:
+            sweeps = detect_sweep_on_bar(
+                current_bar=bar,
+                current_bar_index=current_bar_index,
+                swing_highs=self._swing_highs,
+                swing_lows=self._swing_lows,
+                prior_session=self._prior_session,
+                config=config,
+            )
 
-        if sweeps:
-            # Take the most significant sweep if multiple detected
-            most_significant = get_most_significant_sweep(sweeps)
-            if most_significant:
-                self.pending_sweep = most_significant
-                logger.info(
-                    f"ICTStrategy: Sweep detected - {most_significant.direction} "
-                    f"at {most_significant.swept_level:.2f} "
-                    f"({most_significant.sweep_type})"
-                )
+            if sweeps:
+                # Take the most significant sweep if multiple detected
+                most_significant = get_most_significant_sweep(sweeps)
+                if most_significant:
+                    self.pending_sweep = most_significant
+                    logger.info(
+                        f"ICTStrategy: Sweep detected - {most_significant.direction} "
+                        f"at {most_significant.swept_level:.2f} "
+                        f"({most_significant.sweep_type})"
+                    )
 
         # -----------------------------------------------------------------
-        # STEP 5: BOS (BREAK OF STRUCTURE) CONFIRMATION
+        # STEP 5: BOS (BREAK OF STRUCTURE) CONFIRMATION (if sweep required)
         # -----------------------------------------------------------------
         # After a sweep, wait for Break of Structure to confirm reversal.
         # BOS occurs when price breaks a swing in the direction
@@ -517,7 +524,7 @@ class ICTStrategy(Strategy):
         # If BOS confirmed -> Store as pending_bos, set current_bias.
         # -----------------------------------------------------------------
 
-        if self.pending_sweep and not self.pending_bos:
+        if self._require_sweep and self.pending_sweep and not self.pending_bos:
             # Check for BOS that confirms the sweep
             bos = detect_bos(
                 bars=self._bars,
@@ -546,7 +553,9 @@ class ICTStrategy(Strategy):
         # -----------------------------------------------------------------
         # STEP 6: FVG ENTRY CHECK
         # -----------------------------------------------------------------
-        # After BOS confirmation, look for price to enter an FVG zone.
+        # If sweep/BOS required: After BOS confirmation, look for FVG entry.
+        # If sweep not required: Look for any FVG entry directly.
+        #
         # The FVG must align with the current bias (direction).
         #
         # For BULLISH bias -> Look for entry in BULLISH FVG (price retracing down)
@@ -555,21 +564,38 @@ class ICTStrategy(Strategy):
         # If entry triggered -> Construct Signal.
         # -----------------------------------------------------------------
 
-        if self.pending_bos and self.current_bias:
-            # Get active (unmitigated, not expired) FVGs matching our bias
+        # Determine if we should check for FVG entry
+        check_fvg = False
+        if self._require_sweep:
+            # Need sweep + BOS confirmation first
+            if self.pending_bos and self.current_bias:
+                check_fvg = True
+        else:
+            # No sweep required - check FVG directly (both directions)
+            check_fvg = True
+
+        if check_fvg:
+            # Get active (unmitigated, not expired) FVGs
             active_fvgs = get_active_fvgs(self._all_fvgs, current_bar_index, config)
 
-            # Filter to FVGs matching our bias direction
-            matching_fvgs = [
-                fvg for fvg in active_fvgs
-                if fvg.direction == self.current_bias
-            ]
+            # Filter to FVGs matching our bias direction (if we have a bias)
+            if self.current_bias:
+                matching_fvgs = [
+                    fvg for fvg in active_fvgs
+                    if fvg.direction == self.current_bias
+                ]
+            else:
+                # No bias set (sweep not required) - check all active FVGs
+                matching_fvgs = active_fvgs
 
             # Check each matching FVG for entry
             entry_fvg: FVGZone | None = None
             for fvg in matching_fvgs:
                 if check_fvg_entry(bar, fvg, self._fvg_entry_mode):
                     entry_fvg = fvg
+                    # Set bias from FVG direction if not already set
+                    if not self.current_bias:
+                        self.current_bias = fvg.direction
                     break  # Take the first valid entry
 
             if entry_fvg:
@@ -607,11 +633,11 @@ class ICTStrategy(Strategy):
                         f"{self.pending_sweep.direction} sweep at "
                         f"{self.pending_sweep.swept_level:.2f} "
                         f"({self.pending_sweep.sweep_type})"
-                    ),
+                    ) if self.pending_sweep else "N/A (disabled)",
                     "bos": (
                         f"{self.pending_bos.direction} BOS at "
                         f"{self.pending_bos.broken_level:.2f}"
-                    ),
+                    ) if self.pending_bos else "N/A (disabled)",
                     "fvg": (
                         f"{entry_fvg.direction} FVG "
                         f"{entry_fvg.low:.2f} - {entry_fvg.high:.2f}, "
@@ -623,6 +649,13 @@ class ICTStrategy(Strategy):
                     "sdv": None,
                 }
 
+                # Build tags
+                tags = ["ICT", self.current_session]
+                if self.pending_sweep:
+                    tags.append(self.pending_sweep.sweep_type)
+                else:
+                    tags.append("FVG_ONLY")
+
                 # Create the Signal
                 signal = Signal(
                     symbol=self._symbol,
@@ -633,7 +666,7 @@ class ICTStrategy(Strategy):
                     targets=targets,
                     time_in_force="DAY",
                     reason=reason,
-                    tags=["ICT", self.current_session, self.pending_sweep.sweep_type],
+                    tags=tags,
                 )
 
                 # ---------------------------------------------------------
@@ -685,6 +718,10 @@ class ICTStrategy(Strategy):
                     f"entry={entry_price:.2f}, stop={stop_price:.2f}, "
                     f"targets={[f'{t:.2f}' for t in targets]}"
                 )
+
+                # Mark the FVG as used (mitigated) to prevent duplicate signals
+                entry_fvg.mitigated = True
+                entry_fvg.mitigation_bar_index = current_bar_index
 
                 # Reset pending setup after signal emission
                 self._invalidate_pending_setup("Signal emitted")

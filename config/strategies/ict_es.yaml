@@ -15,6 +15,20 @@ version: "1.0.0"
 description: "ICT methodology applied to E-mini S&P 500 futures"
 
 # =============================================================================
+# Feature Toggles
+# =============================================================================
+# Enable/disable major strategy components for testing
+
+# Session filter - only trade during killzones (NY Open, London)
+enable_session_filter: false
+
+# Require liquidity sweep before entry
+require_sweep: false
+
+# Require BOS confirmation after sweep (only applies if require_sweep is true)
+require_bos: true
+
+# =============================================================================
 # Timezone Configuration
 # =============================================================================
 # All times in this config are in Eastern Time (America/New_York).
