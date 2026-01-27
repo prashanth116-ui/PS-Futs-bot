@@ -100,6 +100,59 @@ class SessionLevels:
 
 
 @dataclass
+class KeyLiquidityLevels:
+    """
+    Pre-identified key liquidity levels for proactive sweep detection.
+
+    These levels are marked at session start and watched for sweeps.
+    Much more effective than reactive swing detection.
+
+    Attributes:
+        pdh: Previous Day High
+        pdl: Previous Day Low
+        overnight_high: Overnight/Globex session high (after RTH close)
+        overnight_low: Overnight/Globex session low
+        opening_range_high: First N minutes of RTH high
+        opening_range_low: First N minutes of RTH low
+        asia_high: Asia session high (optional)
+        asia_low: Asia session low (optional)
+        current_session_high: Developing session high
+        current_session_low: Developing session low
+    """
+    pdh: float | None = None
+    pdl: float | None = None
+    overnight_high: float | None = None
+    overnight_low: float | None = None
+    opening_range_high: float | None = None
+    opening_range_low: float | None = None
+    asia_high: float | None = None
+    asia_low: float | None = None
+    current_session_high: float | None = None
+    current_session_low: float | None = None
+
+    def get_all_levels(self) -> list[tuple[str, float, Literal["HIGH", "LOW"]]]:
+        """Get all defined levels as (name, price, type) tuples."""
+        levels = []
+        if self.pdh is not None:
+            levels.append(("PDH", self.pdh, "HIGH"))
+        if self.pdl is not None:
+            levels.append(("PDL", self.pdl, "LOW"))
+        if self.overnight_high is not None:
+            levels.append(("ON_HIGH", self.overnight_high, "HIGH"))
+        if self.overnight_low is not None:
+            levels.append(("ON_LOW", self.overnight_low, "LOW"))
+        if self.opening_range_high is not None:
+            levels.append(("OR_HIGH", self.opening_range_high, "HIGH"))
+        if self.opening_range_low is not None:
+            levels.append(("OR_LOW", self.opening_range_low, "LOW"))
+        if self.asia_high is not None:
+            levels.append(("ASIA_HIGH", self.asia_high, "HIGH"))
+        if self.asia_low is not None:
+            levels.append(("ASIA_LOW", self.asia_low, "LOW"))
+        return levels
+
+
+@dataclass
 class SweepEvent:
     """
     Represents a detected liquidity sweep.
@@ -349,6 +402,192 @@ def find_swing_points(
     swing_highs = find_swing_highs(bars, left_bars, right_bars)
     swing_lows = find_swing_lows(bars, left_bars, right_bars)
     return swing_highs, swing_lows
+
+
+# =============================================================================
+# Key Liquidity Level Detection (Proactive)
+# =============================================================================
+
+
+def calculate_key_levels(
+    bars: list[Bar],
+    current_bar: Bar,
+    rth_start_hour: int = 9,
+    rth_start_minute: int = 30,
+    rth_end_hour: int = 16,
+    rth_end_minute: int = 0,
+    opening_range_minutes: int = 15,
+) -> KeyLiquidityLevels:
+    """
+    Calculate key liquidity levels for proactive sweep detection.
+
+    This function identifies levels at the START of the session that
+    smart money is likely to target:
+    - Previous Day High/Low (PDH/PDL)
+    - Overnight High/Low (Globex session)
+    - Opening Range High/Low (first N minutes of RTH)
+
+    Args:
+        bars: Historical bars including previous sessions.
+        current_bar: The current bar being processed.
+        rth_start_hour: RTH start hour (default 9 for 9:30 AM ET).
+        rth_start_minute: RTH start minute (default 30).
+        rth_end_hour: RTH end hour (default 16 for 4:00 PM ET).
+        rth_end_minute: RTH end minute (default 0).
+        opening_range_minutes: Minutes for opening range (default 15).
+
+    Returns:
+        KeyLiquidityLevels with all calculated levels.
+    """
+    from datetime import time as dt_time
+
+    levels = KeyLiquidityLevels()
+
+    if len(bars) < 10:
+        return levels
+
+    current_date = current_bar.timestamp.date()
+    current_time = current_bar.timestamp.time()
+    rth_start = dt_time(rth_start_hour, rth_start_minute)
+    rth_end = dt_time(rth_end_hour, rth_end_minute)
+
+    # Separate bars by session
+    prior_rth_bars: list[Bar] = []  # Previous day RTH
+    overnight_bars: list[Bar] = []  # After prior RTH close to current RTH open
+    current_rth_bars: list[Bar] = []  # Current day RTH
+
+    for bar in bars:
+        bar_date = bar.timestamp.date()
+        bar_time = bar.timestamp.time()
+
+        if bar_date < current_date:
+            # Previous day
+            if rth_start <= bar_time <= rth_end:
+                prior_rth_bars.append(bar)
+            elif bar_time > rth_end:
+                # After RTH close = overnight
+                overnight_bars.append(bar)
+        elif bar_date == current_date:
+            if bar_time < rth_start:
+                # Pre-market (part of overnight)
+                overnight_bars.append(bar)
+            elif rth_start <= bar_time <= rth_end:
+                current_rth_bars.append(bar)
+
+    # Calculate PDH/PDL from prior RTH
+    if prior_rth_bars:
+        levels.pdh = max(b.high for b in prior_rth_bars)
+        levels.pdl = min(b.low for b in prior_rth_bars)
+
+    # Calculate Overnight High/Low
+    if overnight_bars:
+        levels.overnight_high = max(b.high for b in overnight_bars)
+        levels.overnight_low = min(b.low for b in overnight_bars)
+
+    # Calculate Opening Range (first N minutes of current RTH)
+    if current_rth_bars:
+        # Find bars within opening range
+        or_end_time = dt_time(
+            rth_start_hour + (rth_start_minute + opening_range_minutes) // 60,
+            (rth_start_minute + opening_range_minutes) % 60
+        )
+        or_bars = [b for b in current_rth_bars if b.timestamp.time() <= or_end_time]
+
+        if or_bars:
+            levels.opening_range_high = max(b.high for b in or_bars)
+            levels.opening_range_low = min(b.low for b in or_bars)
+
+        # Current session high/low (developing)
+        levels.current_session_high = max(b.high for b in current_rth_bars)
+        levels.current_session_low = min(b.low for b in current_rth_bars)
+
+    return levels
+
+
+def detect_sweep_at_key_level(
+    bar: Bar,
+    bar_index: int,
+    level_name: str,
+    level_price: float,
+    level_type: Literal["HIGH", "LOW"],
+    config: dict,
+) -> SweepEvent | None:
+    """
+    Check if a bar sweeps a pre-identified key level.
+
+    This is used for proactive sweep detection at known liquidity levels
+    (PDH, PDL, overnight levels, etc.) rather than reactive swing detection.
+
+    Args:
+        bar: The bar to check.
+        bar_index: Index of this bar.
+        level_name: Name of the level (e.g., "PDH", "ON_LOW").
+        level_price: The price level.
+        level_type: "HIGH" or "LOW".
+        config: Configuration dictionary.
+
+    Returns:
+        SweepEvent if sweep detected, None otherwise.
+    """
+    tick_size = config.get("tick_size", 0.25)
+    min_sweep_ticks = config.get("min_sweep_ticks", 2)
+    require_close_back = config.get("require_close_back_inside", True)
+
+    sweep = check_sweep_at_level(
+        bar=bar,
+        level=level_price,
+        level_type=level_type,
+        min_sweep_ticks=min_sweep_ticks,
+        tick_size=tick_size,
+        require_close_back_inside=require_close_back,
+    )
+
+    if sweep:
+        sweep.sweep_type = "PRIOR_SESSION"  # Key levels are treated as prior session
+        sweep.bar_index = bar_index
+        sweep.metadata["level_name"] = level_name
+        sweep.metadata["level_source"] = "KEY_LEVEL"
+        # Increase strength for key levels (more significant than random swings)
+        sweep.strength = min(1.0, sweep.strength + 0.2)
+
+    return sweep
+
+
+def detect_sweep_at_key_levels(
+    bar: Bar,
+    bar_index: int,
+    key_levels: KeyLiquidityLevels,
+    config: dict,
+) -> list[SweepEvent]:
+    """
+    Check for sweeps at all pre-identified key levels.
+
+    This is the main function for proactive sweep detection.
+
+    Args:
+        bar: The bar to check.
+        bar_index: Index of this bar.
+        key_levels: Pre-calculated key liquidity levels.
+        config: Configuration dictionary.
+
+    Returns:
+        List of SweepEvent objects for any sweeps detected.
+    """
+    sweeps: list[SweepEvent] = []
+
+    for level_name, level_price, level_type in key_levels.get_all_levels():
+        sweep = detect_sweep_at_key_level(
+            bar=bar,
+            bar_index=bar_index,
+            level_name=level_name,
+            level_price=level_price,
+            level_type=level_type,
+            config=config,
+        )
+        if sweep:
+            sweeps.append(sweep)
+
+    return sweeps
 
 
 # =============================================================================

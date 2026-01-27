@@ -10,7 +10,11 @@ Symbols:
 from __future__ import annotations
 import yfinance as yf
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from core.types import Bar
+
+# Eastern Time zone for futures trading
+ET = ZoneInfo("America/New_York")
 
 
 def fetch_futures_bars(
@@ -46,8 +50,12 @@ def fetch_futures_bars(
     timeframe = interval
 
     for idx, row in df.iterrows():
+        # yfinance returns timestamps in America/New_York already
+        # Just convert to naive datetime (strip timezone for simpler handling)
+        ts = idx.to_pydatetime().replace(tzinfo=None)
+
         bar = Bar(
-            timestamp=idx.to_pydatetime(),
+            timestamp=ts,
             open=float(row["Open"]),
             high=float(row["High"]),
             low=float(row["Low"]),

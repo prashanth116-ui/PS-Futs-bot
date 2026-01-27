@@ -63,9 +63,12 @@ Usage:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from core.types import Bar
+
+if TYPE_CHECKING:
+    from strategies.ict.signals.displacement import DisplacementEvent
 
 
 # =============================================================================
@@ -772,3 +775,208 @@ def get_fvg_for_entry(
     else:
         # Nearest = lowest low (closest to current price from above)
         return min(candidates, key=lambda fvg: fvg.low)
+
+
+# =============================================================================
+# Displacement FVG Tracking (for Retest Entries)
+# =============================================================================
+
+
+@dataclass
+class DisplacementFVG:
+    """
+    FVG created by a displacement candle - eligible for retest entries.
+
+    When a strong displacement candle creates an FVG, price often returns
+    to fill/test that FVG before continuing in the displacement direction.
+    This is the "return to origin" ICT concept.
+
+    Example:
+        13:10 - Bearish displacement creates FVG at 6964-6965
+        14:24 - Price returns to 6965 (retest)
+        Entry: SHORT at 6965 expecting continuation lower
+    """
+    fvg: FVGZone
+    displacement_bar_index: int
+    displacement_body_ticks: float
+    displacement_direction: Literal["BULLISH", "BEARISH"]
+
+    # Track price movement after displacement
+    max_price_after: float = 0.0  # Highest price after (for bearish)
+    min_price_after: float = 0.0  # Lowest price after (for bullish)
+    bars_since_displacement: int = 0
+
+    # Retest status
+    retest_eligible: bool = False  # True when price moved away enough
+    retest_triggered: bool = False  # True when price returned to FVG
+
+    def update_price_extremes(self, bar: Bar, bar_index: int) -> None:
+        """Update price extremes after displacement."""
+        self.bars_since_displacement = bar_index - self.displacement_bar_index
+
+        if self.displacement_direction == "BEARISH":
+            # Track how high price went after bearish displacement
+            if bar.high > self.max_price_after or self.max_price_after == 0:
+                self.max_price_after = bar.high
+        else:
+            # Track how low price went after bullish displacement
+            if bar.low < self.min_price_after or self.min_price_after == 0:
+                self.min_price_after = bar.low
+
+
+def detect_displacement_fvg(
+    bars: list[Bar],
+    displacement_bar_index: int,
+    config: dict,
+) -> DisplacementFVG | None:
+    """
+    Detect FVG created by a displacement candle.
+
+    Checks if the displacement bar (and surrounding bars) created an FVG.
+
+    Args:
+        bars: List of bars
+        displacement_bar_index: Index of the displacement candle
+        config: Configuration with tick_size, min_fvg_ticks
+
+    Returns:
+        DisplacementFVG if FVG was created, None otherwise
+    """
+    # Need bars at i-2, i-1, i where i is displacement bar or i+1
+    if displacement_bar_index < 1 or displacement_bar_index >= len(bars) - 1:
+        return None
+
+    tick_size = config.get("tick_size", 0.25)
+
+    # Get the displacement bar
+    disp_bar = bars[displacement_bar_index]
+    disp_body = abs(disp_bar.close - disp_bar.open)
+    disp_body_ticks = disp_body / tick_size
+    disp_direction: Literal["BULLISH", "BEARISH"] = "BULLISH" if disp_bar.close > disp_bar.open else "BEARISH"
+
+    # Check for FVG on the bar after displacement (most common)
+    # The displacement bar is bar[i-1], creating gap between bar[i-2] and bar[i]
+    if displacement_bar_index + 1 < len(bars):
+        fvg = _detect_fvg_at_index(bars, displacement_bar_index + 1, config)
+        if fvg and fvg.direction == disp_direction:
+            return DisplacementFVG(
+                fvg=fvg,
+                displacement_bar_index=displacement_bar_index,
+                displacement_body_ticks=disp_body_ticks,
+                displacement_direction=disp_direction,
+            )
+
+    # Also check if displacement bar itself completed an FVG
+    if displacement_bar_index >= 2:
+        fvg = _detect_fvg_at_index(bars, displacement_bar_index, config)
+        if fvg and fvg.direction == disp_direction:
+            return DisplacementFVG(
+                fvg=fvg,
+                displacement_bar_index=displacement_bar_index,
+                displacement_body_ticks=disp_body_ticks,
+                displacement_direction=disp_direction,
+            )
+
+    return None
+
+
+def check_retest_eligible(
+    disp_fvg: DisplacementFVG,
+    config: dict,
+) -> bool:
+    """
+    Check if a displacement FVG is eligible for retest entry.
+
+    Eligibility requires:
+    1. Price moved away from FVG by minimum amount
+    2. FVG not yet mitigated
+    3. Within max age
+
+    Args:
+        disp_fvg: The DisplacementFVG to check
+        config: Configuration with retest parameters
+
+    Returns:
+        True if eligible for retest entry
+    """
+    if disp_fvg.fvg.mitigated:
+        return False
+
+    tick_size = config.get("tick_size", 0.25)
+    min_move_ticks = config.get("retest_min_move_away_ticks", 8)
+    min_move_pct = config.get("retest_min_move_away_pct", 50)
+    max_age = config.get("retest_fvg_max_age_bars", 60)
+
+    # Check age
+    if disp_fvg.bars_since_displacement > max_age:
+        return False
+
+    # Calculate how far price moved away
+    if disp_fvg.displacement_direction == "BEARISH":
+        # For bearish: price should have rallied back up
+        move_away = disp_fvg.max_price_after - disp_fvg.fvg.high
+    else:
+        # For bullish: price should have dropped back down
+        move_away = disp_fvg.fvg.low - disp_fvg.min_price_after
+
+    move_away_ticks = move_away / tick_size
+
+    # Check minimum move in ticks
+    if move_away_ticks < min_move_ticks:
+        return False
+
+    # Check minimum move as percentage of displacement
+    disp_range = disp_fvg.displacement_body_ticks * tick_size
+    if disp_range > 0:
+        move_pct = (move_away / disp_range) * 100
+        if move_pct < min_move_pct:
+            return False
+
+    return True
+
+
+def check_retest_entry(
+    bar: Bar,
+    disp_fvg: DisplacementFVG,
+    entry_mode: Literal["FIRST_TOUCH", "MIDPOINT"] = "MIDPOINT",
+) -> bool:
+    """
+    Check if current bar triggers a retest entry.
+
+    For BEARISH displacement FVG:
+        - Price rallied away, now returning DOWN to FVG
+        - Entry: SHORT when price touches FVG from above
+
+    For BULLISH displacement FVG:
+        - Price dropped away, now returning UP to FVG
+        - Entry: LONG when price touches FVG from below
+
+    Args:
+        bar: Current bar
+        disp_fvg: DisplacementFVG to check
+        entry_mode: FIRST_TOUCH or MIDPOINT
+
+    Returns:
+        True if retest entry triggered
+    """
+    if disp_fvg.fvg.mitigated:
+        return False
+
+    if not disp_fvg.retest_eligible:
+        return False
+
+    fvg = disp_fvg.fvg
+
+    if entry_mode == "FIRST_TOUCH":
+        entry_level = fvg.high if fvg.direction == "BEARISH" else fvg.low
+    else:
+        entry_level = fvg.midpoint
+
+    if disp_fvg.displacement_direction == "BEARISH":
+        # Bearish: price retracing UP into the FVG for SHORT entry
+        # Entry when bar.high reaches entry level
+        return bar.high >= entry_level
+    else:
+        # Bullish: price retracing DOWN into the FVG for LONG entry
+        # Entry when bar.low reaches entry level
+        return bar.low <= entry_level

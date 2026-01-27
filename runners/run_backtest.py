@@ -1,15 +1,15 @@
 """
 Backtest ICT Strategy for a specific trading session.
 
-Uses Yahoo Finance data (15-min delayed but free).
+Uses TradingView data via tvDatafeed.
 """
 from __future__ import annotations
 from datetime import datetime, date
-from runners.yfinance_loader import fetch_futures_bars
+from runners.tradingview_loader import fetch_rth_bars
 from strategies.factory import build_ict_from_yaml
 
 
-def run_backtest(symbols: list[str], session_date: date, interval: str = "5m"):
+def run_backtest(symbols: list[str], session_date: date, interval: str = "3m"):
     """Run backtest for given symbols on a specific date."""
     print("=" * 70)
     print(f"ICT Strategy Backtest - {session_date}")
@@ -21,28 +21,44 @@ def run_backtest(symbols: list[str], session_date: date, interval: str = "5m"):
     all_results = []
 
     for symbol in symbols:
-        yf_symbol = f"{symbol}=F"
         print(f"\n{'='*70}")
         print(f"SYMBOL: {symbol}")
         print(f"{'='*70}")
 
-        # Fetch data (1d gets today's session)
-        print(f"Fetching {interval} data for {symbol}...")
-        bars = fetch_futures_bars(yf_symbol, period="1d", interval=interval)
+        # Fetch ALL data (including overnight/previous day) for key level calculation
+        print(f"Fetching {interval} data for {symbol} from TradingView...")
+        from runners.tradingview_loader import fetch_futures_bars
+        all_bars = fetch_futures_bars(
+            symbol=symbol,
+            interval=interval,
+            n_bars=2000,  # Get 2 days of data for key levels
+        )
 
-        if not bars:
+        # Filter to target date for extended session (premarket 4:00 AM + RTH 9:30-16:00)
+        from datetime import time as dt_time
+        premarket_start = dt_time(4, 0)
+        rth_start = dt_time(9, 30)
+        rth_end = dt_time(16, 0)
+
+        session_bars = [
+            b for b in all_bars
+            if b.timestamp.date() == session_date
+            and premarket_start <= b.timestamp.time() <= rth_end
+        ]
+
+        # Get all bars up to and including session for strategy processing
+        # This includes overnight and previous day for key level calculation
+        historical_bars = [
+            b for b in all_bars
+            if b.timestamp.date() <= session_date
+        ]
+
+        if not session_bars:
             print(f"  No data for {symbol}")
             continue
 
-        # Filter to session date only
-        session_bars = [b for b in bars if b.timestamp.date() == session_date]
-
-        if not session_bars:
-            # Try using all bars if date filter returns nothing
-            session_bars = bars
-            print(f"  Using all available bars: {len(session_bars)}")
-        else:
-            print(f"  Session bars: {len(session_bars)}")
+        print(f"  RTH bars: {len(session_bars)}")
+        print(f"  Historical bars (for key levels): {len(historical_bars)}")
 
         if session_bars:
             print(f"  Time range: {session_bars[0].timestamp} to {session_bars[-1].timestamp}")
@@ -57,12 +73,21 @@ def run_backtest(symbols: list[str], session_date: date, interval: str = "5m"):
         # Reset strategy state for clean run
         strategy = build_ict_from_yaml(config_path)
 
-        # Run strategy
-        print(f"\n  Processing {len(session_bars)} bars through ICT strategy...")
+        # Run strategy on ALL historical bars (needed for key level calculation)
+        # but only record signals from the target RTH session
+        print(f"\n  Processing {len(historical_bars)} bars through ICT strategy...")
+        print(f"  (Recording signals only from RTH session)")
         signals = []
 
-        for bar in session_bars:
+        for bar in historical_bars:
             signal = strategy.on_bar(bar)
+
+            # Only record signals from target session (premarket + RTH)
+            if bar.timestamp.date() != session_date:
+                continue
+            if not (premarket_start <= bar.timestamp.time() <= rth_end):
+                continue
+
             if signal:
                 # Handle list signals
                 if isinstance(signal, list):
@@ -129,5 +154,5 @@ if __name__ == "__main__":
     today = date.today()
     symbols = ["ES", "NQ"]
 
-    # Use 2-minute bars for more granular entries
-    run_backtest(symbols, today, interval="2m")
+    # Use 3-minute bars (TradingView native)
+    run_backtest(symbols, today, interval="3m")

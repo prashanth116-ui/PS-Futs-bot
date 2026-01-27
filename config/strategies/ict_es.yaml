@@ -26,13 +26,57 @@ enable_session_filter: false
 # swingFound → liquidityDefined → sweepConfirmed → displacement → MSS → BOS → CISD → FVG → Entry
 use_state_machine: true
 
-# Individual component toggles (when not using state machine)
-require_sweep: true
+# Individual component toggles
+require_sweep: false
 require_displacement: true
-require_mss: true
+require_mss: false  # Disabled - using BOS/CISD instead
 require_bos: true
 require_cisd: true
 require_fvg_after_cisd: true
+
+# =============================================================================
+# Proactive Liquidity Detection
+# =============================================================================
+# Use pre-identified key levels instead of reactive swing detection
+use_proactive_levels: true
+
+# Key levels to watch for sweeps
+enable_pdh_pdl: true          # Previous Day High/Low
+enable_overnight_levels: true  # Overnight/Globex High/Low
+enable_opening_range: false    # Opening Range High/Low - DISABLED (can be traps within larger moves)
+opening_range_minutes: 15      # Minutes for opening range calculation
+
+# Swing detection (backup when key levels not available)
+swing_left_bars: 2   # Reduced from 3 for faster detection
+swing_right_bars: 1  # Minimal confirmation
+
+# Lookback settings
+lookback_bars: 200   # Increased to support key level calculation (needs ~400 bars for 2 days)
+
+# =============================================================================
+# FVG Retest Mode
+# =============================================================================
+# Enable trading FVG retests - when price returns to fill an FVG created
+# during a displacement move, enter in the direction of the displacement.
+#
+# Example: Bearish displacement at 13:10 creates FVG at 6964-6965
+#          Price rallies back to 6965 at 14:24
+#          Enter SHORT on the FVG retest
+
+enable_fvg_retest: true
+
+# Minimum displacement body size to create a "retest-worthy" FVG
+retest_min_displacement_ticks: 8
+
+# Maximum bars an FVG remains valid for retest entry
+retest_fvg_max_age_bars: 60
+
+# Minimum distance price must move away before retest is valid (in ticks)
+# Prevents entering on immediate continuation
+retest_min_move_away_ticks: 4
+
+# Only allow retest after price moves X% of displacement range away
+retest_min_move_away_pct: 50
 
 # =============================================================================
 # Displacement Settings
@@ -59,15 +103,33 @@ sweep_buffer_ticks: 1
 mss_lookback_bars: 20
 
 # =============================================================================
-# Timeout Settings (in bars)
+# Trend Filter (EMA Crossover) - DISABLED, using ICT Premium/Discount instead
+# =============================================================================
+enable_trend_filter: false
+
+# =============================================================================
+# ICT Premium/Discount Filter
+# =============================================================================
+# Only take trades aligned with ICT premium/discount zones
+# - LONG only in Discount zone (below 50% of session range)
+# - SHORT only in Premium zone (above 50% of session range)
+# This ensures we buy low and sell high based on session context
+
+enable_premium_discount_filter: true
+pd_lookback_bars: 100         # Bars to calculate range (session context)
+pd_buffer_pct: 5              # Buffer % around midpoint (avoid signals right at 50%)
+
+# =============================================================================
+# Timeout Settings (in bars) - BALANCED for signal quality
 # =============================================================================
 # Max bars to wait for each stage after the previous
-sweep_timeout_bars: 50
-displacement_timeout_bars: 5
-mss_timeout_bars: 10
-bos_timeout_bars: 10
-cisd_timeout_bars: 10
-fvg_timeout_bars: 20
+sweep_timeout_bars: 30      # Allow time for setup to develop
+displacement_timeout_bars: 2 # Quick displacement detection
+mss_timeout_bars: 5         # MSS detection window
+bos_timeout_bars: 10        # BOS can take time after sweep
+cisd_timeout_bars: 8        # CISD confirmation window
+fvg_timeout_bars: 15        # FVG entry window
+max_bars_sweep_to_bos: 20   # Give more time for reversal after key level sweep
 
 # =============================================================================
 # Timezone Configuration
@@ -143,7 +205,7 @@ risk:
   max_daily_loss_pct: 3.0
 
   # Maximum number of trades per day
-  max_trades_per_day: 3
+  max_trades_per_day: 20
 
   # Maximum number of consecutive losses before pausing
   max_consecutive_losses: 2
@@ -204,6 +266,14 @@ stops:
 
   # Additional buffer beyond sweep level in ticks
   stop_buffer_ticks: 2
+
+  # MINIMUM stop distance from entry in ticks (prevents tight stops)
+  # ES typically needs 12-16 tick stops to survive normal volatility
+  min_stop_ticks: 15
+
+  # Cooldown zone - prevent re-entry within this many ticks of a recent entry
+  # Prevents multiple entries in the same price area
+  cooldown_zone_ticks: 10
 
   # Move to breakeven after reaching target 1
   move_to_breakeven: true
