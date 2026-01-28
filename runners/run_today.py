@@ -9,23 +9,10 @@ from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
 
 
-def calculate_ema(closes, period):
-    ema = []
-    multiplier = 2 / (period + 1)
-    for i, close in enumerate(closes):
-        if i < period - 1:
-            ema.append(None)
-        elif i == period - 1:
-            sma = sum(closes[:period]) / period
-            ema.append(sma)
-        else:
-            ema.append((close * multiplier) + (ema[-1] * (1 - multiplier)))
-    return ema
-
-
 def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=4, target2_r=8):
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
+    opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
 
     fvg_config = {
         'min_fvg_ticks': 4,
@@ -55,9 +42,6 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
 
     target_t1 = entry_price + (target1_r * risk) if is_long else entry_price - (target1_r * risk)
     target_t2 = entry_price + (target2_r * risk) if is_long else entry_price - (target2_r * risk)
-
-    closes = [b.close for b in session_bars]
-    ema_50 = calculate_ema(closes, 50)
 
     entry_bar_idx = None
     entry_time = None
@@ -89,7 +73,6 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
         if remaining <= 0:
             break
         bar = session_bars[i]
-        bar_ema50 = ema_50[i] if i < len(ema_50) and ema_50[i] else None
 
         stop_hit = bar.close < fvg_stop_level if is_long else bar.close > fvg_stop_level
         if stop_hit:
@@ -114,11 +97,14 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
             remaining -= exit_cts
             exited_t2 = True
 
-        if remaining > 0 and remaining <= cts_runner and bar_ema50:
-            ema_exit = bar.close < bar_ema50 if is_long else bar.close > bar_ema50
-            if ema_exit:
+        # Check Opposing FVG runner exit
+        if remaining > 0 and remaining <= cts_runner:
+            opposing_fvgs = [f for f in all_fvgs if f.direction == opposing_fvg_dir
+                           and f.created_bar_index > entry_bar_idx
+                           and f.created_bar_index <= i]
+            if opposing_fvgs:
                 pnl = (bar.close - entry_price) * remaining if is_long else (entry_price - bar.close) * remaining
-                exits.append({'type': 'EMA50', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
+                exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
                 remaining = 0
 
     if remaining > 0:
