@@ -25,16 +25,22 @@ def calculate_ema(closes, period):
     return ema
 
 
-def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=2, target2_r=4):
-    """Run single trade simulation with FVG Mitigation stop logic.
+def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=4, target2_r=8):
+    """Run single trade simulation with FVG Mitigation stop and Opposing FVG runner exit.
 
     Stop Logic: FVG Mitigation
     - Only exit if candle CLOSES through FVG boundary
     - Ignores wicks/spikes that don't invalidate the FVG
-    - More aligned with ICT theory
+
+    Runner Exit: Opposing FVG
+    - Exit runner when a Fair Value Gap forms in the opposite direction
+    - LONG: Exit when Bearish FVG forms (sellers stepping in)
+    - SHORT: Exit when Bullish FVG forms (buyers stepping in)
+    - Signals potential trend reversal per ICT theory
     """
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
+    opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
 
     # Detect FVGs
     fvg_config = {
@@ -70,10 +76,6 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
 
     target_t1 = entry_price + (target1_r * risk) if is_long else entry_price - (target1_r * risk)
     target_t2 = entry_price + (target2_r * risk) if is_long else entry_price - (target2_r * risk)
-
-    # Calculate EMAs
-    closes = [b.close for b in session_bars]
-    ema_50 = calculate_ema(closes, 50)
 
     # Find entry trigger
     entry_bar_idx = None
@@ -111,7 +113,6 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
         if remaining <= 0:
             break
         bar = session_bars[i]
-        bar_ema50 = ema_50[i] if i < len(ema_50) and ema_50[i] else None
 
         # Check stop - FVG Mitigation: only stop if candle CLOSES through FVG boundary
         # LONG: stop if close < FVG low (not just wick touching)
@@ -142,12 +143,16 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
             remaining -= exit_cts
             exited_4r = True
 
-        # Check EMA50 runner exit - exit remaining contracts
-        if remaining > 0 and remaining <= cts_runner and bar_ema50:
-            ema_exit = bar.close < bar_ema50 if is_long else bar.close > bar_ema50
-            if ema_exit:
+        # Check Opposing FVG runner exit - exit when FVG forms in opposite direction
+        # LONG: Exit when Bearish FVG forms (sellers stepping in)
+        # SHORT: Exit when Bullish FVG forms (buyers stepping in)
+        if remaining > 0 and remaining <= cts_runner:
+            opposing_fvgs = [f for f in all_fvgs if f.direction == opposing_fvg_dir
+                           and f.created_bar_index > entry_bar_idx
+                           and f.created_bar_index <= i]
+            if opposing_fvgs:
                 pnl = (bar.close - entry_price) * remaining if is_long else (entry_price - bar.close) * remaining
-                exits.append({'type': 'EMA50', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
+                exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
                 remaining = 0
 
     # EOD close if still holding
@@ -172,7 +177,7 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
     }
 
 
-def run_full_backtest(symbol='ES', interval='3m', n_bars=10000, contracts=3, target1_r=2, target2_r=4):
+def run_full_backtest(symbol='ES', interval='3m', n_bars=10000, contracts=3, target1_r=4, target2_r=8):
     """Run full backtest with re-entry strategy."""
 
     # Fetch all data at once
@@ -201,7 +206,7 @@ def run_full_backtest(symbol='ES', interval='3m', n_bars=10000, contracts=3, tar
     print('\n' + '='*80)
     print(f'{len(trading_days)}-DAY BACKTEST - {symbol} {interval} - Re-entry Strategy - {contracts} CONTRACTS')
     print('='*80)
-    print(f'Exit plan: {contracts//3} cts @ {target1_r}R, {contracts//3} cts @ {target2_r}R, {contracts - 2*(contracts//3)} cts @ EMA50 runner')
+    print(f'Exit plan: {contracts//3} cts @ {target1_r}R, {contracts//3} cts @ {target2_r}R, {contracts - 2*(contracts//3)} cts @ Opposing FVG')
     print('='*80)
 
     all_results = []

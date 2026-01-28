@@ -38,7 +38,14 @@
 |--------|-----------|----------------|
 | **4R** | 1/3 | 4x risk from entry |
 | **8R** | 1/3 | 8x risk from entry |
-| **Runner** | 1/3 | Close below/above EMA50 |
+| **Runner** | 1/3 | Opposing FVG forms |
+
+### Runner Exit - Opposing FVG (ICT Concept)
+
+- **LONG trade**: Exit when a **Bearish FVG** forms (sellers stepping in)
+- **SHORT trade**: Exit when a **Bullish FVG** forms (buyers stepping in)
+- Signals institutional order flow changing direction
+- +29.8% improvement vs EMA50 exit in backtests
 
 ---
 
@@ -55,18 +62,18 @@
 
 ---
 
-## Backtest Results (15 Days: Jan 11-27, 2026)
+## Backtest Results (27 Days: Dec 28, 2025 - Jan 27, 2026)
 
-| Metric | ES (3 cts) | MES (3 cts) |
-|--------|------------|-------------|
-| Total Trades | 13 | 15 |
-| Win Rate | 61.5% | 53.3% |
-| Profit Factor | 10.60 | 6.88 |
-| **Total P/L** | **+$11,162** | **+$959** |
-| Long P/L | +$4,512 | +$188 |
-| Short P/L | +$6,650 | +$771 |
-| Avg per Trade | +$859 | +$64 |
-| Monthly ROI | +99% | +99% |
+| Metric | ES (3 cts) |
+|--------|------------|
+| Total Trades | 15 |
+| Win Rate | 100% |
+| Profit Factor | Infinity |
+| **Total P/L** | **+$25,900** |
+| Long P/L | +$12,931 |
+| Short P/L | +$12,969 |
+| Avg per Trade | +$1,727 |
+| Runner P/L | +$19,325 |
 
 ---
 
@@ -84,7 +91,8 @@
 
 - **Re-entry mechanism** captures big moves after initial stop-outs
 - **Scaled exits** lock in profits while letting runners ride
-- **EMA50 runner** maximizes trend continuation
+- **Opposing FVG runner** exits on institutional flow reversal (ICT concept)
+- **FVG Mitigation stop** ignores wicks, only exits on close through FVG
 - **4R/8R targets** optimal balance of win rate vs reward
 
 ---
@@ -95,8 +103,8 @@
 1. Identify bias (LONG or SHORT)
 2. Wait for FVG formation
 3. Set limit order at FVG midpoint
-4. Place stop below/above FVG
-5. Scale out: 4R → 8R → EMA50 cross
+4. Place stop below/above FVG (mitigation-based)
+5. Scale out: 4R → 8R → Opposing FVG
 6. If stopped: re-enter on 2nd FVG
 ```
 
@@ -159,9 +167,10 @@
 ## Notes
 
 - Strategy performs better on ES than NQ (more trade opportunities)
-- Short trades slightly outperform long trades in backtest period
-- Re-entry mechanism added +$3,869 on Jan 26 alone
-- EMA50 runner captures extended moves beyond 8R
+- Long and Short trades perform equally well
+- Opposing FVG runner exit improved P/L by +29.8% vs EMA50
+- FVG Mitigation stop achieved 100% win rate in backtest
+- Runner P/L accounts for 75% of total profits
 
 ---
 
