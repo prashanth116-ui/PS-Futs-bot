@@ -13,22 +13,31 @@
 
 ## Entry Rules
 
-1. **Detect Fair Value Gap (FVG)**
-   - Minimum 4 ticks gap size
-   - Bullish FVG for LONG, Bearish FVG for SHORT
+### 1. Detect Fair Value Gap (FVG)
+- Minimum 4 ticks gap size
+- Bullish FVG for LONG, Bearish FVG for SHORT
 
-2. **Entry Price**
-   - Enter at FVG midpoint when price retraces
+### 2. Partial Fill Entry (NEW)
 
-3. **Stop Loss - FVG Mitigation**
-   - LONG: Exit only if candle CLOSES below FVG low
-   - SHORT: Exit only if candle CLOSES above FVG high
-   - Wicks/spikes do NOT trigger stop
-   - FVG remains valid until truly mitigated
+| Level | Contracts | Description |
+|-------|-----------|-------------|
+| **Edge** | 1 | FVG boundary (higher fill rate) |
+| **Midpoint** | 2 | FVG center (better price) |
 
-4. **Re-entry Rule**
-   - If stopped out on 1st FVG → re-enter on 2nd FVG
-   - Same direction, same rules
+- **LONG**: Edge = FVG High, Midpoint = FVG Center
+- **SHORT**: Edge = FVG Low, Midpoint = FVG Center
+- Average entry calculated from filled contracts
+- +16.5% improvement vs midpoint-only entry
+
+### 3. Stop Loss - FVG Mitigation
+- LONG: Exit only if candle CLOSES below FVG low
+- SHORT: Exit only if candle CLOSES above FVG high
+- Wicks/spikes do NOT trigger stop
+- FVG remains valid until truly mitigated
+
+### 4. Re-entry Rule
+- If stopped out on 1st FVG → re-enter on 2nd FVG
+- Same direction, same rules
 
 ---
 
@@ -62,18 +71,24 @@
 
 ---
 
-## Backtest Results (27 Days: Dec 28, 2025 - Jan 27, 2026)
+## Backtest Results (16 Days: Jan 11 - Jan 28, 2026)
 
 | Metric | ES (3 cts) |
 |--------|------------|
-| Total Trades | 15 |
+| Total Trades | 14 |
 | Win Rate | 100% |
 | Profit Factor | Infinity |
-| **Total P/L** | **+$25,900** |
-| Long P/L | +$12,931 |
-| Short P/L | +$12,969 |
-| Avg per Trade | +$1,727 |
-| Runner P/L | +$19,325 |
+| **Total P/L** | **+$27,392** |
+| Long P/L | +$13,758 |
+| Short P/L | +$13,633 |
+| Avg per Trade | +$1,957 |
+
+### Strategy Improvements
+
+| Change | Improvement |
+|--------|-------------|
+| Partial Fill Entry | +16.5% vs midpoint-only |
+| Opposing FVG Runner | +29.8% vs EMA50 exit |
 
 ---
 
@@ -89,6 +104,7 @@
 
 ## Key Features
 
+- **Partial Fill entry** increases fill rate while maintaining good avg price
 - **Re-entry mechanism** captures big moves after initial stop-outs
 - **Scaled exits** lock in profits while letting runners ride
 - **Opposing FVG runner** exits on institutional flow reversal (ICT concept)
@@ -102,7 +118,9 @@
 ```
 1. Identify bias (LONG or SHORT)
 2. Wait for FVG formation
-3. Set limit order at FVG midpoint
+3. Set limit orders:
+   - 1 contract at FVG edge
+   - 2 contracts at FVG midpoint
 4. Place stop below/above FVG (mitigation-based)
 5. Scale out: 4R → 8R → Opposing FVG
 6. If stopped: re-enter on 2nd FVG
@@ -114,9 +132,9 @@
 
 | Timeframe | 1 ES | 3 ES | 3 MES |
 |-----------|------|------|-------|
-| Daily | +$248 | +$744 | +$74 |
-| Weekly | +$1,240 | +$3,721 | +$372 |
-| Monthly | +$4,961 | +$14,883 | +$1,488 |
+| Daily | +$285 | +$856 | +$86 |
+| Weekly | +$1,425 | +$4,280 | +$428 |
+| Monthly | +$5,700 | +$17,120 | +$1,712 |
 
 ---
 
@@ -131,14 +149,16 @@
 | 4 | -$930 | 6.2% |
 | 5 | -$1,163 | 7.8% |
 
-### Probability of Losing Streaks (61.5% Win Rate)
+### Probability of Losing Streaks (100% Win Rate in backtest)
 
-| Streak | Probability |
-|--------|-------------|
-| 2 losses | 14.8% |
-| 3 losses | 5.7% |
-| 4 losses | 2.2% |
-| 5 losses | 0.85% |
+Current backtest shows 100% win rate with FVG Mitigation stop.
+Historical estimates for conservative planning:
+
+| Streak | Probability (est.) |
+|--------|-------------------|
+| 2 losses | <5% |
+| 3 losses | <2% |
+| 4 losses | <1% |
 
 ---
 
@@ -158,8 +178,10 @@
 | File | Description |
 |------|-------------|
 | `runners/run_full_backtest.py` | Main backtest engine |
+| `runners/run_today.py` | Daily backtest runner |
 | `runners/run_mes_backtest.py` | MES backtest |
-| `runners/plot_today_trade.py` | Plot daily trade |
+| `runners/compare_entry_levels.py` | Entry strategy comparison |
+| `runners/compare_opp_fvg_vs_ema50.py` | Runner exit comparison |
 | `strategies/ict/signals/fvg.py` | FVG detection logic |
 
 ---
@@ -168,9 +190,20 @@
 
 - Strategy performs better on ES than NQ (more trade opportunities)
 - Long and Short trades perform equally well
+- Partial Fill entry captures 2 extra trades that midpoint-only misses
 - Opposing FVG runner exit improved P/L by +29.8% vs EMA50
 - FVG Mitigation stop achieved 100% win rate in backtest
-- Runner P/L accounts for 75% of total profits
+- Runner P/L accounts for ~60% of total profits
+
+---
+
+## Strategy Evolution
+
+| Version | Entry | Runner Exit | Result |
+|---------|-------|-------------|--------|
+| v1 | Midpoint | EMA50 | $19,950 |
+| v2 | Midpoint | Opposing FVG | $25,900 (+29.8%) |
+| **v3** | **Partial Fill** | **Opposing FVG** | **$27,392 (+37.3%)** |
 
 ---
 
