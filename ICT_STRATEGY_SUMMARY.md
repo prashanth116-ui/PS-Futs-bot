@@ -20,9 +20,11 @@
 2. **Entry Price**
    - Enter at FVG midpoint when price retraces
 
-3. **Stop Loss**
-   - LONG: FVG low - 2 ticks
-   - SHORT: FVG high + 2 ticks
+3. **Stop Loss - FVG Mitigation**
+   - LONG: Exit only if candle CLOSES below FVG low
+   - SHORT: Exit only if candle CLOSES above FVG high
+   - Wicks/spikes do NOT trigger stop
+   - FVG remains valid until truly mitigated
 
 4. **Re-entry Rule**
    - If stopped out on 1st FVG → re-enter on 2nd FVG

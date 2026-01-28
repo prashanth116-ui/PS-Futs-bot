@@ -26,7 +26,13 @@ def calculate_ema(closes, period):
 
 
 def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=2, target2_r=4):
-    """Run single trade simulation. Returns result dict or None."""
+    """Run single trade simulation with FVG Mitigation stop logic.
+
+    Stop Logic: FVG Mitigation
+    - Only exit if candle CLOSES through FVG boundary
+    - Ignores wicks/spikes that don't invalidate the FVG
+    - More aligned with ICT theory
+    """
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
 
@@ -51,11 +57,15 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
 
     # Calculate levels
     entry_price = entry_fvg.midpoint
+
+    # FVG boundaries for mitigation stop
+    fvg_stop_level = entry_fvg.low if is_long else entry_fvg.high
+
     if is_long:
-        stop_price = entry_fvg.low - (2 * tick_size)
+        stop_price = entry_fvg.low  # FVG low (will check close, not wick)
         risk = entry_price - stop_price
     else:
-        stop_price = entry_fvg.high + (2 * tick_size)
+        stop_price = entry_fvg.high  # FVG high (will check close, not wick)
         risk = stop_price - entry_price
 
     target_t1 = entry_price + (target1_r * risk) if is_long else entry_price - (target1_r * risk)
@@ -103,11 +113,14 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
         bar = session_bars[i]
         bar_ema50 = ema_50[i] if i < len(ema_50) and ema_50[i] else None
 
-        # Check stop
-        stop_hit = bar.low <= stop_price if is_long else bar.high >= stop_price
+        # Check stop - FVG Mitigation: only stop if candle CLOSES through FVG boundary
+        # LONG: stop if close < FVG low (not just wick touching)
+        # SHORT: stop if close > FVG high (not just wick touching)
+        stop_hit = bar.close < fvg_stop_level if is_long else bar.close > fvg_stop_level
         if stop_hit:
-            pnl = (stop_price - entry_price) * remaining if is_long else (entry_price - stop_price) * remaining
-            exits.append({'type': 'STOP', 'pnl': pnl, 'price': stop_price, 'time': bar.timestamp, 'cts': remaining})
+            # Exit at close price since that's what triggered the stop
+            pnl = (bar.close - entry_price) * remaining if is_long else (entry_price - bar.close) * remaining
+            exits.append({'type': 'STOP', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
             remaining = 0
             break
 
