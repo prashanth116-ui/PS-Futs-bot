@@ -10,7 +10,17 @@ from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
 
 
 def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=4, target2_r=8):
-    """Run trade with Partial Fill entry (1 at edge, 2 at midpoint)."""
+    """Run trade with Partial Fill entry and Hybrid trailing stop.
+
+    Entry: 1 contract at FVG edge, 2 contracts at FVG midpoint
+
+    Stop Management (Hybrid approach):
+    - Contract 1 (4R target): Fixed stop at FVG boundary
+    - Contract 2 (8R target): Fixed stop at FVG boundary
+    - Contract 3 (Runner): Fixed stop until 8R hits, then trails to +4R
+
+    This protects runner profits after 8R while avoiding premature exits.
+    """
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
     opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
@@ -94,6 +104,9 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
     target_t1 = avg_entry + (target1_r * risk) if is_long else avg_entry - (target1_r * risk)
     target_t2 = avg_entry + (target2_r * risk) if is_long else avg_entry - (target2_r * risk)
 
+    # Hybrid trailing stop level for runner (used after 8R hits)
+    plus_4r = avg_entry + (4 * risk) if is_long else avg_entry - (4 * risk)
+
     # Simulate exits based on filled contracts
     if contracts_filled == contracts:
         cts_t1 = contracts // 3
@@ -112,35 +125,62 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
     exited_t1 = False
     exited_t2 = False
 
+    # Runner stop - starts at FVG level, moves to +4R after 8R hits
+    runner_stop = fvg_stop_level
+    runner_stop_type = 'STOP'
+
     for i in range(entry_bar_idx + 1, len(session_bars)):
         if remaining <= 0:
             break
         bar = session_bars[i]
 
-        stop_hit = bar.close < fvg_stop_level if is_long else bar.close > fvg_stop_level
-        if stop_hit:
-            pnl = (bar.close - avg_entry) * remaining if is_long else (avg_entry - bar.close) * remaining
-            exits.append({'type': 'STOP', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
-            remaining = 0
-            break
+        # Check fixed stop for contracts 1 & 2 (before they exit at targets)
+        if not exited_t1 or not exited_t2:
+            stop_hit = bar.close < fvg_stop_level if is_long else bar.close > fvg_stop_level
+            if stop_hit:
+                # Stop out all remaining contracts at FVG level
+                pnl = (bar.close - avg_entry) * remaining if is_long else (avg_entry - bar.close) * remaining
+                exits.append({'type': 'STOP', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
+                remaining = 0
+                break
 
-        if cts_t1 > 0:
+        # Check runner trailing stop (only when runner is the only remaining contract)
+        if remaining > 0 and remaining <= cts_runner and exited_t1 and exited_t2:
+            if is_long:
+                if bar.close < runner_stop:
+                    pnl = (runner_stop - avg_entry) * remaining
+                    exits.append({'type': runner_stop_type, 'pnl': pnl, 'price': runner_stop, 'time': bar.timestamp, 'cts': remaining})
+                    remaining = 0
+                    break
+            else:
+                if bar.close > runner_stop:
+                    pnl = (avg_entry - runner_stop) * remaining
+                    exits.append({'type': runner_stop_type, 'pnl': pnl, 'price': runner_stop, 'time': bar.timestamp, 'cts': remaining})
+                    remaining = 0
+                    break
+
+        # Check 4R target
+        if cts_t1 > 0 and not exited_t1:
             t1_hit = bar.high >= target_t1 if is_long else bar.low <= target_t1
-            if not exited_t1 and t1_hit:
+            if t1_hit:
                 exit_cts = min(cts_t1, remaining)
                 pnl = (target_t1 - avg_entry) * exit_cts if is_long else (avg_entry - target_t1) * exit_cts
                 exits.append({'type': f'T{target1_r}R', 'pnl': pnl, 'price': target_t1, 'time': bar.timestamp, 'cts': exit_cts})
                 remaining -= exit_cts
                 exited_t1 = True
 
-        if cts_t2 > 0:
+        # Check 8R target
+        if cts_t2 > 0 and not exited_t2 and remaining > cts_runner:
             t2_hit = bar.high >= target_t2 if is_long else bar.low <= target_t2
-            if not exited_t2 and t2_hit and remaining > cts_runner:
+            if t2_hit:
                 exit_cts = min(cts_t2, remaining - cts_runner)
                 pnl = (target_t2 - avg_entry) * exit_cts if is_long else (avg_entry - target_t2) * exit_cts
                 exits.append({'type': f'T{target2_r}R', 'pnl': pnl, 'price': target_t2, 'time': bar.timestamp, 'cts': exit_cts})
                 remaining -= exit_cts
                 exited_t2 = True
+                # HYBRID: Move runner stop to +4R after 8R hits
+                runner_stop = plus_4r
+                runner_stop_type = 'STOP_+4R'
 
         # Check Opposing FVG runner exit
         if remaining > 0 and remaining <= cts_runner:
@@ -159,7 +199,7 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
 
     total_pnl = sum(e['pnl'] for e in exits)
     total_dollars = (total_pnl / tick_size) * tick_value
-    was_stopped = any(e['type'] == 'STOP' for e in exits)
+    was_stopped = any(e['type'] in ['STOP', 'STOP_+4R'] for e in exits)
 
     return {
         'direction': direction,
@@ -170,10 +210,12 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
         'contracts_filled': contracts_filled,
         'fill_type': fill_type,
         'stop_price': stop_price,
+        'runner_stop': runner_stop,
         'fvg_low': entry_fvg.low,
         'fvg_high': entry_fvg.high,
         'target_4r': target_t1,
         'target_8r': target_t2,
+        'plus_4r': plus_4r,
         'risk': risk,
         'total_pnl': total_pnl,
         'total_dollars': total_dollars,
@@ -207,9 +249,10 @@ def run_today(symbol='ES', contracts=3):
     print(f'Session bars: {len(session_bars)}')
     print()
     print('='*70)
-    print(f'{symbol} BACKTEST - {today} - {contracts} Contracts - Partial Fill')
+    print(f'{symbol} BACKTEST - {today} - {contracts} Contracts - Hybrid Trailing')
     print('='*70)
     print(f'Entry: 1 ct @ Edge, {contracts-1} cts @ Midpoint')
+    print(f'Stops: Fixed until 8R, then Runner trails to +4R')
     print('='*70)
 
     all_results = []
@@ -249,7 +292,7 @@ def run_today(symbol='ES', contracts=3):
         print(f"  Entry: {r['entry_price']:.2f} @ {r['entry_time'].strftime('%H:%M')}")
         print(f"    Edge: {r['edge_price']:.2f} | Midpoint: {r['midpoint_price']:.2f}")
         print(f"  FVG: {r['fvg_low']:.2f} - {r['fvg_high']:.2f}")
-        print(f"  Stop: {r['stop_price']:.2f} (FVG mitigation)")
+        print(f"  Stop: {r['stop_price']:.2f} (FVG) | Runner +4R: {r['plus_4r']:.2f}")
         print(f"  Risk: {r['risk']:.2f} pts")
         print(f"  Targets: 4R={r['target_4r']:.2f}, 8R={r['target_8r']:.2f}")
         print(f"  Exits:")
