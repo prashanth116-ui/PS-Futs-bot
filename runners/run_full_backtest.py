@@ -26,7 +26,11 @@ def calculate_ema(closes, period):
 
 
 def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50, contracts=3, target1_r=4, target2_r=8):
-    """Run single trade simulation with FVG Mitigation stop and Opposing FVG runner exit.
+    """Run single trade simulation with Partial Fill entry, FVG Mitigation stop, and Opposing FVG runner exit.
+
+    Entry Logic: Partial Fill
+    - 1 contract at FVG edge (higher fill rate)
+    - 2 contracts at FVG midpoint (better price)
 
     Stop Logic: FVG Mitigation
     - Only exit if candle CLOSES through FVG boundary
@@ -36,7 +40,6 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
     - Exit runner when a Fair Value Gap forms in the opposite direction
     - LONG: Exit when Bearish FVG forms (sellers stepping in)
     - SHORT: Exit when Bullish FVG forms (buyers stepping in)
-    - Signals potential trend reversal per ICT theory
     """
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
@@ -61,53 +64,91 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
 
     entry_fvg = active_fvgs[fvg_num - 1]
 
-    # Calculate levels
-    entry_price = entry_fvg.midpoint
+    # Partial Fill Entry Levels
+    edge_price = entry_fvg.high if is_long else entry_fvg.low  # Edge (closer to price)
+    midpoint_price = entry_fvg.midpoint
+
+    # Contracts at each level
+    cts_edge = 1
+    cts_midpoint = contracts - cts_edge  # 2 contracts at midpoint
 
     # FVG boundaries for mitigation stop
     fvg_stop_level = entry_fvg.low if is_long else entry_fvg.high
 
-    if is_long:
-        stop_price = entry_fvg.low  # FVG low (will check close, not wick)
-        risk = entry_price - stop_price
-    else:
-        stop_price = entry_fvg.high  # FVG high (will check close, not wick)
-        risk = stop_price - entry_price
-
-    target_t1 = entry_price + (target1_r * risk) if is_long else entry_price - (target1_r * risk)
-    target_t2 = entry_price + (target2_r * risk) if is_long else entry_price - (target2_r * risk)
-
-    # Find entry trigger
-    entry_bar_idx = None
-    entry_time = None
+    # Find entry triggers for both levels
+    edge_entry_bar_idx = None
+    edge_entry_time = None
+    midpoint_entry_bar_idx = None
+    midpoint_entry_time = None
 
     for i in range(entry_fvg.created_bar_index + 1, len(session_bars)):
         bar = session_bars[i]
-        price_at_entry = bar.low <= entry_price if is_long else bar.high >= entry_price
-        if price_at_entry:
-            entry_bar_idx = i
-            entry_time = bar.timestamp
-            break
 
-    if not entry_bar_idx:
+        # Check edge fill
+        if edge_entry_bar_idx is None:
+            edge_hit = bar.low <= edge_price if is_long else bar.high >= edge_price
+            if edge_hit:
+                edge_entry_bar_idx = i
+                edge_entry_time = bar.timestamp
+
+        # Check midpoint fill
+        if midpoint_entry_bar_idx is None:
+            midpoint_hit = bar.low <= midpoint_price if is_long else bar.high >= midpoint_price
+            if midpoint_hit:
+                midpoint_entry_bar_idx = i
+                midpoint_entry_time = bar.timestamp
+                break  # Both levels filled
+
+    # Determine what got filled
+    if edge_entry_bar_idx is None:
+        return None  # Not even edge got filled
+
+    # Calculate filled contracts and average entry
+    if midpoint_entry_bar_idx is not None:
+        # Both filled - full position
+        contracts_filled = contracts
+        avg_entry = (edge_price * cts_edge + midpoint_price * cts_midpoint) / contracts
+        entry_bar_idx = midpoint_entry_bar_idx
+        entry_time = midpoint_entry_time
+    else:
+        # Only edge filled - partial position
+        contracts_filled = cts_edge
+        avg_entry = edge_price
+        entry_bar_idx = edge_entry_bar_idx
+        entry_time = edge_entry_time
+
+    # Calculate risk from average entry
+    if is_long:
+        stop_price = entry_fvg.low
+        risk = avg_entry - stop_price
+    else:
+        stop_price = entry_fvg.high
+        risk = stop_price - avg_entry
+
+    if risk <= 0:
         return None
 
-    # Simulate exits - scale based on contract size
-    # Split: ~1/3 at 2R, ~1/3 at 4R, ~1/3 runner
-    cts_2r = contracts // 3
-    cts_4r = contracts // 3
-    cts_runner = contracts - cts_2r - cts_4r
-    if cts_2r == 0:
-        cts_2r = 1
-    if cts_4r == 0:
-        cts_4r = 1
-    if cts_runner == 0:
-        cts_runner = 1
+    target_t1 = avg_entry + (target1_r * risk) if is_long else avg_entry - (target1_r * risk)
+    target_t2 = avg_entry + (target2_r * risk) if is_long else avg_entry - (target2_r * risk)
+
+    # Simulate exits based on filled contracts
+    if contracts_filled == contracts:
+        cts_t1 = contracts // 3
+        cts_t2 = contracts // 3
+        cts_runner = contracts - cts_t1 - cts_t2
+        if cts_t1 == 0: cts_t1 = 1
+        if cts_t2 == 0: cts_t2 = 1
+        if cts_runner == 0: cts_runner = 1
+    else:
+        # Only 1 contract filled - all goes to runner
+        cts_t1 = 0
+        cts_t2 = 0
+        cts_runner = contracts_filled
 
     exits = []
-    remaining = contracts
-    exited_2r = False
-    exited_4r = False
+    remaining = contracts_filled
+    exited_t1 = False
+    exited_t2 = False
 
     for i in range(entry_bar_idx + 1, len(session_bars)):
         if remaining <= 0:
@@ -115,50 +156,47 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
         bar = session_bars[i]
 
         # Check stop - FVG Mitigation: only stop if candle CLOSES through FVG boundary
-        # LONG: stop if close < FVG low (not just wick touching)
-        # SHORT: stop if close > FVG high (not just wick touching)
         stop_hit = bar.close < fvg_stop_level if is_long else bar.close > fvg_stop_level
         if stop_hit:
-            # Exit at close price since that's what triggered the stop
-            pnl = (bar.close - entry_price) * remaining if is_long else (entry_price - bar.close) * remaining
+            pnl = (bar.close - avg_entry) * remaining if is_long else (avg_entry - bar.close) * remaining
             exits.append({'type': 'STOP', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
             remaining = 0
             break
 
-        # Check T1 - exit portion of contracts
-        t1_hit = bar.high >= target_t1 if is_long else bar.low <= target_t1
-        if not exited_2r and t1_hit:
-            exit_cts = min(cts_2r, remaining)
-            pnl = (target_t1 - entry_price) * exit_cts if is_long else (entry_price - target_t1) * exit_cts
-            exits.append({'type': f'T{target1_r}R', 'pnl': pnl, 'price': target_t1, 'time': bar.timestamp, 'cts': exit_cts})
-            remaining -= exit_cts
-            exited_2r = True
+        # Check T1 - exit portion of contracts (only if full fill)
+        if cts_t1 > 0:
+            t1_hit = bar.high >= target_t1 if is_long else bar.low <= target_t1
+            if not exited_t1 and t1_hit:
+                exit_cts = min(cts_t1, remaining)
+                pnl = (target_t1 - avg_entry) * exit_cts if is_long else (avg_entry - target_t1) * exit_cts
+                exits.append({'type': f'T{target1_r}R', 'pnl': pnl, 'price': target_t1, 'time': bar.timestamp, 'cts': exit_cts})
+                remaining -= exit_cts
+                exited_t1 = True
 
-        # Check T2 - exit portion of contracts
-        t2_hit = bar.high >= target_t2 if is_long else bar.low <= target_t2
-        if not exited_4r and t2_hit and remaining > cts_runner:
-            exit_cts = min(cts_4r, remaining - cts_runner)
-            pnl = (target_t2 - entry_price) * exit_cts if is_long else (entry_price - target_t2) * exit_cts
-            exits.append({'type': f'T{target2_r}R', 'pnl': pnl, 'price': target_t2, 'time': bar.timestamp, 'cts': exit_cts})
-            remaining -= exit_cts
-            exited_4r = True
+        # Check T2 - exit portion of contracts (only if full fill)
+        if cts_t2 > 0:
+            t2_hit = bar.high >= target_t2 if is_long else bar.low <= target_t2
+            if not exited_t2 and t2_hit and remaining > cts_runner:
+                exit_cts = min(cts_t2, remaining - cts_runner)
+                pnl = (target_t2 - avg_entry) * exit_cts if is_long else (avg_entry - target_t2) * exit_cts
+                exits.append({'type': f'T{target2_r}R', 'pnl': pnl, 'price': target_t2, 'time': bar.timestamp, 'cts': exit_cts})
+                remaining -= exit_cts
+                exited_t2 = True
 
-        # Check Opposing FVG runner exit - exit when FVG forms in opposite direction
-        # LONG: Exit when Bearish FVG forms (sellers stepping in)
-        # SHORT: Exit when Bullish FVG forms (buyers stepping in)
+        # Check Opposing FVG runner exit
         if remaining > 0 and remaining <= cts_runner:
             opposing_fvgs = [f for f in all_fvgs if f.direction == opposing_fvg_dir
                            and f.created_bar_index > entry_bar_idx
                            and f.created_bar_index <= i]
             if opposing_fvgs:
-                pnl = (bar.close - entry_price) * remaining if is_long else (entry_price - bar.close) * remaining
+                pnl = (bar.close - avg_entry) * remaining if is_long else (avg_entry - bar.close) * remaining
                 exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
                 remaining = 0
 
     # EOD close if still holding
     if remaining > 0:
         last_bar = session_bars[-1]
-        pnl = (last_bar.close - entry_price) * remaining if is_long else (entry_price - last_bar.close) * remaining
+        pnl = (last_bar.close - avg_entry) * remaining if is_long else (avg_entry - last_bar.close) * remaining
         exits.append({'type': 'EOD', 'pnl': pnl, 'price': last_bar.close, 'time': last_bar.timestamp, 'cts': remaining})
 
     total_pnl = sum(e['pnl'] for e in exits)
@@ -168,7 +206,8 @@ def run_trade(session_bars, direction, fvg_num, tick_size=0.25, tick_value=12.50
     return {
         'direction': direction,
         'entry_time': entry_time,
-        'entry_price': entry_price,
+        'entry_price': avg_entry,
+        'contracts_filled': contracts_filled,
         'stop_price': stop_price,
         'total_pnl': total_pnl,
         'total_dollars': total_dollars,
@@ -204,9 +243,10 @@ def run_full_backtest(symbol='ES', interval='3m', n_bars=10000, contracts=3, tar
     rth_end = dt_time(16, 0)
 
     print('\n' + '='*80)
-    print(f'{len(trading_days)}-DAY BACKTEST - {symbol} {interval} - Re-entry Strategy - {contracts} CONTRACTS')
+    print(f'{len(trading_days)}-DAY BACKTEST - {symbol} {interval} - Partial Fill Entry - {contracts} CONTRACTS')
     print('='*80)
-    print(f'Exit plan: {contracts//3} cts @ {target1_r}R, {contracts//3} cts @ {target2_r}R, {contracts - 2*(contracts//3)} cts @ Opposing FVG')
+    print(f'Entry: 1 ct @ Edge, {contracts-1} cts @ Midpoint')
+    print(f'Exit: {contracts//3} cts @ {target1_r}R, {contracts//3} cts @ {target2_r}R, {contracts - 2*(contracts//3)} cts @ Opposing FVG')
     print('='*80)
 
     all_results = []
