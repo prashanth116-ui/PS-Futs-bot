@@ -158,19 +158,26 @@ def main():
     print(f"Loop: Every {LOOP_INTERVAL_SECONDS // 60} minutes")
     print("-" * 60)
 
-    # Load credentials
-    username, password = load_tv_credentials()
-    if not username:
-        print("Error: No TradingView credentials found")
-        return
-
-    # Connect to TradingView
-    print(f"\nConnecting as {username}...")
+    # Connect to TradingView using cached session (avoids CAPTCHA)
+    print("\nConnecting to TradingView (using cached session)...")
     try:
-        tv = TvDatafeed(username, password)
-        print("Connected to TradingView!")
+        tv = TvDatafeed()  # Uses cached session from ~/.tvdatafeed/
+        time.sleep(2)  # Allow connection to stabilize
+        # Test connection with retry
+        test_df = None
+        for attempt in range(3):
+            test_df = tv.get_hist('ES1!', 'CME_MINI', Interval.in_5_minute, n_bars=1)
+            if test_df is not None and not test_df.empty:
+                break
+            print(f"  Retry {attempt + 1}/3...")
+            time.sleep(3)
+        if test_df is not None and not test_df.empty:
+            print(f"Connected to TradingView! ES: {test_df['close'].iloc[-1]:.2f}")
+        else:
+            print("Warning: Connection may be limited. Run 'python runners/tv_login.py' to refresh session.")
     except Exception as e:
         print(f"Connection failed: {e}")
+        print("Run 'python runners/tv_login.py' to authenticate via browser.")
         return
 
     # Cache for strategies
