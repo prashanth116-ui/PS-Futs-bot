@@ -1,15 +1,18 @@
 """
-Run backtest for today with ICT FVG Strategy (V2-Balanced).
+Run backtest for today with ICT FVG Strategy (V3-StructureTrail).
 
 Strategy Features:
 - Stop buffer: +2 ticks beyond FVG boundary (reduces whipsaws)
-- HTF bias: EMA 20/50 trend filter (trade with trend)
+- HTF bias: EMA 20/50 trend filter at entry time (trade with trend)
 - Min FVG size: 6 ticks (filters tiny FVGs)
 - Displacement: 1.2x body size (filters weak FVGs)
 - Extended killzones: London (3-5 AM), NY AM (9:30-12), NY PM (1:30-3:30)
 - Partial fill entry: 1 ct @ edge, 2 cts @ midpoint
-- Hybrid trailing: Fixed stop until 8R, then trail to +4R
-- Runner exit: Opposing FVG or trailing stop
+
+Exit Strategy (Tiered Structure Trail):
+- 1st contract: Fast trail after 4R touch (2-tick buffer, trails swing highs/lows)
+- 2nd contract: Standard trail after 8R touch (4-tick buffer, trails swing highs/lows)
+- 3rd contract (Runner): Opposing FVG or +4R trailing stop
 """
 import sys
 sys.path.insert(0, '.')
@@ -52,6 +55,28 @@ def is_in_killzone(timestamp):
     return london or ny_am or ny_pm
 
 
+def is_swing_high(bars, idx, lookback=2):
+    """Check if bar at idx is a swing high (higher than neighbors)."""
+    if idx < lookback or idx >= len(bars) - lookback:
+        return False
+    bar_high = bars[idx].high
+    for i in range(1, lookback + 1):
+        if bar_high <= bars[idx - i].high or bar_high <= bars[idx + i].high:
+            return False
+    return True
+
+
+def is_swing_low(bars, idx, lookback=2):
+    """Check if bar at idx is a swing low (lower than neighbors)."""
+    if idx < lookback or idx >= len(bars) - lookback:
+        return False
+    bar_low = bars[idx].low
+    for i in range(1, lookback + 1):
+        if bar_low >= bars[idx - i].low or bar_low >= bars[idx + i].low:
+            return False
+    return True
+
+
 def run_trade(
     session_bars,
     direction,
@@ -78,16 +103,7 @@ def run_trade(
     body_sizes = [abs(b.close - b.open) for b in session_bars[:50]]
     avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
 
-    # Calculate EMA for HTF bias
-    ema_fast = calculate_ema(session_bars, 20)
-    ema_slow = calculate_ema(session_bars, 50)
-
-    # HTF Bias filter - only trade with trend
-    if require_htf_bias and ema_fast is not None and ema_slow is not None:
-        if is_long and ema_fast < ema_slow:
-            return None  # Don't go long in downtrend
-        if not is_long and ema_fast > ema_slow:
-            return None  # Don't go short in uptrend
+    # EMA bias check moved to entry time (see below)
 
     fvg_config = {
         'min_fvg_ticks': min_fvg_ticks,
@@ -151,6 +167,17 @@ def run_trade(
                     edge_hit = bar.high >= edge_price
 
                 if edge_hit:
+                    # HTF Bias filter at entry time (not end of session)
+                    # If not enough bars for EMA, allow trade (early session)
+                    if require_htf_bias:
+                        bars_to_entry = session_bars[:i+1]
+                        ema_fast = calculate_ema(bars_to_entry, 20)
+                        ema_slow = calculate_ema(bars_to_entry, 50)
+                        if ema_fast is not None and ema_slow is not None:
+                            if is_long and ema_fast < ema_slow:
+                                continue  # Skip this entry, wrong bias
+                            if not is_long and ema_fast > ema_slow:
+                                continue  # Skip this entry, wrong bias
                     edge_hit_idx = i
                     edge_hit_time = bar.timestamp
 
@@ -236,10 +263,22 @@ def run_trade(
     remaining = contracts_filled
     exited_t1 = False
     exited_t2 = False
+    t1_touched = False  # 4R level touched, fast structure trail active
+    t2_touched = False  # 8R level touched, standard structure trail active
 
     # Runner stop - starts at buffered stop, moves to +4R after 8R hits
     runner_stop = stop_price
     runner_stop_type = 'STOP'
+
+    # T1 fast structure trail (active after 4R touched) - tighter buffer
+    t1_trail_stop = stop_price  # Start at entry stop, moves to BE after 4R
+    last_swing_t1 = avg_entry
+    t1_buffer_ticks = 2  # Tighter buffer for faster exit
+
+    # T2 standard structure trail (active after 8R touched)
+    t2_trail_stop = plus_4r  # Start at +4R
+    last_swing_t2 = avg_entry
+    t2_buffer_ticks = 4  # Standard buffer
 
     # Reset FVG mitigation for trade simulation
     entry_fvg.mitigated = False
@@ -250,8 +289,8 @@ def run_trade(
             break
         bar = session_bars[i]
 
-        # Check stop (using buffered stop)
-        if not exited_t1 or not exited_t2:
+        # Check stop (using buffered stop) - only before T1 and T2 are secured
+        if (not exited_t1 and not t1_touched) or (not exited_t2 and not t2_touched):
             if is_long:
                 stop_hit = bar.low <= stop_price
             else:
@@ -262,6 +301,85 @@ def run_trade(
                 exits.append({'type': 'STOP', 'pnl': pnl, 'price': stop_price, 'time': bar.timestamp, 'cts': remaining})
                 remaining = 0
                 break
+
+        # Check T1 fast structure trail (after 4R touched, before T1 exited)
+        if t1_touched and not exited_t1:
+            # Update fast trail based on confirmed swing points (2-tick buffer)
+            check_idx = i - 2
+            if check_idx > entry_bar_idx:
+                if is_long:
+                    if is_swing_low(session_bars, check_idx, lookback=2):
+                        swing_low = session_bars[check_idx].low
+                        if swing_low > last_swing_t1:
+                            new_trail = swing_low - (t1_buffer_ticks * tick_size)
+                            if new_trail > t1_trail_stop:
+                                t1_trail_stop = new_trail
+                                last_swing_t1 = swing_low
+                else:
+                    if is_swing_high(session_bars, check_idx, lookback=2):
+                        swing_high = session_bars[check_idx].high
+                        if swing_high < last_swing_t1:
+                            new_trail = swing_high + (t1_buffer_ticks * tick_size)
+                            if new_trail < t1_trail_stop:
+                                t1_trail_stop = new_trail
+                                last_swing_t1 = swing_high
+
+            # Check if T1 trail stop hit
+            if is_long:
+                if bar.low <= t1_trail_stop:
+                    exit_cts = min(cts_t1, remaining)
+                    pnl = (t1_trail_stop - avg_entry) * exit_cts
+                    exits.append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': t1_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    remaining -= exit_cts
+                    exited_t1 = True
+            else:
+                if bar.high >= t1_trail_stop:
+                    exit_cts = min(cts_t1, remaining)
+                    pnl = (avg_entry - t1_trail_stop) * exit_cts
+                    exits.append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': t1_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    remaining -= exit_cts
+                    exited_t1 = True
+
+        # Check T2 structure trail stop (after 8R touched, before T2 exited)
+        if t2_touched and not exited_t2 and remaining > cts_runner:
+            # Update structure trail based on confirmed swing points
+            # Need 2 bars after swing to confirm (lookback=2)
+            check_idx = i - 2
+            if check_idx > entry_bar_idx:
+                if is_long:
+                    # Trail above swing lows for long
+                    if is_swing_low(session_bars, check_idx, lookback=2):
+                        swing_low = session_bars[check_idx].low
+                        if swing_low > last_swing_t2:  # Higher swing low (good for long)
+                            new_trail = swing_low - (t2_buffer_ticks * tick_size)
+                            if new_trail > t2_trail_stop:
+                                t2_trail_stop = new_trail
+                                last_swing_t2 = swing_low
+                else:
+                    # Trail below swing highs for short
+                    if is_swing_high(session_bars, check_idx, lookback=2):
+                        swing_high = session_bars[check_idx].high
+                        if swing_high < last_swing_t2:  # Lower swing high (good for short)
+                            new_trail = swing_high + (t2_buffer_ticks * tick_size)
+                            if new_trail < t2_trail_stop:
+                                t2_trail_stop = new_trail
+                                last_swing_t2 = swing_high
+
+            # Check if T2 trail stop hit
+            if is_long:
+                if bar.low <= t2_trail_stop:
+                    exit_cts = min(cts_t2, remaining - cts_runner)
+                    pnl = (t2_trail_stop - avg_entry) * exit_cts
+                    exits.append({'type': 'T2_STRUCT', 'pnl': pnl, 'price': t2_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    remaining -= exit_cts
+                    exited_t2 = True
+            else:
+                if bar.high >= t2_trail_stop:
+                    exit_cts = min(cts_t2, remaining - cts_runner)
+                    pnl = (avg_entry - t2_trail_stop) * exit_cts
+                    exits.append({'type': 'T2_STRUCT', 'pnl': pnl, 'price': t2_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    remaining -= exit_cts
+                    exited_t2 = True
 
         # Check runner trailing stop (after T1 and T2 exited)
         if remaining > 0 and remaining <= cts_runner and exited_t1 and exited_t2:
@@ -278,26 +396,20 @@ def run_trade(
                     remaining = 0
                     break
 
-        # Check 4R target
-        if cts_t1 > 0 and not exited_t1:
+        # Check 4R touch (activates fast structure trail for T1)
+        if cts_t1 > 0 and not t1_touched and not exited_t1:
             t1_hit = bar.high >= target_t1 if is_long else bar.low <= target_t1
             if t1_hit:
-                exit_cts = min(cts_t1, remaining)
-                pnl = (target_t1 - avg_entry) * exit_cts if is_long else (avg_entry - target_t1) * exit_cts
-                exits.append({'type': f'T{target1_r}R', 'pnl': pnl, 'price': target_t1, 'time': bar.timestamp, 'cts': exit_cts})
-                remaining -= exit_cts
-                exited_t1 = True
+                t1_touched = True
+                # Move T1 trail stop to breakeven after 4R touched
+                t1_trail_stop = avg_entry
 
-        # Check 8R target
-        if cts_t2 > 0 and not exited_t2 and remaining > cts_runner:
+        # Check 8R touch (activates structure trail, doesn't exit)
+        if cts_t2 > 0 and not t2_touched and remaining > cts_runner:
             t2_hit = bar.high >= target_t2 if is_long else bar.low <= target_t2
             if t2_hit:
-                exit_cts = min(cts_t2, remaining - cts_runner)
-                pnl = (target_t2 - avg_entry) * exit_cts if is_long else (avg_entry - target_t2) * exit_cts
-                exits.append({'type': f'T{target2_r}R', 'pnl': pnl, 'price': target_t2, 'time': bar.timestamp, 'cts': exit_cts})
-                remaining -= exit_cts
-                exited_t2 = True
-                # HYBRID: Move runner stop to +4R after 8R hits
+                t2_touched = True
+                # Move runner stop to +4R after 8R touched
                 runner_stop = plus_4r
                 runner_stop_type = 'STOP_+4R'
 
