@@ -1,9 +1,11 @@
 """
-Run backtest for today with ICT FVG Strategy (V3-StructureTrail).
+Run backtest for today with ICT FVG Strategy (V4-Filtered).
 
 Strategy Features:
 - Stop buffer: +2 ticks beyond FVG boundary (reduces whipsaws)
 - HTF bias: EMA 20/50 trend filter at entry time (trade with trend)
+- ADX > 20 filter: Only trade when market is trending (avoids chop)
+- Max 2 losses/day: Stop trading after 2 losing trades
 - Min FVG size: 6 ticks (filters tiny FVGs)
 - Displacement: 1.2x body size (filters weak FVGs)
 - Extended killzones: London (3-5 AM), NY AM (9:30-12), NY PM (1:30-3:30)
@@ -31,6 +33,78 @@ def calculate_ema(bars, period):
     for bar in bars[period:]:
         ema = (bar.close - ema) * multiplier + ema
     return ema
+
+
+def calculate_adx(bars, period=14):
+    """Calculate ADX (Average Directional Index) for trend strength.
+
+    ADX > 25 = strong trend
+    ADX 20-25 = developing trend
+    ADX < 20 = weak/no trend (choppy market)
+    """
+    if len(bars) < period * 2:
+        return None
+
+    # Calculate True Range, +DM, -DM
+    tr_list = []
+    plus_dm_list = []
+    minus_dm_list = []
+
+    for i in range(1, len(bars)):
+        high = bars[i].high
+        low = bars[i].low
+        close_prev = bars[i-1].close
+        high_prev = bars[i-1].high
+        low_prev = bars[i-1].low
+
+        # True Range
+        tr = max(high - low, abs(high - close_prev), abs(low - close_prev))
+        tr_list.append(tr)
+
+        # Directional Movement
+        up_move = high - high_prev
+        down_move = low_prev - low
+
+        plus_dm = up_move if up_move > down_move and up_move > 0 else 0
+        minus_dm = down_move if down_move > up_move and down_move > 0 else 0
+
+        plus_dm_list.append(plus_dm)
+        minus_dm_list.append(minus_dm)
+
+    if len(tr_list) < period:
+        return None
+
+    # Smoothed averages (Wilder's smoothing)
+    def wilder_smooth(data, period):
+        smoothed = [sum(data[:period])]
+        for i in range(period, len(data)):
+            smoothed.append(smoothed[-1] - (smoothed[-1] / period) + data[i])
+        return smoothed
+
+    atr = wilder_smooth(tr_list, period)
+    plus_dm_smooth = wilder_smooth(plus_dm_list, period)
+    minus_dm_smooth = wilder_smooth(minus_dm_list, period)
+
+    # Calculate +DI and -DI
+    dx_list = []
+    for i in range(len(atr)):
+        if atr[i] == 0:
+            continue
+        plus_di = 100 * plus_dm_smooth[i] / atr[i]
+        minus_di = 100 * minus_dm_smooth[i] / atr[i]
+
+        di_sum = plus_di + minus_di
+        if di_sum == 0:
+            continue
+        dx = 100 * abs(plus_di - minus_di) / di_sum
+        dx_list.append(dx)
+
+    if len(dx_list) < period:
+        return None
+
+    # ADX is smoothed DX
+    adx = sum(dx_list[-period:]) / period
+    return adx
 
 
 def is_displacement_candle(bar, avg_body_size, threshold=1.2):
@@ -93,8 +167,10 @@ def run_trade(
     require_displacement=True,
     require_killzone=True,
     require_htf_bias=True,
+    require_adx=True,
+    min_adx=20,
 ):
-    """Run trade with ICT FVG Strategy (V2-Balanced)."""
+    """Run trade with ICT FVG Strategy (V4-Filtered)."""
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
     opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
@@ -178,6 +254,14 @@ def run_trade(
                                 continue  # Skip this entry, wrong bias
                             if not is_long and ema_fast > ema_slow:
                                 continue  # Skip this entry, wrong bias
+
+                    # ADX filter - only trade in trending markets
+                    if require_adx:
+                        bars_to_entry = session_bars[:i+1]
+                        adx = calculate_adx(bars_to_entry, 14)
+                        if adx is not None and adx < min_adx:
+                            continue  # Skip this entry, market not trending
+
                     edge_hit_idx = i
                     edge_hit_time = bar.timestamp
 
@@ -483,9 +567,11 @@ def run_today(symbol='ES', contracts=3):
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V2-Balanced')
+    print('Strategy: ICT FVG V4-Filtered')
     print('  - Stop buffer: +2 ticks')
     print('  - HTF bias: EMA 20/50')
+    print('  - ADX filter: > 20 (trend strength)')
+    print('  - Max losses: 2 per day')
     print('  - Min FVG: 6 ticks')
     print('  - Displacement: 1.2x')
     print('  - Killzones: London + NY AM + NY PM')
@@ -495,19 +581,35 @@ def run_today(symbol='ES', contracts=3):
     print('='*70)
 
     all_results = []
+    loss_count = 0
+    max_losses = 2
 
     for direction in ['LONG', 'SHORT']:
+        # Check if we've hit max losses for the day
+        if loss_count >= max_losses:
+            print(f"\n** MAX LOSSES ({max_losses}) REACHED - Stopping {direction} trades **")
+            continue
+
         result = run_trade(session_bars, direction, 1, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
         if result:
             result['date'] = today
             all_results.append(result)
-            # Try re-entry if stopped out
-            if result['was_stopped']:
+
+            # Track losses
+            if result['total_dollars'] < 0:
+                loss_count += 1
+
+            # Try re-entry if stopped out (and haven't hit max losses)
+            if result['was_stopped'] and loss_count < max_losses:
                 result2 = run_trade(session_bars, direction, 2, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
                 if result2:
                     result2['date'] = today
                     result2['is_reentry'] = True
                     all_results.append(result2)
+
+                    # Track losses for re-entry
+                    if result2['total_dollars'] < 0:
+                        loss_count += 1
 
     total_pnl = 0
     for r in all_results:

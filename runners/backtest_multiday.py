@@ -40,6 +40,8 @@ def backtest_multiday(symbol='ES', days=14, contracts=3):
     print(f"{'Date':<12} | {'Dir':<5} | {'Type':<8} | {'Entry':<10} | {'Result':<6} | {'P/L':>12}")
     print("-" * 70)
 
+    max_losses_per_day = 2
+
     for day in dates[-days:]:
         day_bars = [b for b in all_bars if b.timestamp.date() == day]
 
@@ -50,7 +52,13 @@ def backtest_multiday(symbol='ES', days=14, contracts=3):
         if len(session_bars) < 50:
             continue
 
+        day_loss_count = 0  # Track losses per day
+
         for direction in ['LONG', 'SHORT']:
+            # Check max losses for the day
+            if day_loss_count >= max_losses_per_day:
+                continue
+
             # Try first FVG
             result = run_trade(session_bars, direction, 1, tick_size=tick_size,
                              tick_value=tick_value, contracts=contracts)
@@ -64,6 +72,7 @@ def backtest_multiday(symbol='ES', days=14, contracts=3):
                     result_str = 'WIN'
                 elif is_loss:
                     total_losses += 1
+                    day_loss_count += 1
                     result_str = 'LOSS'
                 else:
                     result_str = 'BE'
@@ -73,8 +82,8 @@ def backtest_multiday(symbol='ES', days=14, contracts=3):
 
                 print(f"{day} | {direction:<5} | {'1st':<8} | {result['entry_price']:<10.2f} | {result_str:<6} | ${result['total_dollars']:>+10,.2f}")
 
-                # Try re-entry if stopped out
-                if result['was_stopped']:
+                # Try re-entry if stopped out (and haven't hit max losses)
+                if result['was_stopped'] and day_loss_count < max_losses_per_day:
                     result2 = run_trade(session_bars, direction, 2, tick_size=tick_size,
                                        tick_value=tick_value, contracts=contracts)
 
@@ -87,6 +96,7 @@ def backtest_multiday(symbol='ES', days=14, contracts=3):
                             result_str2 = 'WIN'
                         elif is_loss2:
                             total_losses += 1
+                            day_loss_count += 1
                             result_str2 = 'LOSS'
                         else:
                             result_str2 = 'BE'
