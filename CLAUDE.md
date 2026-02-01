@@ -9,7 +9,7 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V4-Filtered (Jan 30, 2026)
+## Current Strategy: V5-Optimized (Jan 31, 2026)
 
 ### Strategy Features
 - **Entry**: FVG midpoint with partial fill (1 ct @ edge, 2 cts @ midpoint)
@@ -19,17 +19,25 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 ### Filters
 | Filter | Value | Purpose |
 |--------|-------|---------|
-| Min FVG | 6 ticks | Filter tiny gaps |
+| Min FVG | 5 ticks | Filter tiny gaps |
 | Displacement | 1.2x avg body | Only strong moves |
 | HTF Bias | EMA 20/50 | Trade with trend |
-| ADX | > 20 | Only trending markets |
-| Killzones | London + NY AM + NY PM | High-probability times |
+| ADX | > 17 | Only trending markets |
+| DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
+| Killzones | DISABLED | Trades any session time |
 | Max Losses | 2/day | Circuit breaker |
 
-### 30-Day Backtest Results
-- Win Rate: 36.4%
-- Profit Factor: 7.06
-- Avg Win: $3,723 | Avg Loss: $317
+### 18-Day Backtest Results
+- Win Rate: 38.7%
+- Profit Factor: 4.56
+- Total P/L: +$29,967
+- Avg Win: $3,198 | Avg Loss: $443
+
+### Key Findings from Optimization
+- EMA 20/50 outperforms EMA 9/21 (slower = better trend confirmation)
+- EMA + DI Direction together outperform either alone
+- Displacement 1.2x filters weak setups effectively
+- ADX > 17 balances trade frequency vs quality
 
 ## Key Commands
 
@@ -76,7 +84,7 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
-| `runners/run_today.py` | V4-Filtered strategy backtest |
+| `runners/run_today.py` | V5-Optimized strategy backtest |
 | `runners/backtest_multiday.py` | Multi-day backtest |
 | `runners/plot_today.py` | Trade visualization |
 | `runners/run_tv_live.py` | Live TradingView monitor |
