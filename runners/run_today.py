@@ -3,12 +3,12 @@ Run backtest for today with ICT FVG Strategy (V4-Filtered).
 
 Strategy Features:
 - Stop buffer: +2 ticks beyond FVG boundary (reduces whipsaws)
-- HTF bias: EMA 20/50 trend filter at entry time (trade with trend)
-- ADX > 20 filter: Only trade when market is trending (avoids chop)
+- HTF bias: EMA 9/21 trend filter at entry time (trade with trend)
+- ADX > 17 filter: Only trade when market is trending (avoids chop)
 - Max 2 losses/day: Stop trading after 2 losing trades
-- Min FVG size: 6 ticks (filters tiny FVGs)
+- Min FVG size: 5 ticks (filters tiny FVGs)
 - Displacement: 1.2x body size (filters weak FVGs)
-- Extended killzones: London (3-5 AM), NY AM (9:30-12), NY PM (1:30-3:30)
+- Killzones: DISABLED (trades any time during session)
 - Partial fill entry: 1 ct @ edge, 2 cts @ midpoint
 
 Exit Strategy (Tiered Structure Trail):
@@ -36,14 +36,19 @@ def calculate_ema(bars, period):
 
 
 def calculate_adx(bars, period=14):
-    """Calculate ADX (Average Directional Index) for trend strength.
+    """Calculate ADX (Average Directional Index) and DI values for trend strength/direction.
+
+    Returns: (adx, plus_di, minus_di) or (None, None, None) if not enough data
 
     ADX > 25 = strong trend
-    ADX 20-25 = developing trend
-    ADX < 20 = weak/no trend (choppy market)
+    ADX 17-25 = developing trend
+    ADX < 17 = weak/no trend (choppy market)
+
+    +DI > -DI = bullish trend direction
+    -DI > +DI = bearish trend direction
     """
     if len(bars) < period * 2:
-        return None
+        return None, None, None
 
     # Calculate True Range, +DM, -DM
     tr_list = []
@@ -72,7 +77,7 @@ def calculate_adx(bars, period=14):
         minus_dm_list.append(minus_dm)
 
     if len(tr_list) < period:
-        return None
+        return None, None, None
 
     # Smoothed averages (Wilder's smoothing)
     def wilder_smooth(data, period):
@@ -87,6 +92,8 @@ def calculate_adx(bars, period=14):
 
     # Calculate +DI and -DI
     dx_list = []
+    plus_di = 0
+    minus_di = 0
     for i in range(len(atr)):
         if atr[i] == 0:
             continue
@@ -100,11 +107,11 @@ def calculate_adx(bars, period=14):
         dx_list.append(dx)
 
     if len(dx_list) < period:
-        return None
+        return None, None, None
 
     # ADX is smoothed DX
     adx = sum(dx_list[-period:]) / period
-    return adx
+    return adx, plus_di, minus_di
 
 
 def is_displacement_candle(bar, avg_body_size, threshold=1.2):
@@ -162,13 +169,13 @@ def run_trade(
     target2_r=8,
     # Strategy Parameters
     stop_buffer_ticks=2,
-    min_fvg_ticks=6,
+    min_fvg_ticks=5,
     displacement_threshold=1.2,
     require_displacement=True,
-    require_killzone=True,
+    require_killzone=False,
     require_htf_bias=True,
     require_adx=True,
-    min_adx=20,
+    min_adx=17,
 ):
     """Run trade with ICT FVG Strategy (V4-Filtered)."""
     is_long = direction == 'LONG'
@@ -256,11 +263,18 @@ def run_trade(
                                 continue  # Skip this entry, wrong bias
 
                     # ADX filter - only trade in trending markets
+                    # Also check DI direction: LONG only if +DI > -DI, SHORT only if -DI > +DI
                     if require_adx:
                         bars_to_entry = session_bars[:i+1]
-                        adx = calculate_adx(bars_to_entry, 14)
-                        if adx is not None and adx < min_adx:
-                            continue  # Skip this entry, market not trending
+                        adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
+                        if adx is not None:
+                            if adx < min_adx:
+                                continue  # Skip this entry, market not trending
+                            # DI direction filter
+                            if is_long and plus_di <= minus_di:
+                                continue  # Skip LONG, bearish DI direction
+                            if not is_long and minus_di <= plus_di:
+                                continue  # Skip SHORT, bullish DI direction
 
                     edge_hit_idx = i
                     edge_hit_time = bar.timestamp
@@ -569,12 +583,12 @@ def run_today(symbol='ES', contracts=3):
     print('='*70)
     print('Strategy: ICT FVG V4-Filtered')
     print('  - Stop buffer: +2 ticks')
-    print('  - HTF bias: EMA 20/50')
-    print('  - ADX filter: > 20 (trend strength)')
+    print('  - HTF bias: EMA 9/21')
+    print('  - ADX filter: > 17 (trend strength)')
     print('  - Max losses: 2 per day')
-    print('  - Min FVG: 6 ticks')
+    print('  - Min FVG: 5 ticks')
     print('  - Displacement: 1.2x')
-    print('  - Killzones: London + NY AM + NY PM')
+    print('  - Killzones: DISABLED')
     print('  - Entry: 1 ct @ edge, 2 cts @ midpoint')
     print('  - Targets: 4R, 8R, Runner')
     print('  - Hybrid trailing: +4R after 8R hits')
