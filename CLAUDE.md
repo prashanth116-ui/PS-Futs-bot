@@ -11,6 +11,12 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
 ## Current Strategy: V5-Optimized (Jan 31, 2026)
 
+### Supported Instruments (ES/NQ Only)
+| Symbol | Exchange | Tick Value |
+|--------|----------|------------|
+| ES | CME_MINI | $12.50 |
+| NQ | CME_MINI | $5.00 |
+
 ### Strategy Features
 - **Entry**: FVG midpoint with partial fill (1 ct @ edge, 2 cts @ midpoint)
 - **Stop**: FVG boundary + 2 tick buffer
@@ -28,10 +34,11 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 | Max Losses | 2/day | Circuit breaker |
 
 ### 18-Day Backtest Results
-- Win Rate: 38.7%
-- Profit Factor: 4.56
-- Total P/L: +$29,967
-- Avg Win: $3,198 | Avg Loss: $443
+| Symbol | Trades | Win Rate | PF | Total P/L |
+|--------|--------|----------|-----|-----------|
+| ES | 31 | 38.7% | 4.56 | +$29,967 |
+| NQ | 33 | 54.5% | 6.05 | +$42,535 |
+| **Combined** | 64 | 47.0% | 5.30 | **+$72,502** |
 
 ### Key Findings from Optimization
 - EMA 20/50 outperforms EMA 9/21 (slower = better trend confirmation)
