@@ -11,10 +11,11 @@ import os
 import time
 from pathlib import Path
 from datetime import datetime
-from tvDatafeed import TvDatafeed, Interval
+from tvDatafeed import Interval
 
 from core.types import Bar
 from strategies.factory import build_ict_from_yaml
+from runners.tradingview_loader import _get_tv_client
 
 # Configuration
 SYMBOLS = [
@@ -161,7 +162,7 @@ def main():
     # Connect to TradingView using cached session (avoids CAPTCHA)
     print("\nConnecting to TradingView (using cached session)...")
     try:
-        tv = TvDatafeed()  # Uses cached session from ~/.tvdatafeed/
+        tv = _get_tv_client()  # Uses cached session from browser login
         time.sleep(2)  # Allow connection to stabilize
         # Test connection with retry
         test_df = None
