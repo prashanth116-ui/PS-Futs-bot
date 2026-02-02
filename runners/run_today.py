@@ -1,15 +1,16 @@
 """
-Run backtest for today with ICT FVG Strategy (V4-Filtered).
+Run backtest for today with ICT FVG Strategy (V6-Aggressive).
 
 Strategy Features:
 - Stop buffer: +2 ticks beyond FVG boundary (reduces whipsaws)
-- HTF bias: EMA 9/21 trend filter at entry time (trade with trend)
+- HTF bias: EMA 20/50 trend filter at entry time (trade with trend)
 - ADX > 17 filter: Only trade when market is trending (avoids chop)
+- DI Direction: LONG only if +DI > -DI, SHORT only if -DI > +DI
 - Max 2 losses/day: Stop trading after 2 losing trades
 - Min FVG size: 5 ticks (filters tiny FVGs)
-- Displacement: 1.2x body size (filters weak FVGs)
+- Displacement: 1.0x body size (lower threshold to catch more setups)
 - Killzones: DISABLED (trades any time during session)
-- Partial fill entry: 1 ct @ edge, 2 cts @ midpoint
+- Entry: AT FVG CREATION (no waiting for retracement)
 
 Exit Strategy (Tiered Structure Trail):
 - 1st contract: Fast trail after 4R touch (2-tick buffer, trails swing highs/lows)
@@ -170,14 +171,15 @@ def run_trade(
     # Strategy Parameters
     stop_buffer_ticks=2,
     min_fvg_ticks=5,
-    displacement_threshold=1.2,
+    displacement_threshold=1.0,  # V6-Aggressive: lower threshold
     require_displacement=True,
     require_killzone=False,
     require_htf_bias=True,
     require_adx=True,
     min_adx=17,
+    enter_at_creation=True,  # V6-Aggressive: enter at FVG creation, not retracement
 ):
-    """Run trade with ICT FVG Strategy (V4-Filtered)."""
+    """Run trade with ICT FVG Strategy (V6-Aggressive)."""
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
     opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
@@ -223,82 +225,126 @@ def run_trade(
         edge_price = fvg.high if is_long else fvg.low
         midpoint_price = fvg.midpoint
 
-        edge_hit_idx = None
-        edge_hit_time = None
-        midpoint_hit_idx = None
-        midpoint_hit_time = None
+        # V6-Aggressive: Enter at FVG creation (no waiting for retracement)
+        if enter_at_creation:
+            entry_idx = fvg.created_bar_index
+            entry_bar = session_bars[entry_idx]
 
-        for i in range(fvg.created_bar_index + 1, len(session_bars)):
-            bar = session_bars[i]
-
-            # Update FVG mitigation status
-            update_fvg_mitigation(fvg, bar, i, fvg_config)
-
-            # If FVG mitigated before entry, skip this FVG
-            if fvg.mitigated and edge_hit_idx is None:
-                break
-
-            # Killzone filter - only enter during high-probability times
-            if require_killzone and not is_in_killzone(bar.timestamp):
+            # Killzone filter
+            if require_killzone and not is_in_killzone(entry_bar.timestamp):
                 continue
 
-            # Check for price entering FVG zone
-            if edge_hit_idx is None and not fvg.mitigated:
-                if is_long:
-                    edge_hit = bar.low <= edge_price
-                else:
-                    edge_hit = bar.high >= edge_price
+            # HTF Bias filter at FVG creation time
+            if require_htf_bias:
+                bars_to_entry = session_bars[:entry_idx+1]
+                ema_fast = calculate_ema(bars_to_entry, 20)
+                ema_slow = calculate_ema(bars_to_entry, 50)
+                if ema_fast is not None and ema_slow is not None:
+                    if is_long and ema_fast < ema_slow:
+                        continue  # Skip, wrong bias
+                    if not is_long and ema_fast > ema_slow:
+                        continue  # Skip, wrong bias
 
-                if edge_hit:
-                    # HTF Bias filter at entry time (not end of session)
-                    # If not enough bars for EMA, allow trade (early session)
-                    if require_htf_bias:
-                        bars_to_entry = session_bars[:i+1]
-                        ema_fast = calculate_ema(bars_to_entry, 20)
-                        ema_slow = calculate_ema(bars_to_entry, 50)
-                        if ema_fast is not None and ema_slow is not None:
-                            if is_long and ema_fast < ema_slow:
-                                continue  # Skip this entry, wrong bias
-                            if not is_long and ema_fast > ema_slow:
-                                continue  # Skip this entry, wrong bias
+            # ADX filter at FVG creation time
+            if require_adx:
+                bars_to_entry = session_bars[:entry_idx+1]
+                adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
+                if adx is not None:
+                    if adx < min_adx:
+                        continue  # Skip, market not trending
+                    if is_long and plus_di <= minus_di:
+                        continue  # Skip LONG, bearish DI
+                    if not is_long and minus_di <= plus_di:
+                        continue  # Skip SHORT, bullish DI
 
-                    # ADX filter - only trade in trending markets
-                    # Also check DI direction: LONG only if +DI > -DI, SHORT only if -DI > +DI
-                    if require_adx:
-                        bars_to_entry = session_bars[:i+1]
-                        adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
-                        if adx is not None:
-                            if adx < min_adx:
-                                continue  # Skip this entry, market not trending
-                            # DI direction filter
-                            if is_long and plus_di <= minus_di:
-                                continue  # Skip LONG, bearish DI direction
-                            if not is_long and minus_di <= plus_di:
-                                continue  # Skip SHORT, bullish DI direction
-
-                    edge_hit_idx = i
-                    edge_hit_time = bar.timestamp
-
-            # Check midpoint for full fill
-            if edge_hit_idx is not None and midpoint_hit_idx is None and not fvg.mitigated:
-                midpoint_hit = bar.low <= midpoint_price if is_long else bar.high >= midpoint_price
-                if midpoint_hit:
-                    midpoint_hit_idx = i
-                    midpoint_hit_time = bar.timestamp
-                    break
-
-            if fvg.mitigated and edge_hit_idx is not None:
-                break
-
-        if edge_hit_idx is not None:
+            # Valid entry at creation
             valid_fvg_count += 1
             if valid_fvg_count == fvg_num:
                 entry_fvg = fvg
-                edge_entry_bar_idx = edge_hit_idx
-                edge_entry_time = edge_hit_time
-                midpoint_entry_bar_idx = midpoint_hit_idx
-                midpoint_entry_time = midpoint_hit_time
+                # Enter at midpoint price at creation time (all contracts)
+                edge_entry_bar_idx = entry_idx
+                edge_entry_time = entry_bar.timestamp
+                midpoint_entry_bar_idx = entry_idx
+                midpoint_entry_time = entry_bar.timestamp
                 break
+        else:
+            # Original V5 logic: wait for price to retrace to FVG
+            edge_hit_idx = None
+            edge_hit_time = None
+            midpoint_hit_idx = None
+            midpoint_hit_time = None
+
+            for i in range(fvg.created_bar_index + 1, len(session_bars)):
+                bar = session_bars[i]
+
+                # Update FVG mitigation status
+                update_fvg_mitigation(fvg, bar, i, fvg_config)
+
+                # If FVG mitigated before entry, skip this FVG
+                if fvg.mitigated and edge_hit_idx is None:
+                    break
+
+                # Killzone filter - only enter during high-probability times
+                if require_killzone and not is_in_killzone(bar.timestamp):
+                    continue
+
+                # Check for price entering FVG zone
+                if edge_hit_idx is None and not fvg.mitigated:
+                    if is_long:
+                        edge_hit = bar.low <= edge_price
+                    else:
+                        edge_hit = bar.high >= edge_price
+
+                    if edge_hit:
+                        # HTF Bias filter at entry time (not end of session)
+                        # If not enough bars for EMA, allow trade (early session)
+                        if require_htf_bias:
+                            bars_to_entry = session_bars[:i+1]
+                            ema_fast = calculate_ema(bars_to_entry, 20)
+                            ema_slow = calculate_ema(bars_to_entry, 50)
+                            if ema_fast is not None and ema_slow is not None:
+                                if is_long and ema_fast < ema_slow:
+                                    continue  # Skip this entry, wrong bias
+                                if not is_long and ema_fast > ema_slow:
+                                    continue  # Skip this entry, wrong bias
+
+                        # ADX filter - only trade in trending markets
+                        # Also check DI direction: LONG only if +DI > -DI, SHORT only if -DI > +DI
+                        if require_adx:
+                            bars_to_entry = session_bars[:i+1]
+                            adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
+                            if adx is not None:
+                                if adx < min_adx:
+                                    continue  # Skip this entry, market not trending
+                                # DI direction filter
+                                if is_long and plus_di <= minus_di:
+                                    continue  # Skip LONG, bearish DI direction
+                                if not is_long and minus_di <= plus_di:
+                                    continue  # Skip SHORT, bullish DI direction
+
+                        edge_hit_idx = i
+                        edge_hit_time = bar.timestamp
+
+                # Check midpoint for full fill
+                if edge_hit_idx is not None and midpoint_hit_idx is None and not fvg.mitigated:
+                    midpoint_hit = bar.low <= midpoint_price if is_long else bar.high >= midpoint_price
+                    if midpoint_hit:
+                        midpoint_hit_idx = i
+                        midpoint_hit_time = bar.timestamp
+                        break
+
+                if fvg.mitigated and edge_hit_idx is not None:
+                    break
+
+            if edge_hit_idx is not None:
+                valid_fvg_count += 1
+                if valid_fvg_count == fvg_num:
+                    entry_fvg = fvg
+                    edge_entry_bar_idx = edge_hit_idx
+                    edge_entry_time = edge_hit_time
+                    midpoint_entry_bar_idx = midpoint_hit_idx
+                    midpoint_entry_time = midpoint_hit_time
+                    break
 
     if entry_fvg is None or edge_entry_bar_idx is None:
         return None
@@ -554,6 +600,398 @@ def run_trade(
     }
 
 
+def run_multi_trade(
+    session_bars,
+    direction,
+    tick_size=0.25,
+    tick_value=12.50,
+    contracts=3,
+    target1_r=4,
+    target2_r=8,
+    stop_buffer_ticks=2,
+    min_fvg_ticks=5,
+    displacement_threshold=1.0,
+    min_adx=17,
+    reentry_r_threshold=2,  # Take 2nd entry when 1st is at +2R
+    lockin_r=1,  # Move 1st trade stop to +1R when 2nd entry triggers
+):
+    """Run multi-entry trade with profit-protected re-entry.
+
+    When 1st trade reaches +2R profit:
+    - Check for new valid FVG entry
+    - If found, take 2nd entry and move 1st trade stop to +1R
+    """
+    is_long = direction == 'LONG'
+    fvg_dir = 'BULLISH' if is_long else 'BEARISH'
+    opposing_fvg_dir = 'BEARISH' if is_long else 'BULLISH'
+
+    body_sizes = [abs(b.close - b.open) for b in session_bars[:50]]
+    avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
+
+    fvg_config = {
+        'min_fvg_ticks': min_fvg_ticks,
+        'tick_size': tick_size,
+        'max_fvg_age_bars': 100,
+        'invalidate_on_close_through': True
+    }
+    all_fvgs = detect_fvgs(session_bars, fvg_config)
+
+    # Find all valid FVG entries (pass displacement + filters at creation time)
+    valid_entries = []
+    for fvg in all_fvgs:
+        if fvg.direction != fvg_dir:
+            continue
+
+        creating_bar = session_bars[fvg.created_bar_index]
+        body = abs(creating_bar.close - creating_bar.open)
+        if body <= avg_body_size * displacement_threshold:
+            continue
+
+        bars_to_entry = session_bars[:fvg.created_bar_index + 1]
+        ema_fast = calculate_ema(bars_to_entry, 20)
+        ema_slow = calculate_ema(bars_to_entry, 50)
+        adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
+
+        ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
+        adx_ok = adx is None or adx >= min_adx
+        di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+
+        if ema_ok and adx_ok and di_ok:
+            valid_entries.append({
+                'fvg': fvg,
+                'entry_bar_idx': fvg.created_bar_index,
+                'entry_time': creating_bar.timestamp,
+                'midpoint': fvg.midpoint,
+                'stop': fvg.low - (stop_buffer_ticks * tick_size) if is_long else fvg.high + (stop_buffer_ticks * tick_size),
+                'fvg_low': fvg.low,
+                'fvg_high': fvg.high,
+            })
+
+    if not valid_entries:
+        return []
+
+    results = []
+
+    # Trade 1: First valid entry
+    t1 = valid_entries[0]
+    t1_entry = t1['midpoint']
+    t1_stop = t1['stop']
+    t1_original_stop = t1_stop
+    t1_risk = abs(t1_entry - t1_stop)
+    t1_target_2r = t1_entry + (reentry_r_threshold * t1_risk) if is_long else t1_entry - (reentry_r_threshold * t1_risk)
+    t1_target_4r = t1_entry + (target1_r * t1_risk) if is_long else t1_entry - (target1_r * t1_risk)
+    t1_target_8r = t1_entry + (target2_r * t1_risk) if is_long else t1_entry - (target2_r * t1_risk)
+    t1_plus_4r = t1_target_4r
+    t1_lockin_price = t1_entry + (lockin_r * t1_risk) if is_long else t1_entry - (lockin_r * t1_risk)
+
+    t1_remaining = contracts
+    t1_exits = []
+    t1_active = True
+    t1_touched_4r = False
+    t1_touched_8r = False
+    t1_exited_t1 = False
+    t1_exited_t2 = False
+    t1_runner_stop = t1_stop
+    t1_trail_stop = t1_stop
+    t1_last_swing = t1_entry
+    t1_stop_locked = False  # Track if stop was moved to +1R
+
+    cts_t1 = contracts // 3 or 1
+    cts_t2 = contracts // 3 or 1
+    cts_runner = contracts - cts_t1 - cts_t2 or 1
+
+    # Trade 2 state
+    t2_entry = None
+    t2_stop = None
+    t2_risk = None
+    t2_remaining = 0
+    t2_exits = []
+    t2_active = False
+    t2_touched_4r = False
+    t2_touched_8r = False
+    t2_exited_t1 = False
+    t2_exited_t2 = False
+    t2_runner_stop = None
+    t2_trail_stop = None
+    t2_last_swing = None
+    t2_entry_info = None
+    t2_target_4r = None
+    t2_target_8r = None
+    t2_plus_4r = None
+
+    # Track if 2nd entry was taken
+    took_2nd_entry = False
+
+    # Simulate bar by bar
+    for i in range(t1['entry_bar_idx'] + 1, len(session_bars)):
+        bar = session_bars[i]
+
+        # === TRADE 1 MANAGEMENT ===
+        if t1_active and t1_remaining > 0:
+            current_price = bar.high if is_long else bar.low
+            current_pnl_r = (current_price - t1_entry) / t1_risk if is_long else (t1_entry - current_price) / t1_risk
+
+            # Check for 2nd entry opportunity (1st trade at +2R, not already taken)
+            if not took_2nd_entry and current_pnl_r >= reentry_r_threshold:
+                # Look for a new valid FVG that formed after trade 1
+                for entry in valid_entries[1:]:
+                    if entry['entry_bar_idx'] <= i and entry['entry_bar_idx'] > t1['entry_bar_idx']:
+                        # Found valid 2nd entry - take it!
+                        t2_entry_info = entry
+                        t2_entry = entry['midpoint']
+                        t2_stop = entry['stop']
+                        t2_risk = abs(t2_entry - t2_stop)
+                        t2_remaining = contracts
+                        t2_active = True
+                        t2_target_4r = t2_entry + (target1_r * t2_risk) if is_long else t2_entry - (target1_r * t2_risk)
+                        t2_target_8r = t2_entry + (target2_r * t2_risk) if is_long else t2_entry - (target2_r * t2_risk)
+                        t2_plus_4r = t2_target_4r
+                        t2_runner_stop = t2_stop
+                        t2_trail_stop = t2_stop
+                        t2_last_swing = t2_entry
+
+                        # LOCK IN +1R on Trade 1
+                        t1_stop = t1_lockin_price
+                        t1_trail_stop = max(t1_trail_stop, t1_lockin_price) if is_long else min(t1_trail_stop, t1_lockin_price)
+                        t1_runner_stop = max(t1_runner_stop, t1_lockin_price) if is_long else min(t1_runner_stop, t1_lockin_price)
+                        t1_stop_locked = True
+
+                        took_2nd_entry = True
+                        break
+
+            # Check 4R touch (T1 exit zone) - check BEFORE stop logic
+            if t1_remaining > 0 and not t1_touched_4r:
+                t1_hit = bar.high >= t1_target_4r if is_long else bar.low <= t1_target_4r
+                if t1_hit:
+                    t1_touched_4r = True
+                    t1_trail_stop = t1_entry  # Move trail to BE after 4R
+
+            # Update structure trail after 4R touched
+            if t1_touched_4r and t1_remaining > 0:
+                check_idx = i - 2
+                if check_idx > t1['entry_bar_idx']:
+                    if is_long and is_swing_low(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].low
+                        if swing > t1_last_swing:
+                            new_trail = swing - (2 * tick_size)
+                            if new_trail > t1_trail_stop:
+                                t1_trail_stop = new_trail
+                                t1_last_swing = swing
+                    elif not is_long and is_swing_high(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].high
+                        if swing < t1_last_swing:
+                            new_trail = swing + (2 * tick_size)
+                            if new_trail < t1_trail_stop:
+                                t1_trail_stop = new_trail
+                                t1_last_swing = swing
+
+            # Determine current stop level (use trail_stop if 4R touched, else original stop)
+            current_stop = t1_trail_stop if t1_touched_4r else t1_stop
+
+            # After 8R touched, runner uses +4R stop
+            if t1_touched_8r and t1_exited_t1 and t1_exited_t2:
+                current_stop = t1_runner_stop
+
+            # Check stop/trail hit for ALL remaining contracts
+            stop_hit = bar.low <= current_stop if is_long else bar.high >= current_stop
+            if stop_hit and t1_remaining > 0:
+                pnl = (current_stop - t1_entry) * t1_remaining if is_long else (t1_entry - current_stop) * t1_remaining
+                if t1_touched_4r:
+                    if t1_exited_t1 and t1_exited_t2:
+                        exit_type = 'RUNNER_STOP' if t1_touched_8r else 'TRAIL_STOP'
+                    elif t1_exited_t1:
+                        exit_type = 'T2_TRAIL'
+                    else:
+                        exit_type = 'T1_STRUCT'
+                else:
+                    exit_type = 'STOP_+1R' if t1_stop_locked else 'STOP'
+                t1_exits.append({'type': exit_type, 'pnl': pnl, 'price': current_stop, 'time': bar.timestamp, 'cts': t1_remaining})
+                t1_remaining = 0
+                t1_active = False
+                continue  # Move to next bar
+
+            # Exit T1 contract via structure trail (1 contract) after 4R
+            if t1_touched_4r and not t1_exited_t1 and t1_remaining > 0:
+                trail_hit = bar.low <= t1_trail_stop if is_long else bar.high >= t1_trail_stop
+                if trail_hit:
+                    exit_cts = min(cts_t1, t1_remaining)
+                    pnl = (t1_trail_stop - t1_entry) * exit_cts if is_long else (t1_entry - t1_trail_stop) * exit_cts
+                    t1_exits.append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': t1_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    t1_remaining -= exit_cts
+                    t1_exited_t1 = True
+
+            # Check 8R touch
+            if t1_remaining > 0 and not t1_touched_8r:
+                t2_hit = bar.high >= t1_target_8r if is_long else bar.low <= t1_target_8r
+                if t2_hit:
+                    t1_touched_8r = True
+                    t1_runner_stop = t1_plus_4r
+
+            # T2 structure trail after 8R touched
+            if t1_touched_8r and not t1_exited_t2 and t1_remaining > cts_runner:
+                trail_hit = bar.low <= t1_runner_stop if is_long else bar.high >= t1_runner_stop
+                if trail_hit:
+                    exit_cts = min(cts_t2, t1_remaining - cts_runner)
+                    pnl = (t1_runner_stop - t1_entry) * exit_cts if is_long else (t1_entry - t1_runner_stop) * exit_cts
+                    t1_exits.append({'type': 'T2_STRUCT', 'pnl': pnl, 'price': t1_runner_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    t1_remaining -= exit_cts
+                    t1_exited_t2 = True
+
+            # Runner exit (opposing FVG)
+            if t1_remaining > 0 and t1_remaining <= cts_runner and t1_exited_t1:
+                opp_fvgs = [f for f in all_fvgs if f.direction == opposing_fvg_dir and f.created_bar_index > t1['entry_bar_idx'] and f.created_bar_index <= i]
+                if opp_fvgs:
+                    pnl = (bar.close - t1_entry) * t1_remaining if is_long else (t1_entry - bar.close) * t1_remaining
+                    t1_exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': t1_remaining})
+                    t1_remaining = 0
+
+        # === TRADE 2 MANAGEMENT ===
+        if t2_active and t2_remaining > 0:
+            # Check 4R touch first
+            if t2_remaining > 0 and not t2_touched_4r:
+                t2_4r_hit = bar.high >= t2_target_4r if is_long else bar.low <= t2_target_4r
+                if t2_4r_hit:
+                    t2_touched_4r = True
+                    t2_trail_stop = t2_entry  # Move to BE
+
+            # Update structure trail after 4R
+            if t2_touched_4r and t2_remaining > 0:
+                check_idx = i - 2
+                if check_idx > t2_entry_info['entry_bar_idx']:
+                    if is_long and is_swing_low(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].low
+                        if swing > t2_last_swing:
+                            new_trail = swing - (2 * tick_size)
+                            if new_trail > t2_trail_stop:
+                                t2_trail_stop = new_trail
+                                t2_last_swing = swing
+                    elif not is_long and is_swing_high(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].high
+                        if swing < t2_last_swing:
+                            new_trail = swing + (2 * tick_size)
+                            if new_trail < t2_trail_stop:
+                                t2_trail_stop = new_trail
+                                t2_last_swing = swing
+
+            # Determine current stop for Trade 2
+            t2_current_stop = t2_trail_stop if t2_touched_4r else t2_stop
+            if t2_touched_8r and t2_exited_t1 and t2_exited_t2:
+                t2_current_stop = t2_runner_stop
+
+            # Check stop/trail hit for Trade 2
+            stop_hit = bar.low <= t2_current_stop if is_long else bar.high >= t2_current_stop
+            if stop_hit and t2_remaining > 0:
+                pnl = (t2_current_stop - t2_entry) * t2_remaining if is_long else (t2_entry - t2_current_stop) * t2_remaining
+                if t2_touched_4r:
+                    exit_type = 'RUNNER_STOP' if t2_touched_8r and t2_exited_t1 and t2_exited_t2 else 'TRAIL_STOP'
+                else:
+                    exit_type = 'STOP'
+                t2_exits.append({'type': exit_type, 'pnl': pnl, 'price': t2_current_stop, 'time': bar.timestamp, 'cts': t2_remaining})
+                t2_remaining = 0
+                t2_active = False
+                continue
+
+            # Exit T1 contract via structure trail after 4R
+            if t2_touched_4r and not t2_exited_t1 and t2_remaining > 0:
+                trail_hit = bar.low <= t2_trail_stop if is_long else bar.high >= t2_trail_stop
+                if trail_hit:
+                    exit_cts = min(cts_t1, t2_remaining)
+                    pnl = (t2_trail_stop - t2_entry) * exit_cts if is_long else (t2_entry - t2_trail_stop) * exit_cts
+                    t2_exits.append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': t2_trail_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    t2_remaining -= exit_cts
+                    t2_exited_t1 = True
+
+            # Check 8R touch
+            if t2_remaining > 0 and not t2_touched_8r:
+                t2_8r_hit = bar.high >= t2_target_8r if is_long else bar.low <= t2_target_8r
+                if t2_8r_hit:
+                    t2_touched_8r = True
+                    t2_runner_stop = t2_plus_4r
+
+            # T2 exit after 8R
+            if t2_touched_8r and not t2_exited_t2 and t2_remaining > cts_runner:
+                trail_hit = bar.low <= t2_runner_stop if is_long else bar.high >= t2_runner_stop
+                if trail_hit:
+                    exit_cts = min(cts_t2, t2_remaining - cts_runner)
+                    pnl = (t2_runner_stop - t2_entry) * exit_cts if is_long else (t2_entry - t2_runner_stop) * exit_cts
+                    t2_exits.append({'type': 'T2_STRUCT', 'pnl': pnl, 'price': t2_runner_stop, 'time': bar.timestamp, 'cts': exit_cts})
+                    t2_remaining -= exit_cts
+                    t2_exited_t2 = True
+
+            # Runner exit
+            if t2_remaining > 0 and t2_remaining <= cts_runner and t2_exited_t1:
+                opp_fvgs = [f for f in all_fvgs if f.direction == opposing_fvg_dir and f.created_bar_index > t2_entry_info['entry_bar_idx'] and f.created_bar_index <= i]
+                if opp_fvgs:
+                    pnl = (bar.close - t2_entry) * t2_remaining if is_long else (t2_entry - bar.close) * t2_remaining
+                    t2_exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': t2_remaining})
+                    t2_remaining = 0
+
+    # End of day exits
+    last_bar = session_bars[-1]
+    if t1_remaining > 0:
+        pnl = (last_bar.close - t1_entry) * t1_remaining if is_long else (t1_entry - last_bar.close) * t1_remaining
+        t1_exits.append({'type': 'EOD', 'pnl': pnl, 'price': last_bar.close, 'time': last_bar.timestamp, 'cts': t1_remaining})
+    if t2_remaining > 0:
+        pnl = (last_bar.close - t2_entry) * t2_remaining if is_long else (t2_entry - last_bar.close) * t2_remaining
+        t2_exits.append({'type': 'EOD', 'pnl': pnl, 'price': last_bar.close, 'time': last_bar.timestamp, 'cts': t2_remaining})
+
+    # Build Trade 1 result
+    t1_total_pnl = sum(e['pnl'] for e in t1_exits)
+    t1_total_dollars = (t1_total_pnl / tick_size) * tick_value
+    results.append({
+        'direction': direction,
+        'entry_time': t1['entry_time'],
+        'entry_price': t1_entry,
+        'edge_price': t1['fvg_high'] if is_long else t1['fvg_low'],
+        'midpoint_price': t1['midpoint'],
+        'contracts_filled': contracts,
+        'fill_type': 'FULL',
+        'stop_price': t1_original_stop,
+        'stop_locked_to': t1_lockin_price if t1_stop_locked else None,
+        'runner_stop': t1_runner_stop,
+        'fvg_low': t1['fvg_low'],
+        'fvg_high': t1['fvg_high'],
+        'target_4r': t1_target_4r,
+        'target_8r': t1_target_8r,
+        'plus_4r': t1_plus_4r,
+        'risk': t1_risk,
+        'total_pnl': t1_total_pnl,
+        'total_dollars': t1_total_dollars,
+        'was_stopped': any(e['type'] in ['STOP', 'STOP_+1R'] for e in t1_exits),
+        'exits': t1_exits,
+    })
+
+    # Build Trade 2 result if taken
+    if took_2nd_entry and t2_exits:
+        t2_total_pnl = sum(e['pnl'] for e in t2_exits)
+        t2_total_dollars = (t2_total_pnl / tick_size) * tick_value
+        results.append({
+            'direction': direction,
+            'entry_time': t2_entry_info['entry_time'],
+            'entry_price': t2_entry,
+            'edge_price': t2_entry_info['fvg_high'] if is_long else t2_entry_info['fvg_low'],
+            'midpoint_price': t2_entry_info['midpoint'],
+            'contracts_filled': contracts,
+            'fill_type': 'FULL',
+            'stop_price': t2_entry_info['stop'],
+            'runner_stop': t2_runner_stop,
+            'fvg_low': t2_entry_info['fvg_low'],
+            'fvg_high': t2_entry_info['fvg_high'],
+            'target_4r': t2_target_4r,
+            'target_8r': t2_target_8r,
+            'plus_4r': t2_plus_4r,
+            'risk': t2_risk,
+            'total_pnl': t2_total_pnl,
+            'total_dollars': t2_total_dollars,
+            'was_stopped': any(e['type'] == 'STOP' for e in t2_exits),
+            'exits': t2_exits,
+            'is_reentry': True,
+            'profit_protected': True,
+        })
+
+    return results
+
+
 def run_today(symbol='ES', contracts=3):
     """Run backtest for today."""
 
@@ -581,17 +1019,19 @@ def run_today(symbol='ES', contracts=3):
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V4-Filtered')
+    print('Strategy: ICT FVG V7-MultiEntry')
     print('  - Stop buffer: +2 ticks')
-    print('  - HTF bias: EMA 9/21')
+    print('  - HTF bias: EMA 20/50')
     print('  - ADX filter: > 17 (trend strength)')
+    print('  - DI Direction: +DI/-DI alignment')
     print('  - Max losses: 2 per day')
     print('  - Min FVG: 5 ticks')
-    print('  - Displacement: 1.2x')
+    print('  - Displacement: 1.0x (lower threshold)')
     print('  - Killzones: DISABLED')
-    print('  - Entry: 1 ct @ edge, 2 cts @ midpoint')
+    print('  - Entry: AT FVG CREATION (aggressive)')
+    print('  - 2nd Entry: When 1st trade at +2R (profit-protected)')
+    print('  - Stop Lock: Move 1st trade to +1R on 2nd entry')
     print('  - Targets: 4R, 8R, Runner')
-    print('  - Hybrid trailing: +4R after 8R hits')
     print('='*70)
 
     all_results = []
@@ -599,35 +1039,22 @@ def run_today(symbol='ES', contracts=3):
     max_losses = 2
 
     for direction in ['LONG', 'SHORT']:
-        # Check if we've hit max losses for the day
         if loss_count >= max_losses:
             print(f"\n** MAX LOSSES ({max_losses}) REACHED - Stopping {direction} trades **")
             continue
 
-        result = run_trade(session_bars, direction, 1, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
-        if result:
+        # Use new multi-entry function
+        results = run_multi_trade(session_bars, direction, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
+
+        for result in results:
             result['date'] = today
             all_results.append(result)
-
-            # Track losses
             if result['total_dollars'] < 0:
                 loss_count += 1
 
-            # Try re-entry if stopped out (and haven't hit max losses)
-            if result['was_stopped'] and loss_count < max_losses:
-                result2 = run_trade(session_bars, direction, 2, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
-                if result2:
-                    result2['date'] = today
-                    result2['is_reentry'] = True
-                    all_results.append(result2)
-
-                    # Track losses for re-entry
-                    if result2['total_dollars'] < 0:
-                        loss_count += 1
-
     total_pnl = 0
     for r in all_results:
-        tag = ' [RE-ENTRY]' if r.get('is_reentry') else ''
+        tag = ' [+2R RE-ENTRY]' if r.get('profit_protected') else ' [RE-ENTRY]' if r.get('is_reentry') else ''
         result_str = 'WIN' if r['total_pnl'] > 0.01 else 'LOSS' if r['total_pnl'] < -0.01 else 'BE'
         total_pnl += r['total_dollars']
 
@@ -636,7 +1063,10 @@ def run_today(symbol='ES', contracts=3):
         print(f"  Entry: {r['entry_price']:.2f} @ {r['entry_time'].strftime('%H:%M')}")
         print(f"    Edge: {r['edge_price']:.2f} | Midpoint: {r['midpoint_price']:.2f}")
         print(f"  FVG: {r['fvg_low']:.2f} - {r['fvg_high']:.2f}")
-        print(f"  Stop: {r['stop_price']:.2f} (buffered) | Runner +4R: {r['plus_4r']:.2f}")
+        stop_info = f"{r['stop_price']:.2f}"
+        if r.get('stop_locked_to'):
+            stop_info += f" -> {r['stop_locked_to']:.2f} (+1R lock)"
+        print(f"  Stop: {stop_info}")
         print(f"  Risk: {r['risk']:.2f} pts")
         print(f"  Targets: 4R={r['target_4r']:.2f}, 8R={r['target_8r']:.2f}")
         print(f"  Exits:")
