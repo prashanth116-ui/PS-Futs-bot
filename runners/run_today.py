@@ -612,14 +612,19 @@ def run_multi_trade(
     min_fvg_ticks=5,
     displacement_threshold=1.0,
     min_adx=17,
-    reentry_r_threshold=2,  # Take 2nd entry when 1st is at +2R
+    reentry_r_threshold=2,  # Take 2nd entry when 1st is at +2R (only if independent_entries=False)
     lockin_r=1,  # Move 1st trade stop to +1R when 2nd entry triggers
+    independent_entries=True,  # V8: Take 2nd entry independently (don't require 1st at +2R)
 ):
-    """Run multi-entry trade with profit-protected re-entry.
+    """Run multi-entry trade with independent or profit-protected re-entry.
 
-    When 1st trade reaches +2R profit:
-    - Check for new valid FVG entry
-    - If found, take 2nd entry and move 1st trade stop to +1R
+    If independent_entries=True (V8-Independent):
+    - Take 2nd entry when new valid FVG forms (regardless of 1st trade status)
+    - If 1st trade still active and profitable, lock stop to +1R
+
+    If independent_entries=False (V7-MultiEntry):
+    - Only take 2nd entry when 1st trade is at +2R AND still active
+    - Move 1st trade stop to +1R when 2nd entry triggers
     """
     is_long = direction == 'LONG'
     fvg_dir = 'BULLISH' if is_long else 'BEARISH'
@@ -731,8 +736,14 @@ def run_multi_trade(
             current_price = bar.high if is_long else bar.low
             current_pnl_r = (current_price - t1_entry) / t1_risk if is_long else (t1_entry - current_price) / t1_risk
 
-            # Check for 2nd entry opportunity (1st trade at +2R, not already taken)
-            if not took_2nd_entry and current_pnl_r >= reentry_r_threshold:
+            # Check for 2nd entry opportunity
+            # V8-Independent: Take when new FVG forms (regardless of 1st trade P/L)
+            # V7-MultiEntry: Only when 1st trade at +2R
+            can_take_2nd = not took_2nd_entry
+            if not independent_entries:
+                can_take_2nd = can_take_2nd and current_pnl_r >= reentry_r_threshold
+
+            if can_take_2nd:
                 # Look for a new valid FVG that formed after trade 1
                 for entry in valid_entries[1:]:
                     if entry['entry_bar_idx'] <= i and entry['entry_bar_idx'] > t1['entry_bar_idx']:
@@ -844,6 +855,37 @@ def run_multi_trade(
                     pnl = (bar.close - t1_entry) * t1_remaining if is_long else (t1_entry - bar.close) * t1_remaining
                     t1_exits.append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': t1_remaining})
                     t1_remaining = 0
+
+        # === CHECK FOR 2ND ENTRY (V8-Independent: even after 1st trade exits) ===
+        if independent_entries and not took_2nd_entry and not t2_active:
+            # Look for a new valid FVG that formed and we've reached that bar
+            for entry in valid_entries[1:]:
+                if entry['entry_bar_idx'] == i:  # FVG just formed on this bar
+                    # Take 2nd entry!
+                    t2_entry_info = entry
+                    t2_entry = entry['midpoint']
+                    t2_stop = entry['stop']
+                    t2_risk = abs(t2_entry - t2_stop)
+                    t2_remaining = contracts
+                    t2_active = True
+                    t2_target_4r = t2_entry + (target1_r * t2_risk) if is_long else t2_entry - (target1_r * t2_risk)
+                    t2_target_8r = t2_entry + (target2_r * t2_risk) if is_long else t2_entry - (target2_r * t2_risk)
+                    t2_plus_4r = t2_target_4r
+                    t2_runner_stop = t2_stop
+                    t2_trail_stop = t2_stop
+                    t2_last_swing = t2_entry
+
+                    # If 1st trade still active and profitable, lock in +1R
+                    if t1_active and t1_remaining > 0:
+                        current_pnl = (bar.close - t1_entry) if is_long else (t1_entry - bar.close)
+                        if current_pnl >= lockin_r * t1_risk:
+                            t1_stop = t1_lockin_price
+                            t1_trail_stop = max(t1_trail_stop, t1_lockin_price) if is_long else min(t1_trail_stop, t1_lockin_price)
+                            t1_runner_stop = max(t1_runner_stop, t1_lockin_price) if is_long else min(t1_runner_stop, t1_lockin_price)
+                            t1_stop_locked = True
+
+                    took_2nd_entry = True
+                    break
 
         # === TRADE 2 MANAGEMENT ===
         if t2_active and t2_remaining > 0:
@@ -992,11 +1034,399 @@ def run_multi_trade(
     return results
 
 
-def run_today(symbol='ES', contracts=3):
-    """Run backtest for today."""
+def run_session_with_position_limit(
+    session_bars,
+    tick_size=0.25,
+    tick_value=12.50,
+    contracts=3,
+    max_open_trades=2,
+    max_losses_per_day=2,
+    displacement_threshold=1.0,
+    min_adx=17,
+    min_risk_pts=0,  # Minimum risk in points (0 = disabled)
+    use_opposing_fvg_exit=False,  # Exit runner on opposing FVG
+):
+    """Run session with combined position limit across LONG and SHORT.
+
+    Tiered Structure Trail exit strategy:
+    - At 4R touch: Activate fast structure trail for 1st contract (2-tick buffer)
+    - At 8R touch: Activate standard structure trail for 2nd contract (4-tick buffer)
+    - Runner (3rd contract): +4R trailing stop OR opposing FVG exit
+
+    Args:
+        max_open_trades: Maximum concurrent open positions (LONG + SHORT combined)
+        max_losses_per_day: Stop trading after this many losses
+        min_risk_pts: Minimum risk in points to take a trade (filters small FVGs)
+        use_opposing_fvg_exit: If True, runner exits on opposing FVG formation
+    """
+
+    # Find all valid FVG entries for both directions
+    body_sizes = [abs(b.close - b.open) for b in session_bars[:50]]
+    avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
+
+    fvg_config = {
+        'min_fvg_ticks': 5,
+        'tick_size': tick_size,
+        'max_fvg_age_bars': 100,
+        'invalidate_on_close_through': True
+    }
+    all_fvgs = detect_fvgs(session_bars, fvg_config)
+
+    # Find valid entries for each direction
+    valid_entries = {'LONG': [], 'SHORT': []}
+
+    for direction in ['LONG', 'SHORT']:
+        is_long = direction == 'LONG'
+        fvg_dir = 'BULLISH' if is_long else 'BEARISH'
+
+        for fvg in all_fvgs:
+            if fvg.direction != fvg_dir:
+                continue
+
+            creating_bar = session_bars[fvg.created_bar_index]
+            body = abs(creating_bar.close - creating_bar.open)
+            if body <= avg_body_size * displacement_threshold:
+                continue
+
+            bars_to_entry = session_bars[:fvg.created_bar_index + 1]
+            ema_fast = calculate_ema(bars_to_entry, 20)
+            ema_slow = calculate_ema(bars_to_entry, 50)
+            adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
+
+            ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
+            adx_ok = adx is None or adx >= min_adx
+            di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+
+            if ema_ok and adx_ok and di_ok:
+                stop_buffer_ticks = 2
+                entry_price = fvg.midpoint
+                stop_price = fvg.low - (stop_buffer_ticks * tick_size) if is_long else fvg.high + (stop_buffer_ticks * tick_size)
+                risk = abs(entry_price - stop_price)
+
+                # Skip if risk is below minimum threshold
+                if min_risk_pts > 0 and risk < min_risk_pts:
+                    continue
+
+                valid_entries[direction].append({
+                    'fvg': fvg,
+                    'direction': direction,
+                    'entry_bar_idx': fvg.created_bar_index,
+                    'entry_time': creating_bar.timestamp,
+                    'midpoint': entry_price,
+                    'stop': stop_price,
+                    'fvg_low': fvg.low,
+                    'fvg_high': fvg.high,
+                })
+
+    # Combine and sort all entries by bar index
+    all_valid_entries = valid_entries['LONG'] + valid_entries['SHORT']
+    all_valid_entries.sort(key=lambda x: x['entry_bar_idx'])
+
+    # Track active trades and results
+    active_trades = []  # List of active trade states
+    completed_results = []
+    entries_taken = {'LONG': 0, 'SHORT': 0}
+    loss_count = 0
+
+    # Contract allocation for tiered exits
+    cts_t1 = 1  # 1st contract: fast structure trail after 4R
+    cts_t2 = 1  # 2nd contract: standard structure trail after 8R
+    cts_runner = contracts - cts_t1 - cts_t2  # Runner: +4R trail after 8R
+
+    # Process bar by bar
+    for i in range(len(session_bars)):
+        bar = session_bars[i]
+
+        # Check for stop/exit on active trades
+        trades_to_remove = []
+        for trade in active_trades:
+            is_long = trade['direction'] == 'LONG'
+            remaining = trade['remaining']
+
+            if remaining <= 0:
+                trades_to_remove.append(trade)
+                continue
+
+            # Update T1 fast structure trail (2-tick buffer) after 4R touched
+            if trade['touched_4r'] and not trade['t1_exited']:
+                check_idx = i - 2
+                if check_idx > trade['entry_bar_idx']:
+                    if is_long and is_swing_low(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].low
+                        if swing > trade['t1_last_swing']:
+                            new_trail = swing - (2 * tick_size)  # 2-tick buffer (fast)
+                            if new_trail > trade['t1_trail_stop']:
+                                trade['t1_trail_stop'] = new_trail
+                                trade['t1_last_swing'] = swing
+                    elif not is_long and is_swing_high(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].high
+                        if swing < trade['t1_last_swing']:
+                            new_trail = swing + (2 * tick_size)
+                            if new_trail < trade['t1_trail_stop']:
+                                trade['t1_trail_stop'] = new_trail
+                                trade['t1_last_swing'] = swing
+
+            # Update T2 standard structure trail (4-tick buffer) after 8R touched
+            if trade['touched_8r'] and not trade['t2_exited']:
+                check_idx = i - 2
+                if check_idx > trade['entry_bar_idx']:
+                    if is_long and is_swing_low(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].low
+                        if swing > trade['t2_last_swing']:
+                            new_trail = swing - (4 * tick_size)  # 4-tick buffer (standard)
+                            if new_trail > trade['t2_trail_stop']:
+                                trade['t2_trail_stop'] = new_trail
+                                trade['t2_last_swing'] = swing
+                    elif not is_long and is_swing_high(session_bars, check_idx, lookback=2):
+                        swing = session_bars[check_idx].high
+                        if swing < trade['t2_last_swing']:
+                            new_trail = swing + (4 * tick_size)
+                            if new_trail < trade['t2_trail_stop']:
+                                trade['t2_trail_stop'] = new_trail
+                                trade['t2_last_swing'] = swing
+
+            # Check 4R touch (activates T1 fast structure trail)
+            if not trade['touched_4r']:
+                t4r_hit = bar.high >= trade['target_4r'] if is_long else bar.low <= trade['target_4r']
+                if t4r_hit:
+                    trade['touched_4r'] = True
+                    trade['t1_trail_stop'] = trade['entry_price']  # Start at BE
+                    trade['t1_last_swing'] = trade['entry_price']
+
+            # Check 8R touch (activates T2 structure trail and runner +4R stop)
+            if trade['touched_4r'] and not trade['touched_8r']:
+                t8r_hit = bar.high >= trade['target_8r'] if is_long else bar.low <= trade['target_8r']
+                if t8r_hit:
+                    trade['touched_8r'] = True
+                    trade['t2_trail_stop'] = trade['plus_4r']  # Start at +4R
+                    trade['t2_last_swing'] = bar.high if is_long else bar.low
+                    trade['runner_stop'] = trade['plus_4r']
+
+            # Determine current stop based on trade state
+            if not trade['touched_4r']:
+                current_stop = trade['stop_price']
+            elif not trade['touched_8r']:
+                current_stop = trade['t1_trail_stop']
+            else:
+                # After 8R, use the tightest applicable stop
+                current_stop = trade['t1_trail_stop'] if not trade['t1_exited'] else trade['t2_trail_stop']
+
+            # Check original stop (before 4R touched)
+            if not trade['touched_4r'] and remaining > 0:
+                stop_hit = bar.low <= trade['stop_price'] if is_long else bar.high >= trade['stop_price']
+                if stop_hit:
+                    pnl = (trade['stop_price'] - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - trade['stop_price']) * remaining
+                    trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'cts': remaining})
+                    trade['remaining'] = 0
+                    loss_count += 1
+                    remaining = 0
+
+            # After 4R but BEFORE 8R - all contracts protected by T1 trail
+            if trade['touched_4r'] and not trade['touched_8r'] and remaining > 0:
+                t1_stop_hit = bar.low <= trade['t1_trail_stop'] if is_long else bar.high >= trade['t1_trail_stop']
+                if t1_stop_hit:
+                    # Exit all remaining contracts at T1 trail (they all share this protection before 8R)
+                    if not trade['t1_exited']:
+                        exit_cts = min(cts_t1, remaining)
+                        pnl = (trade['t1_trail_stop'] - trade['entry_price']) * exit_cts if is_long else (trade['entry_price'] - trade['t1_trail_stop']) * exit_cts
+                        trade['exits'].append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': trade['t1_trail_stop'], 'time': bar.timestamp, 'cts': exit_cts})
+                        trade['remaining'] -= exit_cts
+                        trade['t1_exited'] = True
+                        remaining = trade['remaining']
+
+                    # T2 and runner exit at same price (before 8R, they use T1 protection)
+                    if remaining > 0:
+                        pnl = (trade['t1_trail_stop'] - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - trade['t1_trail_stop']) * remaining
+                        trade['exits'].append({'type': 'TRAIL_STOP', 'pnl': pnl, 'price': trade['t1_trail_stop'], 'time': bar.timestamp, 'cts': remaining})
+                        trade['t2_exited'] = True
+                        trade['remaining'] = 0
+                        remaining = 0
+
+            # After 8R touched - each tier has its own trail
+            if trade['touched_8r'] and remaining > 0:
+                # Check T1 trail (fast, 2-tick buffer)
+                if not trade['t1_exited']:
+                    t1_stop_hit = bar.low <= trade['t1_trail_stop'] if is_long else bar.high >= trade['t1_trail_stop']
+                    if t1_stop_hit:
+                        exit_cts = min(cts_t1, remaining)
+                        pnl = (trade['t1_trail_stop'] - trade['entry_price']) * exit_cts if is_long else (trade['entry_price'] - trade['t1_trail_stop']) * exit_cts
+                        trade['exits'].append({'type': 'T1_STRUCT', 'pnl': pnl, 'price': trade['t1_trail_stop'], 'time': bar.timestamp, 'cts': exit_cts})
+                        trade['remaining'] -= exit_cts
+                        trade['t1_exited'] = True
+                        remaining = trade['remaining']
+
+                # Check T2 trail (standard, 4-tick buffer)
+                if not trade['t2_exited'] and remaining > cts_runner:
+                    t2_stop_hit = bar.low <= trade['t2_trail_stop'] if is_long else bar.high >= trade['t2_trail_stop']
+                    if t2_stop_hit:
+                        exit_cts = min(cts_t2, remaining - cts_runner)
+                        pnl = (trade['t2_trail_stop'] - trade['entry_price']) * exit_cts if is_long else (trade['entry_price'] - trade['t2_trail_stop']) * exit_cts
+                        trade['exits'].append({'type': 'T2_STRUCT', 'pnl': pnl, 'price': trade['t2_trail_stop'], 'time': bar.timestamp, 'cts': exit_cts})
+                        trade['remaining'] -= exit_cts
+                        trade['t2_exited'] = True
+                        remaining = trade['remaining']
+
+                # Check runner stop (+4R trail)
+                if trade['t1_exited'] and trade['t2_exited'] and remaining > 0:
+                    runner_stop_hit = bar.low <= trade['runner_stop'] if is_long else bar.high >= trade['runner_stop']
+                    if runner_stop_hit:
+                        pnl = (trade['runner_stop'] - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - trade['runner_stop']) * remaining
+                        trade['exits'].append({'type': 'RUNNER_STOP', 'pnl': pnl, 'price': trade['runner_stop'], 'time': bar.timestamp, 'cts': remaining})
+                        trade['remaining'] = 0
+                        remaining = 0
+
+                # Check opposing FVG exit for runner (if enabled)
+                if use_opposing_fvg_exit and trade['t1_exited'] and remaining > 0:
+                    opposing_dir = 'BEARISH' if is_long else 'BULLISH'
+                    # Check if opposing FVG formed on this bar
+                    for fvg in all_fvgs:
+                        if fvg.direction == opposing_dir and fvg.created_bar_index == i:
+                            # Opposing FVG just formed - exit runner at close
+                            pnl = (bar.close - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - bar.close) * remaining
+                            trade['exits'].append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
+                            trade['remaining'] = 0
+                            remaining = 0
+                            break
+
+            # Mark trade for removal if fully exited
+            if trade['remaining'] <= 0:
+                trades_to_remove.append(trade)
+
+        # Remove completed trades and add to completed_results
+        for trade in trades_to_remove:
+            if trade in active_trades:
+                active_trades.remove(trade)
+                completed_results.append(trade)
+
+        # Check if we can enter new trades (respect position limit and loss limit)
+        if loss_count >= max_losses_per_day:
+            continue
+
+        current_open = len(active_trades)
+
+        # Check for new entry opportunities
+        for entry in all_valid_entries:
+            if entry['entry_bar_idx'] != i:
+                continue
+
+            direction = entry['direction']
+
+            # Check position limit
+            if current_open >= max_open_trades:
+                continue
+
+            # Check if we've already taken 2 entries in this direction
+            if entries_taken[direction] >= 2:
+                continue
+
+            # Enter the trade
+            is_long = direction == 'LONG'
+            entry_price = entry['midpoint']
+            stop_price = entry['stop']
+            risk = abs(entry_price - stop_price)
+
+            target_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
+            target_8r = entry_price + (8 * risk) if is_long else entry_price - (8 * risk)
+            plus_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
+
+            new_trade = {
+                'direction': direction,
+                'entry_bar_idx': i,
+                'entry_time': entry['entry_time'],
+                'entry_price': entry_price,
+                'midpoint': entry['midpoint'],
+                'stop_price': stop_price,
+                'fvg_low': entry['fvg_low'],
+                'fvg_high': entry['fvg_high'],
+                'risk': risk,
+                'target_4r': target_4r,
+                'target_8r': target_8r,
+                'plus_4r': plus_4r,
+                'touched_4r': False,
+                'touched_8r': False,
+                # T1 fast structure trail (2-tick buffer, active after 4R)
+                't1_trail_stop': stop_price,
+                't1_last_swing': entry_price,
+                't1_exited': False,
+                # T2 standard structure trail (4-tick buffer, active after 8R)
+                't2_trail_stop': plus_4r,
+                't2_last_swing': entry_price,
+                't2_exited': False,
+                # Runner (+4R trailing stop after 8R)
+                'runner_stop': plus_4r,
+                'is_2nd_entry': entries_taken[direction] > 0,
+                'remaining': contracts,
+                'exits': [],
+            }
+
+            active_trades.append(new_trade)
+            entries_taken[direction] += 1
+            current_open += 1
+
+    # EOD exit for remaining active trades
+    last_bar = session_bars[-1]
+    for trade in active_trades:
+        if trade['remaining'] > 0:
+            is_long = trade['direction'] == 'LONG'
+            pnl = (last_bar.close - trade['entry_price']) * trade['remaining'] if is_long else (trade['entry_price'] - last_bar.close) * trade['remaining']
+            trade['exits'].append({'type': 'EOD', 'pnl': pnl, 'price': last_bar.close, 'time': last_bar.timestamp, 'cts': trade['remaining']})
+            trade['remaining'] = 0
+        completed_results.append(trade)
+
+    # Build final results from all completed trades
+    final_results = []
+
+    for trade in completed_results:
+        if not trade.get('exits'):
+            continue
+
+        is_long = trade['direction'] == 'LONG'
+        total_pnl = sum(e['pnl'] for e in trade['exits'])
+        total_dollars = (total_pnl / tick_size) * tick_value
+
+        final_results.append({
+            'direction': trade['direction'],
+            'entry_time': trade['entry_time'],
+            'entry_price': trade['entry_price'],
+            'edge_price': trade['fvg_high'] if is_long else trade['fvg_low'],
+            'midpoint_price': trade['midpoint'],
+            'contracts_filled': contracts,
+            'fill_type': 'FULL',
+            'stop_price': trade['stop_price'],
+            'fvg_low': trade['fvg_low'],
+            'fvg_high': trade['fvg_high'],
+            'target_4r': trade['target_4r'],
+            'target_8r': trade['target_8r'],
+            'plus_4r': trade.get('plus_4r', trade['target_4r']),
+            'risk': trade['risk'],
+            'total_pnl': total_pnl,
+            'total_dollars': total_dollars,
+            'was_stopped': any(e['type'] == 'STOP' for e in trade['exits']),
+            'exits': trade['exits'],
+            'is_reentry': trade.get('is_2nd_entry', False),
+        })
+
+    return final_results
+
+
+def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, use_opposing_fvg_exit=False):
+    """Run backtest for today with combined position limit.
+
+    V9 Strategy Features:
+    - Min risk filter: Skips small FVGs (ES: 2.0 pts, NQ: 8.0 pts)
+    - Opposing FVG exit: DISABLED (runner uses +4R trail only)
+
+    Args:
+        min_risk_pts: Minimum risk in points (default: ES=2.0, NQ=8.0)
+        use_opposing_fvg_exit: Exit runner on opposing FVG formation (default: False)
+    """
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
+
+    # Set default min_risk based on symbol
+    if min_risk_pts is None:
+        min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
 
     print(f'Fetching {symbol} 3m data for today...')
     all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)
@@ -1019,42 +1449,46 @@ def run_today(symbol='ES', contracts=3):
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V7-MultiEntry')
+    print('Strategy: ICT FVG V9 (Tiered Trail + Risk Filter)')
     print('  - Stop buffer: +2 ticks')
     print('  - HTF bias: EMA 20/50')
     print('  - ADX filter: > 17 (trend strength)')
     print('  - DI Direction: +DI/-DI alignment')
+    print(f'  - Max open trades: {max_open_trades} (combined LONG+SHORT)')
     print('  - Max losses: 2 per day')
     print('  - Min FVG: 5 ticks')
     print('  - Displacement: 1.0x (lower threshold)')
+    print(f'  - Min risk: {min_risk_pts} pts (filters small FVGs)')
+    print(f'  - Runner exit: +4R trail {"+ opposing FVG" if use_opposing_fvg_exit else "only"}')
     print('  - Killzones: DISABLED')
     print('  - Entry: AT FVG CREATION (aggressive)')
-    print('  - 2nd Entry: When 1st trade at +2R (profit-protected)')
-    print('  - Stop Lock: Move 1st trade to +1R on 2nd entry')
-    print('  - Targets: 4R, 8R, Runner')
+    print('  - 2nd Entry: INDEPENDENT (if position limit allows)')
+    print('  - T1 (1 ct): Fast structure trail after 4R (2-tick buffer)')
+    print('  - T2 (1 ct): Standard structure trail after 8R (4-tick buffer)')
     print('='*70)
 
-    all_results = []
-    loss_count = 0
-    max_losses = 2
+    # Use new position-limited function
+    all_results = run_session_with_position_limit(
+        session_bars,
+        tick_size=tick_size,
+        tick_value=tick_value,
+        contracts=contracts,
+        max_open_trades=max_open_trades,
+        min_risk_pts=min_risk_pts,
+        use_opposing_fvg_exit=use_opposing_fvg_exit,
+    )
 
-    for direction in ['LONG', 'SHORT']:
-        if loss_count >= max_losses:
-            print(f"\n** MAX LOSSES ({max_losses}) REACHED - Stopping {direction} trades **")
-            continue
+    for result in all_results:
+        result['date'] = today
 
-        # Use new multi-entry function
-        results = run_multi_trade(session_bars, direction, tick_size=tick_size, tick_value=tick_value, contracts=contracts)
-
-        for result in results:
-            result['date'] = today
-            all_results.append(result)
-            if result['total_dollars'] < 0:
-                loss_count += 1
+    loss_count = sum(1 for r in all_results if r['total_dollars'] < 0)
 
     total_pnl = 0
     for r in all_results:
-        tag = ' [+2R RE-ENTRY]' if r.get('profit_protected') else ' [RE-ENTRY]' if r.get('is_reentry') else ''
+        if r.get('is_reentry'):
+            tag = ' [2nd FVG]'
+        else:
+            tag = ''
         result_str = 'WIN' if r['total_pnl'] > 0.01 else 'LOSS' if r['total_pnl'] < -0.01 else 'BE'
         total_pnl += r['total_dollars']
 
@@ -1089,4 +1523,8 @@ def run_today(symbol='ES', contracts=3):
 if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    run_today(symbol=symbol, contracts=contracts)
+    # V9 defaults: min_risk enabled, opposing FVG exit disabled
+    # Override with CLI args if provided
+    min_risk = float(sys.argv[3]) if len(sys.argv) > 3 else None  # None = use symbol default
+    opp_fvg = bool(int(sys.argv[4])) if len(sys.argv) > 4 else False  # Default disabled
+    run_today(symbol=symbol, contracts=contracts, min_risk_pts=min_risk, use_opposing_fvg_exit=opp_fvg)

@@ -1,5 +1,12 @@
 """
-Plot today's trade.
+Plot today's trades with V9 strategy (Tiered Trail + Risk Filter).
+
+V9 Features:
+- Min risk filter: ES >= 2 pts, NQ >= 8 pts
+- Opposing FVG exit for runner
+- T1 (1 ct): Fast structure trail after 4R (2-tick buffer)
+- T2 (1 ct): Standard structure trail after 8R (4-tick buffer)
+- Runner (1 ct): +4R trail OR opposing FVG exit
 """
 import sys
 sys.path.insert(0, '.')
@@ -7,7 +14,8 @@ sys.path.insert(0, '.')
 import matplotlib.pyplot as plt
 from datetime import date, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
+from runners.run_today import run_session_with_position_limit
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 def calculate_ema(closes, period):
@@ -25,7 +33,7 @@ def calculate_ema(closes, period):
 
 
 def plot_today(symbol='ES', direction='LONG', contracts=3):
-    """Plot today's trade."""
+    """Plot today's trades with V8-Independent strategy."""
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
@@ -37,7 +45,6 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
         print('No data available')
         return
 
-    # Get today's date from most recent bar
     today = all_bars[-1].timestamp.date()
     today_bars = [b for b in all_bars if b.timestamp.date() == today]
 
@@ -52,144 +59,39 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
         print('Not enough bars')
         return
 
-    # Trade parameters
-    target1_r = 4
-    target2_r = 8
+    # Run V9 strategy (with min risk filter, opposing FVG exit disabled)
+    min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
+    all_results = run_session_with_position_limit(
+        session_bars,
+        tick_size=tick_size, tick_value=tick_value, contracts=contracts,
+        min_risk_pts=min_risk_pts, use_opposing_fvg_exit=False,
+    )
 
-    is_long = direction == 'LONG'
-    fvg_dir = 'BULLISH' if is_long else 'BEARISH'
+    # Filter for specified direction
+    results = [r for r in all_results if r['direction'] == direction]
 
-    # Detect FVGs
+    if not results:
+        print(f'No {direction} trades found')
+        return
+
+    # Calculate EMAs for display
+    closes = [b.close for b in session_bars]
+    ema_20 = calculate_ema(closes, 20)
+    ema_50 = calculate_ema(closes, 50)
+
+    # Detect FVGs for highlighting
     fvg_config = {
-        'min_fvg_ticks': 4,
+        'min_fvg_ticks': 5,
         'tick_size': tick_size,
         'max_fvg_age_bars': 100,
         'invalidate_on_close_through': True
     }
     all_fvgs = detect_fvgs(session_bars, fvg_config)
-    update_all_fvg_mitigations(all_fvgs, session_bars, fvg_config)
-
-    # Get FVGs for direction
-    dir_fvgs = [f for f in all_fvgs if f.direction == fvg_dir and not f.mitigated]
-    dir_fvgs.sort(key=lambda f: f.created_bar_index)
-
-    if not dir_fvgs:
-        print(f'No {fvg_dir} FVGs found')
-        return
-
-    entry_fvg = dir_fvgs[0]
-
-    # Calculate levels
-    entry_price = entry_fvg.midpoint
-    fvg_stop_level = entry_fvg.low if is_long else entry_fvg.high
-
-    if is_long:
-        stop_price = entry_fvg.low
-        risk = entry_price - stop_price
-    else:
-        stop_price = entry_fvg.high
-        risk = stop_price - entry_price
-
-    target_4r = entry_price + (target1_r * risk) if is_long else entry_price - (target1_r * risk)
-    target_8r = entry_price + (target2_r * risk) if is_long else entry_price - (target2_r * risk)
-
-    # Calculate EMAs
-    closes = [b.close for b in session_bars]
-    ema_50 = calculate_ema(closes, 50)
-
-    # Find entry bar
-    entry_bar_idx = None
-    for i in range(entry_fvg.created_bar_index + 1, len(session_bars)):
-        bar = session_bars[i]
-        if is_long:
-            if bar.low <= entry_price:
-                entry_bar_idx = i
-                break
-        else:
-            if bar.high >= entry_price:
-                entry_bar_idx = i
-                break
-
-    if not entry_bar_idx:
-        print('No entry triggered')
-        return
-
-    # Find exit points
-    exit_4r_idx = None
-    exit_8r_idx = None
-    exit_ema_idx = None
-    exit_ema_price = None
-    stop_idx = None
-
-    exited_4r = False
-    exited_8r = False
-    was_stopped = False
-
-    for i in range(entry_bar_idx + 1, len(session_bars)):
-        bar = session_bars[i]
-        bar_ema50 = ema_50[i] if i < len(ema_50) and ema_50[i] else None
-
-        # Check stop (FVG mitigation - close based)
-        if is_long:
-            if bar.close < fvg_stop_level:
-                stop_idx = i
-                was_stopped = True
-                break
-        else:
-            if bar.close > fvg_stop_level:
-                stop_idx = i
-                was_stopped = True
-                break
-
-        # Check targets
-        if is_long:
-            if not exited_4r and bar.high >= target_4r:
-                exit_4r_idx = i
-                exited_4r = True
-            if not exited_8r and bar.high >= target_8r:
-                exit_8r_idx = i
-                exited_8r = True
-        else:
-            if not exited_4r and bar.low <= target_4r:
-                exit_4r_idx = i
-                exited_4r = True
-            if not exited_8r and bar.low <= target_8r:
-                exit_8r_idx = i
-                exited_8r = True
-
-        # Check EMA exit for runner
-        if exited_4r and exited_8r and bar_ema50:
-            if is_long:
-                if bar.close < bar_ema50:
-                    exit_ema_idx = i
-                    exit_ema_price = bar.close
-                    break
-            else:
-                if bar.close > bar_ema50:
-                    exit_ema_idx = i
-                    exit_ema_price = bar.close
-                    break
-
-    # Calculate P/L
-    total_dollars = 0
-    if was_stopped:
-        total_dollars = -risk * contracts / tick_size * tick_value
-        result_str = 'LOSS (STOPPED)'
-    else:
-        if exit_4r_idx:
-            total_dollars += (target1_r * risk / tick_size) * tick_value
-        if exit_8r_idx:
-            total_dollars += (target2_r * risk / tick_size) * tick_value
-        if exit_ema_idx and exit_ema_price:
-            if is_long:
-                runner_pnl = ((exit_ema_price - entry_price) / tick_size) * tick_value
-            else:
-                runner_pnl = ((entry_price - exit_ema_price) / tick_size) * tick_value
-            total_dollars += runner_pnl
-        result_str = 'WIN' if total_dollars > 0 else 'LOSS'
+    is_long = direction == 'LONG'
+    fvg_dir = 'BULLISH' if is_long else 'BEARISH'
 
     # Create figure
-    fig, ax = plt.subplots(figsize=(18, 10))
+    fig, ax = plt.subplots(figsize=(20, 12))
 
     # Plot candlesticks
     for i, bar in enumerate(session_bars):
@@ -201,71 +103,129 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
                              facecolor=color, edgecolor=color)
         ax.add_patch(rect)
 
-    # Plot EMA50
-    ema_x = [i for i, e in enumerate(ema_50) if e is not None]
-    ema_y = [e for e in ema_50 if e is not None]
-    ax.plot(ema_x, ema_y, color='#9C27B0', linewidth=2, label='EMA 50', alpha=0.8)
+    # Plot EMAs
+    ema_x_20 = [i for i, e in enumerate(ema_20) if e is not None]
+    ema_y_20 = [e for e in ema_20 if e is not None]
+    ax.plot(ema_x_20, ema_y_20, color='#2196F3', linewidth=1.5, label='EMA 20', alpha=0.7)
 
-    # Highlight entry FVG
-    fvg_start = entry_fvg.created_bar_index
-    fvg_color = '#4CAF50' if is_long else '#F44336'
-    fvg_rect = plt.Rectangle((fvg_start - 0.5, entry_fvg.low),
-                              len(session_bars) - fvg_start,
-                              entry_fvg.high - entry_fvg.low,
-                              facecolor=fvg_color, alpha=0.2, edgecolor=fvg_color, linewidth=2)
-    ax.add_patch(fvg_rect)
+    ema_x_50 = [i for i, e in enumerate(ema_50) if e is not None]
+    ema_y_50 = [e for e in ema_50 if e is not None]
+    ax.plot(ema_x_50, ema_y_50, color='#9C27B0', linewidth=2, label='EMA 50', alpha=0.8)
 
-    # Plot trade levels
-    line_start = max(0, entry_bar_idx - 10)
-    line_end = min(len(session_bars), (stop_idx or exit_ema_idx or exit_8r_idx or entry_bar_idx) + 20)
+    # Colors for multiple trades
+    trade_colors = ['#2196F3', '#FF9800', '#9C27B0', '#4CAF50']
 
-    # Entry line
-    ax.hlines(entry_price, line_start, line_end, colors='#2196F3', linestyles='-', linewidth=2, label=f'Entry: {entry_price:.2f}')
+    total_pnl = 0
+    all_indices = []
+    all_prices = []
 
-    # Stop line
-    ax.hlines(stop_price, line_start, line_end, colors='#F44336', linestyles='--', linewidth=2, label=f'Stop: {stop_price:.2f}')
+    # Plot each trade
+    for t_idx, result in enumerate(results):
+        color = trade_colors[t_idx % len(trade_colors)]
+        trade_label = f"Trade {t_idx + 1}" + (" [2nd FVG]" if result.get('is_reentry') else "")
 
-    # Target lines
-    ax.hlines(target_4r, line_start, line_end, colors='#4CAF50', linestyles='--', linewidth=2, label=f'4R: {target_4r:.2f}')
-    ax.hlines(target_8r, line_start, line_end, colors='#8BC34A', linestyles='--', linewidth=2, label=f'8R: {target_8r:.2f}')
+        entry_price = result['entry_price']
+        stop_price = result['stop_price']
+        target_4r = result['target_4r']
+        target_8r = result['target_8r']
+        risk = result['risk']
 
-    # Mark entry point
-    entry_marker = '^' if is_long else 'v'
-    ax.scatter([entry_bar_idx], [entry_price], color='#2196F3', s=200, zorder=5,
-               marker=entry_marker, edgecolors='black', linewidths=2)
-    ax.annotate(f'ENTRY\n{session_bars[entry_bar_idx].timestamp.strftime("%H:%M")}\n{entry_price:.2f}',
-                xy=(entry_bar_idx, entry_price),
-                xytext=(entry_bar_idx - 8, entry_price + (3 if is_long else -3)),
-                fontsize=10, fontweight='bold', color='#2196F3',
-                arrowprops=dict(arrowstyle='->', color='#2196F3', lw=2))
+        # Find entry bar index
+        entry_time = result['entry_time']
+        entry_bar_idx = None
+        for i, bar in enumerate(session_bars):
+            if bar.timestamp == entry_time:
+                entry_bar_idx = i
+                break
 
-    # Mark exits
-    if not was_stopped:
-        if exit_4r_idx:
-            ax.scatter([exit_4r_idx], [target_4r], color='#4CAF50', s=200, zorder=5,
-                       marker='v' if is_long else '^', edgecolors='black', linewidths=2)
-            ax.annotate(f'4R EXIT\n{session_bars[exit_4r_idx].timestamp.strftime("%H:%M")}',
-                        xy=(exit_4r_idx, target_4r), xytext=(exit_4r_idx + 3, target_4r),
-                        fontsize=9, fontweight='bold', color='#4CAF50')
-        if exit_8r_idx:
-            ax.scatter([exit_8r_idx], [target_8r], color='#8BC34A', s=200, zorder=5,
-                       marker='v' if is_long else '^', edgecolors='black', linewidths=2)
-            ax.annotate(f'8R EXIT\n{session_bars[exit_8r_idx].timestamp.strftime("%H:%M")}',
-                        xy=(exit_8r_idx, target_8r), xytext=(exit_8r_idx + 3, target_8r),
-                        fontsize=9, fontweight='bold', color='#8BC34A')
-        if exit_ema_idx and exit_ema_price:
-            ax.scatter([exit_ema_idx], [exit_ema_price], color='#9C27B0', s=200, zorder=5,
-                       marker='v' if is_long else '^', edgecolors='black', linewidths=2)
-            ax.annotate(f'EMA50 EXIT\n{session_bars[exit_ema_idx].timestamp.strftime("%H:%M")}\n{exit_ema_price:.2f}',
-                        xy=(exit_ema_idx, exit_ema_price), xytext=(exit_ema_idx + 3, exit_ema_price),
-                        fontsize=9, fontweight='bold', color='#9C27B0')
-    else:
-        if stop_idx:
-            ax.scatter([stop_idx], [stop_price], color='#F44336', s=200, zorder=5,
-                       marker='X', edgecolors='black', linewidths=2)
-            ax.annotate(f'STOPPED\n{session_bars[stop_idx].timestamp.strftime("%H:%M")}',
-                        xy=(stop_idx, stop_price), xytext=(stop_idx + 3, stop_price),
-                        fontsize=10, fontweight='bold', color='#F44336')
+        if entry_bar_idx is None:
+            # Find closest bar
+            for i, bar in enumerate(session_bars):
+                if bar.timestamp >= entry_time:
+                    entry_bar_idx = i
+                    break
+
+        if entry_bar_idx is None:
+            continue
+
+        # Find all exit bar indices and prices
+        exit_data = []
+        last_exit_bar_idx = entry_bar_idx
+        for exit in result['exits']:
+            exit_time = exit['time']
+            for i, bar in enumerate(session_bars):
+                if bar.timestamp == exit_time:
+                    exit_data.append({
+                        'bar_idx': i,
+                        'price': exit['price'],
+                        'type': exit['type'],
+                        'cts': exit['cts'],
+                        'pnl': exit['pnl'],
+                    })
+                    last_exit_bar_idx = max(last_exit_bar_idx, i)
+                    break
+
+        all_indices.extend([entry_bar_idx, last_exit_bar_idx])
+        all_prices.extend([entry_price, stop_price, target_4r])
+        for ed in exit_data:
+            all_prices.append(ed['price'])
+
+        # Highlight entry FVG
+        fvg_low = result['fvg_low']
+        fvg_high = result['fvg_high']
+        fvg_color = color
+        fvg_rect = plt.Rectangle((entry_bar_idx - 0.5, fvg_low),
+                                  last_exit_bar_idx - entry_bar_idx + 10,
+                                  fvg_high - fvg_low,
+                                  facecolor=fvg_color, alpha=0.15, edgecolor=fvg_color, linewidth=2)
+        ax.add_patch(fvg_rect)
+
+        # Plot trade levels
+        line_end = min(len(session_bars), last_exit_bar_idx + 20)
+
+        # Entry line
+        ax.hlines(entry_price, entry_bar_idx, line_end, colors=color, linestyles='-', linewidth=2, alpha=0.8)
+
+        # Stop line
+        ax.hlines(stop_price, entry_bar_idx, line_end, colors='#F44336', linestyles='--', linewidth=1.5, alpha=0.6)
+
+        # Target lines (4R and 8R)
+        ax.hlines(target_4r, entry_bar_idx, line_end, colors='#4CAF50', linestyles=':', linewidth=1.5, alpha=0.6)
+        ax.hlines(target_8r, entry_bar_idx, line_end, colors='#2196F3', linestyles=':', linewidth=1.5, alpha=0.6)
+
+        # Mark entry point
+        entry_marker = '^' if is_long else 'v'
+        ax.scatter([entry_bar_idx], [entry_price], color=color, s=200, zorder=5,
+                   marker=entry_marker, edgecolors='black', linewidths=2)
+
+        # Entry annotation
+        y_offset = 5 if is_long else -5
+        ax.annotate(f'{trade_label}\nENTRY @ {entry_time.strftime("%H:%M")}\n{entry_price:.2f}',
+                    xy=(entry_bar_idx, entry_price),
+                    xytext=(entry_bar_idx - 5, entry_price + y_offset),
+                    fontsize=9, fontweight='bold', color=color,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=color))
+
+        # Mark each exit point (scale-out)
+        exit_marker = 'v' if is_long else '^'
+        exit_colors = {'4R_EXIT': '#4CAF50', '8R_EXIT': '#2196F3', 'RUNNER_STOP': '#9C27B0',
+                       'TRAIL_STOP': '#FF9800', 'STOP': '#F44336', 'EOD': '#607D8B'}
+
+        for e_idx, ed in enumerate(exit_data):
+            ec = exit_colors.get(ed['type'], '#4CAF50')
+            dollars = (ed['pnl'] / tick_size) * tick_value
+            ax.scatter([ed['bar_idx']], [ed['price']], color=ec, s=150, zorder=5,
+                       marker=exit_marker, edgecolors='black', linewidths=1.5)
+
+            # Offset annotations to avoid overlap
+            x_offset = 2 + (e_idx * 3)
+            ax.annotate(f"{ed['type']}\n{ed['cts']}ct @ {ed['price']:.2f}\n${dollars:+,.0f}",
+                        xy=(ed['bar_idx'], ed['price']),
+                        xytext=(ed['bar_idx'] + x_offset, ed['price']),
+                        fontsize=8, fontweight='bold', color=ec,
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=ec))
+
+        total_pnl += result['total_dollars']
 
     # X-axis labels
     tick_indices = list(range(0, len(session_bars), 20))
@@ -274,44 +234,51 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
     ax.set_xticklabels(tick_labels, rotation=45)
 
     # Focus on trade area
-    focus_start = max(0, entry_bar_idx - 30)
-    focus_end = min(len(session_bars), (stop_idx or exit_ema_idx or exit_8r_idx or entry_bar_idx) + 50)
-    ax.set_xlim(focus_start, focus_end)
+    if all_indices:
+        focus_start = max(0, min(all_indices) - 20)
+        focus_end = min(len(session_bars), max(all_indices) + 40)
+        ax.set_xlim(focus_start, focus_end)
 
     # Y-axis range
-    if is_long:
-        y_min = stop_price - 3
-        y_max = max(target_8r, exit_ema_price or target_8r) + 3
-    else:
-        y_min = min(target_8r, exit_ema_price or target_8r) - 3
-        y_max = stop_price + 3
-    ax.set_ylim(y_min, y_max)
+    if all_prices:
+        y_min = min(all_prices) - 10
+        y_max = max(all_prices) + 10
+        ax.set_ylim(y_min, y_max)
 
     ax.set_xlabel('Time', fontsize=12)
     ax.set_ylabel('Price', fontsize=12)
-    ax.set_title(f'{symbol} 3-Minute | {today} | {direction} Trade | {contracts} Contracts | 4R/8R Targets\n'
-                 f'Result: {result_str} | P/L: ${total_dollars:+,.2f} | Risk: {risk:.2f} pts',
+
+    result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
+    ax.set_title(f'{symbol} 3-Minute | {today} | {direction} Trades | V9\n'
+                 f'Trades: {len(results)} | Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
     ax.legend(loc='upper left', fontsize=10)
     ax.grid(True, alpha=0.3)
 
     # Add summary box
-    summary = (f'TRADE SUMMARY\n'
-               f'Direction: {direction}\n'
-               f'Entry: {entry_price:.2f}\n'
-               f'Stop: {stop_price:.2f}\n'
-               f'Risk: {risk:.2f} pts\n'
-               f'─────────────\n'
-               f'4R Target: {target_4r:.2f}\n'
-               f'8R Target: {target_8r:.2f}\n'
-               f'─────────────\n'
-               f'Result: {result_str}\n'
-               f'P/L: ${total_dollars:+,.2f}')
+    summary_lines = ['V9 STRATEGY', f'Direction: {direction}', f'Trades: {len(results)}', '─' * 20]
 
-    box_color = '#FFCDD2' if total_dollars < 0 else '#C8E6C9'
-    edge_color = '#F44336' if total_dollars < 0 else '#4CAF50'
+    for t_idx, result in enumerate(results):
+        trade_label = f"Trade {t_idx + 1}" + (" [2nd]" if result.get('is_reentry') else "")
+        entry_time = result['entry_time'].strftime('%H:%M')
+        res_str = 'WIN' if result['total_dollars'] > 0 else 'LOSS' if result['total_dollars'] < 0 else 'BE'
+        summary_lines.append(f'{trade_label} @ {entry_time}')
+        summary_lines.append(f'  Entry: {result["entry_price"]:.2f}')
+        for exit in result['exits']:
+            dollars = (exit['pnl'] / tick_size) * tick_value
+            summary_lines.append(f'  {exit["type"]}: {exit["cts"]}ct ${dollars:+,.0f}')
+        summary_lines.append(f'  {res_str}: ${result["total_dollars"]:+,.2f}')
+        summary_lines.append('')
+
+    summary_lines.append('─' * 15)
+    summary_lines.append(f'TOTAL: ${total_pnl:+,.2f}')
+
+    summary = '\n'.join(summary_lines)
+
+    box_color = '#FFCDD2' if total_pnl < 0 else '#C8E6C9'
+    edge_color = '#F44336' if total_pnl < 0 else '#4CAF50'
     props = dict(boxstyle='round', facecolor=box_color, alpha=0.9, edgecolor=edge_color, linewidth=2)
-    ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=11,
+    ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', horizontalalignment='right',
             fontweight='bold', bbox=props, family='monospace')
 

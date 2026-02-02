@@ -1,26 +1,26 @@
 """
-Multi-day backtest with corrected FVG mitigation logic.
+Multi-day backtest with V9 strategy.
 
-Shows realistic results including all trades (wins AND losses).
+V9 Features:
+- Min risk filter (ES: 1.5 pts, NQ: 8.0 pts)
+- Tiered structure trail exits
+- Independent 2nd entry
+- Position limit (max 2 open)
 """
 import sys
 sys.path.insert(0, '.')
 
 from datetime import date, time as dt_time, timedelta
 from runners.tradingview_loader import fetch_futures_bars
-from runners.run_today import run_trade, run_multi_trade
+from runners.run_today import run_session_with_position_limit
 
 
-def backtest_multiday(symbol='ES', days=14, contracts=3, interval='3m', use_multi_entry=True):
-    """Run backtest over multiple days.
-
-    Args:
-        use_multi_entry: If True, use V7-MultiEntry (profit-protected 2nd entry).
-                        If False, use V6-Aggressive (single entry + re-entry on stop).
-    """
+def backtest_multiday(symbol='ES', days=30, contracts=3, interval='3m'):
+    """Run V9 backtest over multiple days."""
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
+    min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
 
     # Adjust bars per day based on interval
     bars_per_day = {'1m': 780, '3m': 260, '5m': 156, '15m': 52, '30m': 26, '1h': 13, '4h': 4}
@@ -36,10 +36,10 @@ def backtest_multiday(symbol='ES', days=14, contracts=3, interval='3m', use_mult
     # Group by date
     dates = sorted(set(b.timestamp.date() for b in all_bars))
 
-    strategy_name = "V7-MultiEntry" if use_multi_entry else "V6-Aggressive"
     print(f"=" * 80)
-    print(f"{symbol} MULTI-DAY BACKTEST ({strategy_name}) - {len(dates)} Days - {contracts} Contracts")
+    print(f"{symbol} MULTI-DAY BACKTEST (V9) - {len(dates)} Days - {contracts} Contracts")
     print(f"=" * 80)
+    print(f"  Min Risk: {min_risk_pts} pts | Tiered Trail | Independent Entries")
     print()
 
     total_wins = 0
@@ -49,8 +49,6 @@ def backtest_multiday(symbol='ES', days=14, contracts=3, interval='3m', use_mult
 
     print(f"{'Date':<12} | {'Dir':<5} | {'Type':<10} | {'Entry':<10} | {'Result':<6} | {'P/L':>12}")
     print("-" * 75)
-
-    max_losses_per_day = 2
 
     for day in dates[-days:]:
         day_bars = [b for b in all_bars if b.timestamp.date() == day]
@@ -62,85 +60,35 @@ def backtest_multiday(symbol='ES', days=14, contracts=3, interval='3m', use_mult
         if len(session_bars) < 50:
             continue
 
-        day_loss_count = 0  # Track losses per day
+        # Run V9 strategy for this day
+        results = run_session_with_position_limit(
+            session_bars,
+            tick_size=tick_size,
+            tick_value=tick_value,
+            contracts=contracts,
+            min_risk_pts=min_risk_pts,
+            use_opposing_fvg_exit=False,
+        )
 
-        for direction in ['LONG', 'SHORT']:
-            # Check max losses for the day
-            if day_loss_count >= max_losses_per_day:
-                continue
+        for result in results:
+            is_win = result['total_pnl'] > 0.01
+            is_loss = result['total_pnl'] < -0.01
 
-            if use_multi_entry:
-                # V7-MultiEntry: profit-protected 2nd entry
-                results = run_multi_trade(session_bars, direction, tick_size=tick_size,
-                                         tick_value=tick_value, contracts=contracts)
-
-                for result in results:
-                    is_win = result['total_pnl'] > 0.01
-                    is_loss = result['total_pnl'] < -0.01
-
-                    if is_win:
-                        total_wins += 1
-                        result_str = 'WIN'
-                    elif is_loss:
-                        total_losses += 1
-                        day_loss_count += 1
-                        result_str = 'LOSS'
-                    else:
-                        result_str = 'BE'
-
-                    total_pnl += result['total_dollars']
-                    all_trades.append(result)
-
-                    trade_type = '+2R Entry' if result.get('profit_protected') else '1st'
-                    print(f"{day} | {direction:<5} | {trade_type:<10} | {result['entry_price']:<10.2f} | {result_str:<6} | ${result['total_dollars']:>+10,.2f}")
-
+            if is_win:
+                total_wins += 1
+                result_str = 'WIN'
+            elif is_loss:
+                total_losses += 1
+                result_str = 'LOSS'
             else:
-                # V6-Aggressive: single entry + re-entry on stop
-                result = run_trade(session_bars, direction, 1, tick_size=tick_size,
-                                 tick_value=tick_value, contracts=contracts)
+                result_str = 'BE'
 
-                if result:
-                    is_win = result['total_pnl'] > 0.01
-                    is_loss = result['total_pnl'] < -0.01
+            total_pnl += result['total_dollars']
+            result['date'] = day
+            all_trades.append(result)
 
-                    if is_win:
-                        total_wins += 1
-                        result_str = 'WIN'
-                    elif is_loss:
-                        total_losses += 1
-                        day_loss_count += 1
-                        result_str = 'LOSS'
-                    else:
-                        result_str = 'BE'
-
-                    total_pnl += result['total_dollars']
-                    all_trades.append(result)
-
-                    print(f"{day} | {direction:<5} | {'1st':<10} | {result['entry_price']:<10.2f} | {result_str:<6} | ${result['total_dollars']:>+10,.2f}")
-
-                    # Try re-entry if stopped out (and haven't hit max losses)
-                    if result['was_stopped'] and day_loss_count < max_losses_per_day:
-                        result2 = run_trade(session_bars, direction, 2, tick_size=tick_size,
-                                           tick_value=tick_value, contracts=contracts)
-
-                        if result2:
-                            is_win2 = result2['total_pnl'] > 0.01
-                            is_loss2 = result2['total_pnl'] < -0.01
-
-                            if is_win2:
-                                total_wins += 1
-                                result_str2 = 'WIN'
-                            elif is_loss2:
-                                total_losses += 1
-                                day_loss_count += 1
-                                result_str2 = 'LOSS'
-                            else:
-                                result_str2 = 'BE'
-
-                            total_pnl += result2['total_dollars']
-                            all_trades.append(result2)
-
-                            print(f"{day} | {direction:<5} | {'Re-entry':<10} | {result2['entry_price']:<10.2f} | {result_str2:<6} | ${result2['total_dollars']:>+10,.2f}")
+            trade_type = '2nd' if result.get('is_reentry') else '1st'
+            print(f"{day} | {result['direction']:<5} | {trade_type:<10} | {result['entry_price']:<10.2f} | {result_str:<6} | ${result['total_dollars']:>+10,.2f}")
 
     print("-" * 70)
     print()
