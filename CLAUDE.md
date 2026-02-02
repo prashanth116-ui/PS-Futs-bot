@@ -15,10 +15,10 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 | Symbol | Exchange | Tick Value | Min Risk |
 |--------|----------|------------|----------|
 | ES | CME_MINI | $12.50 | 1.5 pts |
-| NQ | CME_MINI | $5.00 | 8.0 pts |
+| NQ | CME_MINI | $5.00 | 6.0 pts |
 
 ### V9 New Features
-- **Min Risk Filter**: Skips small FVGs with tight targets (ES: 1.5 pts, NQ: 8 pts)
+- **Min Risk Filter**: Skips small FVGs with tight targets (ES: 1.5 pts, NQ: 6.0 pts)
 - **Opposing FVG Exit**: Runner exits when reversal signal forms
 
 ### Strategy Features
@@ -43,7 +43,7 @@ Runner: +4R trail OR opposing FVG exit (whichever first)
 | Filter | Value | Purpose |
 |--------|-------|---------|
 | Min FVG | 5 ticks | Filter tiny gaps |
-| Min Risk | ES:1.5, NQ:8 pts | Skip small FVGs with tight targets |
+| Min Risk | ES:1.5, NQ:6.0 pts | Skip small FVGs with tight targets |
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets |
@@ -63,8 +63,8 @@ Runner: +4R trail OR opposing FVG exit (whichever first)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
 |--------|--------|------|--------|----------|-----|-----------|
 | ES | 33 | 23 | 10 | 69.7% | 9.46 | +$39,488 |
-| NQ | 20 | 14 | 6 | 70.0% | 11.26 | +$60,430 |
-| **Combined** | **53** | **37** | **16** | **69.8%** | **10.20** | **+$99,918** |
+| NQ | 25 | 21 | 4 | 84.0% | 18.75 | +$83,348 |
+| **Combined** | **58** | **44** | **14** | **75.9%** | **13.74** | **+$122,836** |
 
 ### Why Min Risk Filter Works
 - Small FVGs (< 2 pts ES, < 8 pts NQ) create tight 4R/8R targets

@@ -60,7 +60,7 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
         return
 
     # Run V9 strategy (with min risk filter, opposing FVG exit disabled)
-    min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
+    min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
     all_results = run_session_with_position_limit(
         session_bars,
         tick_size=tick_size, tick_value=tick_value, contracts=contracts,

@@ -2,7 +2,7 @@
 Multi-day backtest with V9 strategy.
 
 V9 Features:
-- Min risk filter (ES: 1.5 pts, NQ: 8.0 pts)
+- Min risk filter (ES: 1.5 pts, NQ: 6.0 pts)
 - Tiered structure trail exits
 - Independent 2nd entry
 - Position limit (max 2 open)
@@ -20,7 +20,7 @@ def backtest_multiday(symbol='ES', days=30, contracts=3, interval='3m'):
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
-    min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
+    min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
 
     # Adjust bars per day based on interval
     bars_per_day = {'1m': 780, '3m': 260, '5m': 156, '15m': 52, '30m': 26, '1h': 13, '4h': 4}

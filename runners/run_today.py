@@ -1426,7 +1426,7 @@ def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, us
 
     # Set default min_risk based on symbol
     if min_risk_pts is None:
-        min_risk_pts = 1.5 if symbol == 'ES' else 8.0 if symbol == 'NQ' else 1.5
+        min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
 
     print(f'Fetching {symbol} 3m data for today...')
     all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)
