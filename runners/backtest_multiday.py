@@ -20,7 +20,11 @@ def backtest_multiday(symbol='ES', days=30, contracts=3, interval='3m'):
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
-    min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
+
+    # Scale min_risk based on timeframe (higher TF = larger FVGs = higher min_risk)
+    tf_multiplier = {'1m': 0.5, '3m': 1.0, '5m': 1.5, '15m': 3.0, '30m': 5.0, '1h': 10.0, '4h': 25.0}
+    base_min_risk = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
+    min_risk_pts = base_min_risk * tf_multiplier.get(interval, 1.0)
 
     # Adjust bars per day based on interval
     bars_per_day = {'1m': 780, '3m': 260, '5m': 156, '15m': 52, '30m': 26, '1h': 13, '4h': 4}
@@ -57,7 +61,9 @@ def backtest_multiday(symbol='ES', days=30, contracts=3, interval='3m'):
         rth_end = dt_time(16, 0)
         session_bars = [b for b in day_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
-        if len(session_bars) < 50:
+        # Scale min bars based on timeframe (50 for 3m = ~2.5 hours)
+        min_bars = {'1m': 150, '3m': 50, '5m': 30, '15m': 10, '30m': 5, '1h': 3, '4h': 1}
+        if len(session_bars) < min_bars.get(interval, 10):
             continue
 
         # Run V9 strategy for this day

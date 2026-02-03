@@ -1409,16 +1409,17 @@ def run_session_with_position_limit(
     return final_results
 
 
-def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, use_opposing_fvg_exit=False):
+def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, use_opposing_fvg_exit=False, interval='3m'):
     """Run backtest for today with combined position limit.
 
     V9 Strategy Features:
-    - Min risk filter: Skips small FVGs (ES: 2.0 pts, NQ: 8.0 pts)
+    - Min risk filter: Skips small FVGs (ES: 1.5 pts, NQ: 6.0 pts)
     - Opposing FVG exit: DISABLED (runner uses +4R trail only)
 
     Args:
-        min_risk_pts: Minimum risk in points (default: ES=2.0, NQ=8.0)
+        min_risk_pts: Minimum risk in points (default: ES=1.5, NQ=6.0)
         use_opposing_fvg_exit: Exit runner on opposing FVG formation (default: False)
+        interval: Bar interval (default: 3m)
     """
 
     tick_size = 0.25
@@ -1428,8 +1429,8 @@ def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, us
     if min_risk_pts is None:
         min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
 
-    print(f'Fetching {symbol} 3m data for today...')
-    all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)
+    print(f'Fetching {symbol} {interval} data for today...')
+    all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=1000)
 
     if all_bars:
         today = all_bars[-1].timestamp.date()
@@ -1523,8 +1524,5 @@ def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, us
 if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    # V9 defaults: min_risk enabled, opposing FVG exit disabled
-    # Override with CLI args if provided
-    min_risk = float(sys.argv[3]) if len(sys.argv) > 3 else None  # None = use symbol default
-    opp_fvg = bool(int(sys.argv[4])) if len(sys.argv) > 4 else False  # Default disabled
-    run_today(symbol=symbol, contracts=contracts, min_risk_pts=min_risk, use_opposing_fvg_exit=opp_fvg)
+    interval = sys.argv[3] if len(sys.argv) > 3 else '3m'
+    run_today(symbol=symbol, contracts=contracts, interval=interval)
