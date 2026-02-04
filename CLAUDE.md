@@ -11,11 +11,13 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
 ## Current Strategy: V10.1 (Quad Entry + ADX Filter) - Feb 4, 2026
 
-### Supported Instruments (ES/NQ Only)
-| Symbol | Exchange | Tick Value | Min Risk |
-|--------|----------|------------|----------|
-| ES | CME_MINI | $12.50 | 1.5 pts |
-| NQ | CME_MINI | $5.00 | 6.0 pts |
+### Supported Instruments
+| Symbol | Type | Tick Value | Min Risk | Min FVG |
+|--------|------|------------|----------|---------|
+| ES | Futures | $12.50 | 1.5 pts | 5 ticks |
+| NQ | Futures | $5.00 | 6.0 pts | 5 ticks |
+| SPY | Equity | per share | $0.30 | $0.20 |
+| QQQ | Equity | per share | $0.50 | $0.40 |
 
 ### V10.1 Entry Types
 | Type | Name | Description |
@@ -84,8 +86,13 @@ T2/Runner exit on respective trail stops or EOD
 
 ### Backtesting
 ```bash
-# V10 backtest today
+# V10 futures backtest today
 python -m runners.run_v10_dual_entry ES 3
+python -m runners.run_v10_dual_entry NQ 3
+
+# V10 equity backtest today (SPY/QQQ)
+python -m runners.run_v10_equity SPY 500   # $500 risk per trade
+python -m runners.run_v10_equity QQQ 500
 
 # V10 multi-day backtest (30 days)
 python -m runners.backtest_v10_multiday ES 30
@@ -126,7 +133,8 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
-| `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy (current) |
+| `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ) |
+| `runners/run_v10_equity.py` | V10 Quad Entry strategy - equities (SPY/QQQ) |
 | `runners/backtest_v10_multiday.py` | V10 multi-day backtest |
 | `runners/plot_v10.py` | V10 trade visualization |
 | `runners/plot_v10_date.py` | V10 date-specific plotting |
@@ -139,10 +147,20 @@ python -m runners.run_replay
 ### Strategy Functions
 | Function | Description |
 |----------|-------------|
-| `run_session_v10()` | V10 Quad Entry with hybrid exit (current) |
+| `run_session_v10()` | V10 Quad Entry - futures (ES/NQ) |
+| `run_session_v10_equity()` | V10 Quad Entry - equities (SPY/QQQ) |
 | `run_session_with_position_limit()` | V8-Independent with position limit |
 | `run_multi_trade()` | V7-MultiEntry with profit-protected 2nd entry |
 | `run_trade()` | V6-Aggressive single entry (legacy) |
+
+### Equity vs Futures Differences
+| Aspect | Futures (ES/NQ) | Equities (SPY/QQQ) |
+|--------|-----------------|-------------------|
+| Position Size | Fixed contracts (3) | Risk-based shares |
+| P/L Calculation | ticks × tick_value | shares × price move |
+| Stop Buffer | 2 ticks | $0.02 |
+| Trail Buffer | 4-6 ticks | $0.04-0.06 |
+| Risk Input | N/A | $ per trade |
 
 ## Daily Workflow
 
