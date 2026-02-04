@@ -9,7 +9,7 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V9 (Tiered Trail + Risk Filter) - Feb 2, 2026
+## Current Strategy: V10 (Quad Entry + Hybrid Exit) - Feb 4, 2026
 
 ### Supported Instruments (ES/NQ Only)
 | Symbol | Exchange | Tick Value | Min Risk |
@@ -17,27 +17,33 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 | ES | CME_MINI | $12.50 | 1.5 pts |
 | NQ | CME_MINI | $5.00 | 6.0 pts |
 
-### V9 New Features
-- **Min Risk Filter**: Skips small FVGs with tight targets (ES: 1.5 pts, NQ: 6.0 pts)
-- **Opposing FVG Exit**: Runner exits when reversal signal forms
+### V10 Entry Types
+| Type | Name | Description |
+|------|------|-------------|
+| A | Creation | Enter immediately when FVG forms with displacement |
+| B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection |
+| B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection |
+| C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure |
 
-### Strategy Features
-- **Entry**: AT FVG CREATION (aggressive, no waiting for retracement)
-- **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
-- **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
-- **Stop**: FVG boundary + 2 tick buffer
-- **Tiered Structure Trail**: Each contract trails swing points independently
-
-### Tiered Structure Trail Exit Strategy
+### Hybrid Exit Structure
 ```
 Entry: 3 contracts at FVG midpoint
     ↓ Price hits 4R target
-T1 Trail activates: 1 ct uses fast trail (2-tick buffer)
-    ↓ Stop moves to breakeven, trail follows swing lows
+T1 (1 ct): FIXED profit at 4R - guaranteed, isolated from trail
     ↓ Price hits 8R target
-T2 Trail activates: 1 ct uses standard trail (4-tick buffer)
-Runner: +4R trail OR opposing FVG exit (whichever first)
+T2 (1 ct): Structure trail with 4-tick buffer
+Runner (1 ct): Structure trail with 6-tick buffer
+    ↓ Swing pullback
+T2/Runner exit on respective trail stops or EOD
 ```
+
+### Strategy Features
+- **Quad Entry Mode**: 4 distinct entry types (Creation, Overnight, Intraday, BOS)
+- **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
+- **Morning Filter**: Overnight retracement entries only 9:30-12:00 ET
+- **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
+- **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
+- **Stop**: FVG boundary + 2 tick buffer
 
 ### Filters
 | Filter | Value | Purpose |
@@ -48,61 +54,53 @@ Runner: +4R trail OR opposing FVG exit (whichever first)
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
-| Killzones | DISABLED | Trades any session time |
+| Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
 
-### Today's Results (Feb 2, 2026)
-| Symbol | Trades | Result | Total P/L |
-|--------|--------|--------|-----------|
-| ES | 2 LONG | 2 WIN | +$11,031 |
-| NQ | 2 | 1 WIN, 1 LOSS | +$15,593 |
-| **Combined** | 4 | 3 WIN, 1 LOSS | **+$26,624** |
-
-### 30-Day Backtest Results (20 trading days)
+### 12-Day Backtest Results
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
 |--------|--------|------|--------|----------|-----|-----------|
-| ES | 33 | 23 | 10 | 69.7% | 9.46 | +$39,488 |
-| NQ | 25 | 21 | 4 | 84.0% | 18.75 | +$83,348 |
-| **Combined** | **58** | **44** | **14** | **75.9%** | **13.74** | **+$122,836** |
+| ES | 37 | 21 | 16 | 56.8% | 5.47 | +$40,988 |
+| NQ | 38 | 20 | 18 | 52.6% | 11.04 | +$105,913 |
+| **Combined** | **75** | **41** | **34** | **54.7%** | **7.70** | **+$146,901** |
 
-### Why Min Risk Filter Works
-- Small FVGs (< 2 pts ES, < 8 pts NQ) create tight 4R/8R targets
-- Tight targets = quick exits on minor pullbacks
-- Filter forces strategy to wait for quality setups with room to run
+### Entry Type Breakdown
+| Entry Type | ES | NQ | Total |
+|------------|-----|-----|-------|
+| Creation | 15 (40.5%) | 15 (39.5%) | 30 (40%) |
+| Overnight | 15 (40.5%) | 13 (34.2%) | 28 (37%) |
+| Intraday | 4 (10.8%) | 4 (10.5%) | 8 (11%) |
+| BOS | 3 (8.1%) | 6 (15.8%) | 9 (12%) |
 
-### Example: NQ Trade (09:33)
-```
-Entry: 25575.38 (3 cts) - Large FVG with 28.62 pt risk
-  ↓ 4R hit (25689.88), T1 trail activates
-  ↓ 8R hit (25804.38), T2 and runner trails activate
-T1: 1 ct @ 25851.25 = +$5,518 (fast trail)
-T2: 1 ct @ 25850.75 = +$5,508 (standard trail)
-Runner: 1 ct @ OPP_FVG (25840.50) = +$5,303 (opposing FVG exit)
-Total: +$16,328
-```
+### Key Insights
+- Strategy is "home run" dependent - big trending days drive profits
+- Winning days avg 85 pts range vs 53 pts on losing days
+- Creation entries perform best (73% on winning days)
+- Breakeven at 2R tested but REJECTED - hurts runners more than helps
 
 ## Key Commands
 
 ### Backtesting
 ```bash
-# Backtest today (ES, 3 contracts)
-python -m runners.run_today ES 3
+# V10 backtest today
+python -m runners.run_v10_dual_entry ES 3
 
-# Backtest NQ
-python -m runners.run_today NQ 3
+# V10 multi-day backtest (30 days)
+python -m runners.backtest_v10_multiday ES 30
+python -m runners.backtest_v10_multiday NQ 30
 
-# Multi-day backtest (30 days)
-python -m runners.backtest_multiday ES 30
+# Analyze winning vs losing days
+python -m runners.analyze_win_loss ES
 ```
 
 ### Plotting
 ```bash
-# Plot today's trade
-python -m runners.plot_today ES LONG 3
+# Plot V10 today
+python -m runners.plot_v10 ES 3
 
-# Plot NQ
-python -m runners.plot_today NQ LONG 3
+# Plot V10 specific date
+python -m runners.plot_v10_date 2026 2 3
 ```
 
 ### Live Monitoring
@@ -127,18 +125,20 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
-| `runners/run_today.py` | V8-Independent strategy backtest |
-| `runners/backtest_multiday.py` | Multi-day backtest (supports V6/V7/V8) |
-| `runners/plot_today.py` | Trade visualization |
+| `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy (current) |
+| `runners/backtest_v10_multiday.py` | V10 multi-day backtest |
+| `runners/plot_v10.py` | V10 trade visualization |
+| `runners/plot_v10_date.py` | V10 date-specific plotting |
+| `runners/analyze_win_loss.py` | Win/loss day analysis |
 | `runners/run_tv_live.py` | Live TradingView monitor |
 | `runners/tv_login.py` | TradingView browser auth |
 | `config/strategies/ict_es.yaml` | ES configuration |
 | `config/strategies/ict_nq.yaml` | NQ configuration |
-| `SESSION_NOTES.md` | Strategy changelog |
 
 ### Strategy Functions
 | Function | Description |
 |----------|-------------|
+| `run_session_v10()` | V10 Quad Entry with hybrid exit (current) |
 | `run_session_with_position_limit()` | V8-Independent with position limit |
 | `run_multi_trade()` | V7-MultiEntry with profit-protected 2nd entry |
 | `run_trade()` | V6-Aggressive single entry (legacy) |
@@ -146,10 +146,19 @@ python -m runners.run_replay
 ## Daily Workflow
 
 1. **Morning**: `python health_check.py`
-2. **Pre-market**: `python -m runners.run_today ES 3` (review signals)
+2. **Pre-market**: `python -m runners.run_v10_dual_entry ES 3` (review signals)
 3. **Market hours**: `python -m runners.run_tv_live` (monitor)
-4. **Post-market**: `python -m runners.plot_today ES LONG 3` (review)
+4. **Post-market**: `python -m runners.plot_v10 ES 3` (review)
 
 ## TradingView Connection
 - Session cached at `~/.tvdatafeed/`
 - If data shows "nologin method", run `python -m runners.tv_login`
+
+## Strategy Evolution
+| Version | Key Feature |
+|---------|-------------|
+| V10 | Quad Entry (Creation, Overnight, Intraday, BOS) + Hybrid Exit |
+| V9 | Min Risk Filter + Opposing FVG Exit |
+| V8 | Independent 2nd Entry + Position Limit |
+| V7 | Profit-Protected 2nd Entry |
+| V6 | Aggressive FVG Creation Entry |
