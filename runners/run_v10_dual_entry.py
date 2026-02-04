@@ -294,6 +294,10 @@ def run_session_v10(
     overnight_retrace_min_adx=22,  # Min ADX for overnight retrace entries (0 to disable)
     bos_lookback=10,  # Bars to look back for swing points
     bos_fvg_window=5,  # Bars after BOS to look for FVG
+    # V10.2 time filters
+    midday_cutoff=True,  # No entries 12:00-14:00 (lunch lull)
+    pm_cutoff_nq=True,   # No NQ entries after 14:00
+    symbol='ES',         # Symbol for PM cutoff logic
     # Exit options
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
 ):
@@ -374,6 +378,13 @@ def run_session_v10(
 
                     if min_risk_pts > 0 and risk < min_risk_pts:
                         continue
+
+                    # V10.2 time filters
+                    entry_hour = creating_bar.timestamp.hour
+                    if midday_cutoff and 12 <= entry_hour < 14:
+                        continue  # Skip lunch lull (12:00-14:00)
+                    if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                        continue  # Skip NQ afternoon entries
 
                     valid_entries[direction].append({
                         'fvg': fvg,
@@ -497,6 +508,13 @@ def run_session_v10(
                         if not is_intraday and overnight_retrace_min_adx > 0:
                             if adx is None or adx < overnight_retrace_min_adx:
                                 continue  # Skip overnight retrace if ADX too low
+
+                        # V10.2 time filters
+                        entry_hour = bar.timestamp.hour
+                        if midday_cutoff and 12 <= entry_hour < 14:
+                            continue  # Skip lunch lull (12:00-14:00)
+                        if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                            continue  # Skip NQ afternoon entries
 
                         valid_entries[direction].append({
                             'fvg': fvg,
@@ -627,6 +645,13 @@ def run_session_v10(
                             break
 
                 if not duplicate:
+                    # V10.2 time filters
+                    entry_hour = bar.timestamp.hour
+                    if midday_cutoff and 12 <= entry_hour < 14:
+                        continue  # Skip lunch lull (12:00-14:00)
+                    if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                        continue  # Skip NQ afternoon entries
+
                     valid_entries[direction].append({
                         'fvg': fvg,
                         'direction': direction,
@@ -983,6 +1008,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print(f'  - Max open trades: {max_open_trades}')
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - T1 Exit: {"4R FIXED (Hybrid)" if t1_fixed_4r else "Structure Trail"}')
+    print(f'  - Midday cutoff (12-14): YES')
+    print(f'  - PM cutoff (NQ only): {"YES" if symbol == "NQ" else "NO (ES allowed)"}')
     print('='*70)
 
     all_results = run_session_v10(
@@ -1000,6 +1027,9 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         retracement_trend_aligned=retracement_trend_aligned,
         overnight_retrace_min_adx=overnight_retrace_min_adx,
         t1_fixed_4r=t1_fixed_4r,
+        midday_cutoff=True,
+        pm_cutoff_nq=True,
+        symbol=symbol,
     )
 
     total_pnl = 0

@@ -9,7 +9,7 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.1 (Quad Entry + ADX Filter) - Feb 4, 2026
+## Current Strategy: V10.2 (Quad Entry + Time Filters) - Feb 4, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Min FVG |
@@ -55,9 +55,11 @@ T2/Runner exit on respective trail stops or EOD
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets |
-| **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends (+$6,800/14d)** |
+| **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends** |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
+| **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull (both ES/NQ)** |
+| **PM Cutoff** | **NQ only** | **No NQ entries after 14:00 (ES allowed)** |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
 
@@ -176,7 +178,8 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.1 | ADX >= 22 filter for Overnight Retrace (+$6,800/14d improvement) |
+| V10.2 | Midday cutoff (12-14) + NQ PM cutoff (+$10,340/13d improvement) |
+| V10.1 | ADX >= 22 filter for Overnight Retrace |
 | V10 | Quad Entry (Creation, Overnight, Intraday, BOS) + Hybrid Exit |
 | V9 | Min Risk Filter + Opposing FVG Exit |
 | V8 | Independent 2nd Entry + Position Limit |

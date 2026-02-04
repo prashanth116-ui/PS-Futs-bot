@@ -80,7 +80,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
         if len(session_bars) < 50:
             continue
 
-        # Run V10 strategy
+        # Run V10.2 strategy with time filters
         results = run_session_v10(
             session_bars,
             all_bars,
@@ -93,6 +93,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
             enable_bos_entry=True,
             retracement_morning_only=True,
             t1_fixed_4r=True,
+            midday_cutoff=True,      # V10.2: No entries 12:00-14:00
+            pm_cutoff_nq=True,       # V10.2: No NQ entries after 14:00
+            symbol=symbol,
         )
 
         # Tally results
