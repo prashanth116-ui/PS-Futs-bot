@@ -291,6 +291,7 @@ def run_session_v10(
     # V10 filters
     retracement_morning_only=False,  # Only take retracement entries 9:30-12:00
     retracement_trend_aligned=False,  # Only take retracement entries matching daily trend
+    overnight_retrace_min_adx=22,  # Min ADX for overnight retrace entries (0 to disable)
     bos_lookback=10,  # Bars to look back for swing points
     bos_fvg_window=5,  # Bars after BOS to look for FVG
     # Exit options
@@ -491,6 +492,11 @@ def run_session_v10(
                         fvg_created_time = all_bars[fvg.created_bar_index].timestamp.time()
                         is_intraday = fvg_created_time >= rth_start
                         entry_label = 'INTRADAY_RETRACE' if is_intraday else 'RETRACEMENT'
+
+                        # ADX filter for overnight retrace entries only
+                        if not is_intraday and overnight_retrace_min_adx > 0:
+                            if adx is None or adx < overnight_retrace_min_adx:
+                                continue  # Skip overnight retrace if ADX too low
 
                         valid_entries[direction].append({
                             'fvg': fvg,
@@ -921,6 +927,7 @@ def run_session_v10(
 def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None,
                   enable_creation=True, enable_retracement=True, enable_bos=True,
                   interval='3m', retracement_morning_only=False, retracement_trend_aligned=False,
+                  overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
                   t1_fixed_4r=True):  # HYBRID default: T1 takes profit at 4R
     """Run V10 backtest for today.
 
@@ -930,6 +937,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         enable_bos: Entry Type C - BOS + Session FVG retracement entries
         retracement_morning_only: Only take retracement entries 9:30-12:00 ET
         retracement_trend_aligned: Only take retracement entries matching daily trend
+        overnight_retrace_min_adx: Min ADX for overnight retrace entries (22 default, 0 to disable)
         t1_fixed_4r: HYBRID - Take T1 profit at 4R instead of trailing
     """
 
@@ -964,7 +972,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print(f'  - Entry Type A (Creation): {"ENABLED" if enable_creation else "DISABLED"}')
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:
-        print(f'    - B1: Overnight FVGs')
+        print(f'    - B1: Overnight FVGs (ADX >= {overnight_retrace_min_adx})')
         print(f'    - B2: Intraday FVGs (5+ bars old)')
         print(f'    - Morning only filter: {"YES" if retracement_morning_only else "NO"}')
         print(f'    - Trend aligned: {"YES" if retracement_trend_aligned else "NO"}')
@@ -990,6 +998,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         enable_bos_entry=enable_bos,
         retracement_morning_only=retracement_morning_only,
         retracement_trend_aligned=retracement_trend_aligned,
+        overnight_retrace_min_adx=overnight_retrace_min_adx,
         t1_fixed_4r=t1_fixed_4r,
     )
 

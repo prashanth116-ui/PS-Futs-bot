@@ -9,7 +9,7 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10 (Quad Entry + Hybrid Exit) - Feb 4, 2026
+## Current Strategy: V10.1 (Quad Entry + ADX Filter) - Feb 4, 2026
 
 ### Supported Instruments (ES/NQ Only)
 | Symbol | Exchange | Tick Value | Min Risk |
@@ -17,11 +17,11 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 | ES | CME_MINI | $12.50 | 1.5 pts |
 | NQ | CME_MINI | $5.00 | 6.0 pts |
 
-### V10 Entry Types
+### V10.1 Entry Types
 | Type | Name | Description |
 |------|------|-------------|
 | A | Creation | Enter immediately when FVG forms with displacement |
-| B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection |
+| B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection **(ADX >= 22)** |
 | B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection |
 | C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure |
 
@@ -40,7 +40,7 @@ T2/Runner exit on respective trail stops or EOD
 ### Strategy Features
 - **Quad Entry Mode**: 4 distinct entry types (Creation, Overnight, Intraday, BOS)
 - **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
-- **Morning Filter**: Overnight retracement entries only 9:30-12:00 ET
+- **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
 - **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
 - **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
 - **Stop**: FVG boundary + 2 tick buffer
@@ -53,6 +53,7 @@ T2/Runner exit on respective trail stops or EOD
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets |
+| **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends (+$6,800/14d)** |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
 | Max Losses | 2/day | Circuit breaker |
@@ -157,6 +158,7 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.1 | ADX >= 22 filter for Overnight Retrace (+$6,800/14d improvement) |
 | V10 | Quad Entry (Creation, Overnight, Intraday, BOS) + Hybrid Exit |
 | V9 | Min Risk Filter + Opposing FVG Exit |
 | V8 | Independent 2nd Entry + Position Limit |

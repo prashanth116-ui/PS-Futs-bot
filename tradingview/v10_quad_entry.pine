@@ -1,0 +1,501 @@
+// V10 ICT FVG Quad Entry Strategy with Alerts
+// @version=5
+indicator("V10 ICT FVG Quad Entry", overlay=true, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+// Symbol Settings
+i_minRiskES = input.float(1.5, "Min Risk ES (pts)", minval=0.5, step=0.5, group="Risk Filter")
+i_minRiskNQ = input.float(6.0, "Min Risk NQ (pts)", minval=1.0, step=0.5, group="Risk Filter")
+i_minFVGTicks = input.int(5, "Min FVG Size (ticks)", minval=1, group="FVG Settings")
+i_tickSize = input.float(0.25, "Tick Size", minval=0.01, step=0.25, group="FVG Settings")
+
+// Entry Type Toggles
+i_enableCreation = input.bool(true, "Enable Type A: Creation", group="Entry Types")
+i_enableOvernight = input.bool(true, "Enable Type B1: Overnight Retrace", group="Entry Types")
+i_enableIntraday = input.bool(true, "Enable Type B2: Intraday Retrace", group="Entry Types")
+i_enableBOS = input.bool(true, "Enable Type C: BOS Retrace", group="Entry Types")
+
+// Filter Settings
+i_useEMAFilter = input.bool(true, "Use EMA Filter", group="Filters")
+i_emaFast = input.int(20, "EMA Fast", minval=5, group="Filters")
+i_emaSlow = input.int(50, "EMA Slow", minval=10, group="Filters")
+i_useADXFilter = input.bool(true, "Use ADX Filter", group="Filters")
+i_adxThreshold = input.int(17, "ADX Threshold", minval=10, group="Filters")
+i_adxLength = input.int(14, "ADX Length", minval=5, group="Filters")
+i_useDisplacement = input.bool(true, "Use Displacement Filter", group="Filters")
+i_dispMultiplier = input.float(1.0, "Displacement Multiplier", minval=0.5, step=0.1, group="Filters")
+
+// Session Settings
+i_rthStartHour = input.int(9, "RTH Start Hour", minval=0, maxval=23, group="Session")
+i_rthStartMin = input.int(30, "RTH Start Minute", minval=0, maxval=59, group="Session")
+i_morningEndHour = input.int(12, "Morning End Hour", minval=0, maxval=23, group="Session")
+i_morningOnly = input.bool(false, "Overnight Retrace Morning Only", group="Session")
+
+// BOS Settings
+i_bosLookback = input.int(10, "BOS Swing Lookback", minval=5, group="BOS Settings")
+i_swingLookback = input.int(2, "Swing Confirmation Bars", minval=1, group="BOS Settings")
+
+// Visual Settings
+i_showFVG = input.bool(true, "Show FVG Boxes", group="Visuals")
+i_showSignals = input.bool(true, "Show Entry Signals", group="Visuals")
+i_bullColor = input.color(color.new(color.green, 70), "Bullish FVG Color", group="Visuals")
+i_bearColor = input.color(color.new(color.red, 70), "Bearish FVG Color", group="Visuals")
+i_overnightColor = input.color(color.new(color.blue, 70), "Overnight FVG Color", group="Visuals")
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// Determine symbol and min risk
+isES = str.contains(syminfo.ticker, "ES")
+isNQ = str.contains(syminfo.ticker, "NQ")
+minRiskPts = isES ? i_minRiskES : isNQ ? i_minRiskNQ : i_minRiskES
+
+// EMA Calculations
+emaFast = ta.ema(close, i_emaFast)
+emaSlow = ta.ema(close, i_emaSlow)
+
+// ADX Calculations
+[diPlus, diMinus, adx] = ta.dmi(i_adxLength, i_adxLength)
+
+// Average body size for displacement
+avgBody = ta.sma(math.abs(close - open), 20)
+dispThreshold = avgBody * i_dispMultiplier
+
+// Current bar body size
+bodySize = math.abs(close - open)
+isDisplacement = bodySize > dispThreshold
+
+// Session time checks
+rthStartTime = i_rthStartHour * 60 + i_rthStartMin
+morningEndTime = i_morningEndHour * 60
+currentTime = hour * 60 + minute
+isRTH = currentTime >= rthStartTime
+isMorning = currentTime >= rthStartTime and currentTime <= morningEndTime
+isPremarket = currentTime < rthStartTime
+
+// ============================================================================
+// FVG DETECTION
+// ============================================================================
+
+// Bullish FVG: Bar[2].high < Bar[0].low (gap up)
+bullishFVG = low > high[2]
+bullishFVG_low = high[2]
+bullishFVG_high = low
+bullishFVG_size = (bullishFVG_high - bullishFVG_low) / i_tickSize
+bullishFVG_mid = (bullishFVG_high + bullishFVG_low) / 2
+
+// Bearish FVG: Bar[2].low > Bar[0].high (gap down)
+bearishFVG = high < low[2]
+bearishFVG_high = low[2]
+bearishFVG_low = high
+bearishFVG_size = (bearishFVG_high - bearishFVG_low) / i_tickSize
+bearishFVG_mid = (bearishFVG_high + bearishFVG_low) / 2
+
+// ============================================================================
+// SWING POINT DETECTION (for BOS)
+// ============================================================================
+
+// Swing High: Higher than lookback bars on both sides
+isSwingHigh = true
+for j = 1 to i_swingLookback
+    if high[i_swingLookback] <= high[i_swingLookback - j] or high[i_swingLookback] <= high[i_swingLookback + j]
+        isSwingHigh := false
+
+// Swing Low: Lower than lookback bars on both sides
+isSwingLow = true
+for j = 1 to i_swingLookback
+    if low[i_swingLookback] >= low[i_swingLookback - j] or low[i_swingLookback] >= low[i_swingLookback + j]
+        isSwingLow := false
+
+// Track recent swing points
+var float recentSwingHigh = na
+var float recentSwingLow = na
+
+if isSwingHigh
+    recentSwingHigh := high[i_swingLookback]
+if isSwingLow
+    recentSwingLow := low[i_swingLookback]
+
+// Break of Structure detection
+bullishBOS = not na(recentSwingHigh) and close > recentSwingHigh
+bearishBOS = not na(recentSwingLow) and close < recentSwingLow
+
+// Track BOS state
+var bool inBullishBOS = false
+var bool inBearishBOS = false
+var int bosBarIndex = 0
+
+if bullishBOS
+    inBullishBOS := true
+    inBearishBOS := false
+    bosBarIndex := bar_index
+
+if bearishBOS
+    inBearishBOS := true
+    inBullishBOS := false
+    bosBarIndex := bar_index
+
+// Reset BOS after 10 bars
+if bar_index - bosBarIndex > 10
+    inBullishBOS := false
+    inBearishBOS := false
+
+// ============================================================================
+// REJECTION CANDLE DETECTION (for Retracement entries)
+// ============================================================================
+
+// Lower wick size (for bullish rejection)
+lowerWick = math.min(open, close) - low
+// Upper wick size (for bearish rejection)
+upperWick = high - math.max(open, close)
+
+// Rejection: wick > body
+bullishRejection = lowerWick > bodySize and close > open  // Bullish candle with big lower wick
+bearishRejection = upperWick > bodySize and close < open  // Bearish candle with big upper wick
+
+// ============================================================================
+// FILTER CHECKS
+// ============================================================================
+
+// EMA Filter
+emaLongOK = not i_useEMAFilter or emaFast > emaSlow
+emaShortOK = not i_useEMAFilter or emaFast < emaSlow
+
+// ADX Filter
+adxOK = not i_useADXFilter or adx > i_adxThreshold
+
+// DI Direction Filter
+diLongOK = not i_useADXFilter or diPlus > diMinus
+diShortOK = not i_useADXFilter or diMinus > diPlus
+
+// Displacement Filter (check bar that created FVG, which is bar[1])
+dispOK = not i_useDisplacement or (math.abs(close[1] - open[1]) > dispThreshold)
+
+// Min FVG Size Filter
+minSizeOK_bull = bullishFVG_size >= i_minFVGTicks
+minSizeOK_bear = bearishFVG_size >= i_minFVGTicks
+
+// Min Risk Filter
+bullishRisk = bullishFVG_mid - bullishFVG_low + (2 * i_tickSize)
+bearishRisk = bearishFVG_high - bearishFVG_mid + (2 * i_tickSize)
+minRiskOK_bull = bullishRisk >= minRiskPts
+minRiskOK_bear = bearishRisk >= minRiskPts
+
+// ============================================================================
+// ENTRY TYPE A: CREATION SIGNALS
+// ============================================================================
+
+validCreationLong = i_enableCreation and bullishFVG and minSizeOK_bull and minRiskOK_bull and emaLongOK and adxOK and diLongOK and dispOK and isRTH
+validCreationShort = i_enableCreation and bearishFVG and minSizeOK_bear and minRiskOK_bear and emaShortOK and adxOK and diShortOK and dispOK and isRTH
+
+// ============================================================================
+// ENTRY TYPE B1/B2: RETRACEMENT SIGNALS (Overnight + Intraday)
+// Track FVG zones and check for retracement + rejection
+// ============================================================================
+
+// Store FVG zones (simplified - track last 5 of each type)
+var float[] bullFVG_highs = array.new_float(5, na)
+var float[] bullFVG_lows = array.new_float(5, na)
+var int[] bullFVG_bars = array.new_int(5, 0)
+var bool[] bullFVG_overnight = array.new_bool(5, false)
+
+var float[] bearFVG_highs = array.new_float(5, na)
+var float[] bearFVG_lows = array.new_float(5, na)
+var int[] bearFVG_bars = array.new_int(5, 0)
+var bool[] bearFVG_overnight = array.new_bool(5, false)
+
+// Store new FVGs
+if bullishFVG and minSizeOK_bull
+    array.unshift(bullFVG_highs, bullishFVG_high)
+    array.unshift(bullFVG_lows, bullishFVG_low)
+    array.unshift(bullFVG_bars, bar_index)
+    array.unshift(bullFVG_overnight, isPremarket)
+    array.pop(bullFVG_highs)
+    array.pop(bullFVG_lows)
+    array.pop(bullFVG_bars)
+    array.pop(bullFVG_overnight)
+
+if bearishFVG and minSizeOK_bear
+    array.unshift(bearFVG_highs, bearishFVG_high)
+    array.unshift(bearFVG_lows, bearishFVG_low)
+    array.unshift(bearFVG_bars, bar_index)
+    array.unshift(bearFVG_overnight, isPremarket)
+    array.pop(bearFVG_highs)
+    array.pop(bearFVG_lows)
+    array.pop(bearFVG_bars)
+    array.pop(bearFVG_overnight)
+
+// Check for retracement into stored FVGs
+var bool retraceLongSignal = false
+var bool retraceShortSignal = false
+var bool isOvernightRetrace = false
+var float retraceEntryPrice = na
+var float retraceStopPrice = na
+
+retraceLongSignal := false
+retraceShortSignal := false
+isOvernightRetrace := false
+
+// Check bullish FVGs for LONG retracement
+if i_enableOvernight or i_enableIntraday
+    for idx = 0 to 4
+        fvgHigh = array.get(bullFVG_highs, idx)
+        fvgLow = array.get(bullFVG_lows, idx)
+        fvgBar = array.get(bullFVG_bars, idx)
+        fvgOvernight = array.get(bullFVG_overnight, idx)
+
+        if not na(fvgHigh) and not na(fvgLow)
+            // Check if price wicked into FVG zone
+            wickedInto = low <= fvgHigh and low >= fvgLow - (2 * i_tickSize)
+
+            // For overnight: must be RTH and morning (if filter enabled)
+            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning)
+            // For intraday: must be 5+ bars after creation
+            intradayOK = not fvgOvernight and i_enableIntraday and (bar_index - fvgBar >= 5)
+
+            if wickedInto and bullishRejection and (overnightOK or intradayOK) and emaLongOK and adxOK and diLongOK
+                fvgMid = (fvgHigh + fvgLow) / 2
+                risk = close - (fvgLow - 2 * i_tickSize)
+                if risk >= minRiskPts
+                    retraceLongSignal := true
+                    isOvernightRetrace := fvgOvernight
+                    retraceEntryPrice := close
+                    retraceStopPrice := fvgLow - (2 * i_tickSize)
+                    break
+
+// Check bearish FVGs for SHORT retracement
+if i_enableOvernight or i_enableIntraday
+    for idx = 0 to 4
+        fvgHigh = array.get(bearFVG_highs, idx)
+        fvgLow = array.get(bearFVG_lows, idx)
+        fvgBar = array.get(bearFVG_bars, idx)
+        fvgOvernight = array.get(bearFVG_overnight, idx)
+
+        if not na(fvgHigh) and not na(fvgLow)
+            // Check if price wicked into FVG zone
+            wickedInto = high >= fvgLow and high <= fvgHigh + (2 * i_tickSize)
+
+            // For overnight: must be RTH and morning (if filter enabled)
+            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning)
+            // For intraday: must be 5+ bars after creation
+            intradayOK = not fvgOvernight and i_enableIntraday and (bar_index - fvgBar >= 5)
+
+            if wickedInto and bearishRejection and (overnightOK or intradayOK) and emaShortOK and adxOK and diShortOK
+                fvgMid = (fvgHigh + fvgLow) / 2
+                risk = (fvgHigh + 2 * i_tickSize) - close
+                if risk >= minRiskPts
+                    retraceShortSignal := true
+                    isOvernightRetrace := fvgOvernight
+                    retraceEntryPrice := close
+                    retraceStopPrice := fvgHigh + (2 * i_tickSize)
+                    break
+
+// ============================================================================
+// ENTRY TYPE C: BOS + RETRACE SIGNALS
+// ============================================================================
+
+// BOS Long: After bullish BOS, look for FVG that forms and then retracement into it
+bosFVGLong = i_enableBOS and inBullishBOS and bullishFVG and minSizeOK_bull and (bar_index - bosBarIndex <= 5)
+bosFVGShort = i_enableBOS and inBearishBOS and bearishFVG and minSizeOK_bear and (bar_index - bosBarIndex <= 5)
+
+// Track BOS FVGs
+var float bosBullFVG_high = na
+var float bosBullFVG_low = na
+var int bosBullFVG_bar = 0
+
+var float bosBearFVG_high = na
+var float bosBearFVG_low = na
+var int bosBearFVG_bar = 0
+
+if bosFVGLong
+    bosBullFVG_high := bullishFVG_high
+    bosBullFVG_low := bullishFVG_low
+    bosBullFVG_bar := bar_index
+
+if bosFVGShort
+    bosBearFVG_high := bearishFVG_high
+    bosBearFVG_low := bearishFVG_low
+    bosBearFVG_bar := bar_index
+
+// Check for retracement into BOS FVG
+bosRetraceLong = i_enableBOS and not na(bosBullFVG_high) and bar_index > bosBullFVG_bar and
+                 low <= bosBullFVG_high and low >= bosBullFVG_low - (2 * i_tickSize) and
+                 emaLongOK and adxOK and diLongOK
+
+bosRetraceShort = i_enableBOS and not na(bosBearFVG_high) and bar_index > bosBearFVG_bar and
+                  high >= bosBearFVG_low and high <= bosBearFVG_high + (2 * i_tickSize) and
+                  emaShortOK and adxOK and diShortOK
+
+// Clear BOS FVG after retracement or 20 bars
+if bar_index - bosBullFVG_bar > 20
+    bosBullFVG_high := na
+    bosBullFVG_low := na
+
+if bar_index - bosBearFVG_bar > 20
+    bosBearFVG_high := na
+    bosBearFVG_low := na
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+
+// Draw FVG boxes for CREATION entries
+if i_showFVG and validCreationLong
+    box.new(bar_index - 2, bullishFVG_high, bar_index + 10, bullishFVG_low,
+            border_color=color.green, bgcolor=i_bullColor, border_width=2)
+
+if i_showFVG and validCreationShort
+    box.new(bar_index - 2, bearishFVG_high, bar_index + 10, bearishFVG_low,
+            border_color=color.red, bgcolor=i_bearColor, border_width=2)
+
+// Draw entry labels
+if i_showSignals and validCreationLong
+    entryPrice = bullishFVG_mid
+    stopPrice = bullishFVG_low - (2 * i_tickSize)
+    risk = entryPrice - stopPrice
+    target4R = entryPrice + (4 * risk)
+    label.new(bar_index, low, "A: LONG\n" + str.tostring(entryPrice, "#.##") +
+              "\nStop: " + str.tostring(stopPrice, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if i_showSignals and validCreationShort
+    entryPrice = bearishFVG_mid
+    stopPrice = bearishFVG_high + (2 * i_tickSize)
+    risk = stopPrice - entryPrice
+    target4R = entryPrice - (4 * risk)
+    label.new(bar_index, high, "A: SHORT\n" + str.tostring(entryPrice, "#.##") +
+              "\nStop: " + str.tostring(stopPrice, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.red, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Retracement entry labels
+if i_showSignals and retraceLongSignal
+    labelText = isOvernightRetrace ? "B1: LONG" : "B2: LONG"
+    risk = retraceEntryPrice - retraceStopPrice
+    target4R = retraceEntryPrice + (4 * risk)
+    label.new(bar_index, low, labelText + "\n" + str.tostring(retraceEntryPrice, "#.##") +
+              "\nStop: " + str.tostring(retraceStopPrice, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.blue, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if i_showSignals and retraceShortSignal
+    labelText = isOvernightRetrace ? "B1: SHORT" : "B2: SHORT"
+    risk = retraceStopPrice - retraceEntryPrice
+    target4R = retraceEntryPrice - (4 * risk)
+    label.new(bar_index, high, labelText + "\n" + str.tostring(retraceEntryPrice, "#.##") +
+              "\nStop: " + str.tostring(retraceStopPrice, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.blue, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// BOS entry labels
+if i_showSignals and bosRetraceLong
+    bosMid = (bosBullFVG_high + bosBullFVG_low) / 2
+    bosStop = bosBullFVG_low - (2 * i_tickSize)
+    risk = bosMid - bosStop
+    target4R = bosMid + (4 * risk)
+    label.new(bar_index, low, "C: LONG\n" + str.tostring(bosMid, "#.##") +
+              "\nStop: " + str.tostring(bosStop, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.purple, textcolor=color.white, style=label.style_label_up, size=size.small)
+    // Clear after signal
+    bosBullFVG_high := na
+
+if i_showSignals and bosRetraceShort
+    bosMid = (bosBearFVG_high + bosBearFVG_low) / 2
+    bosStop = bosBearFVG_high + (2 * i_tickSize)
+    risk = bosStop - bosMid
+    target4R = bosMid - (4 * risk)
+    label.new(bar_index, high, "C: SHORT\n" + str.tostring(bosMid, "#.##") +
+              "\nStop: " + str.tostring(bosStop, "#.##") +
+              "\n4R: " + str.tostring(target4R, "#.##"),
+              color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.small)
+    // Clear after signal
+    bosBearFVG_high := na
+
+// Plot EMAs
+plot(emaFast, "EMA Fast", color=color.blue, linewidth=1)
+plot(emaSlow, "EMA Slow", color=color.purple, linewidth=2)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Entry Type A: Creation
+alertcondition(validCreationLong, title="V10 Type A LONG (Creation)",
+               message="V10 LONG [CREATION]: {{ticker}} @ {{close}} - FVG formed with displacement")
+alertcondition(validCreationShort, title="V10 Type A SHORT (Creation)",
+               message="V10 SHORT [CREATION]: {{ticker}} @ {{close}} - FVG formed with displacement")
+
+// Entry Type B1: Overnight Retrace
+alertcondition(retraceLongSignal and isOvernightRetrace, title="V10 Type B1 LONG (Overnight)",
+               message="V10 LONG [OVERNIGHT]: {{ticker}} @ {{close}} - Rejection from overnight FVG")
+alertcondition(retraceShortSignal and isOvernightRetrace, title="V10 Type B1 SHORT (Overnight)",
+               message="V10 SHORT [OVERNIGHT]: {{ticker}} @ {{close}} - Rejection from overnight FVG")
+
+// Entry Type B2: Intraday Retrace
+alertcondition(retraceLongSignal and not isOvernightRetrace, title="V10 Type B2 LONG (Intraday)",
+               message="V10 LONG [INTRADAY]: {{ticker}} @ {{close}} - Rejection from session FVG")
+alertcondition(retraceShortSignal and not isOvernightRetrace, title="V10 Type B2 SHORT (Intraday)",
+               message="V10 SHORT [INTRADAY]: {{ticker}} @ {{close}} - Rejection from session FVG")
+
+// Entry Type C: BOS Retrace
+alertcondition(bosRetraceLong, title="V10 Type C LONG (BOS)",
+               message="V10 LONG [BOS]: {{ticker}} @ {{close}} - Retrace into BOS FVG")
+alertcondition(bosRetraceShort, title="V10 Type C SHORT (BOS)",
+               message="V10 SHORT [BOS]: {{ticker}} @ {{close}} - Retrace into BOS FVG")
+
+// Combined alerts
+alertcondition(validCreationLong or retraceLongSignal or bosRetraceLong, title="V10 Any LONG Signal",
+               message="V10 LONG: {{ticker}} @ {{close}}")
+alertcondition(validCreationShort or retraceShortSignal or bosRetraceShort, title="V10 Any SHORT Signal",
+               message="V10 SHORT: {{ticker}} @ {{close}}")
+alertcondition(validCreationLong or validCreationShort or retraceLongSignal or retraceShortSignal or bosRetraceLong or bosRetraceShort,
+               title="V10 Any Signal", message="V10 {{ticker}}: New signal @ {{close}}")
+
+// ============================================================================
+// INFO TABLE
+// ============================================================================
+
+var table infoTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80))
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "V10 Quad Entry", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.small)
+
+    table.cell(infoTable, 0, 1, "Min Risk", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, str.tostring(minRiskPts) + " pts", text_color=color.white, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 2, "EMA 20/50", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, emaFast > emaSlow ? "BULLISH" : "BEARISH", text_color=emaFast > emaSlow ? color.green : color.red, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 3, "ADX", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(adx, "#.#") + (adx > i_adxThreshold ? " OK" : " LOW"), text_color=adx > i_adxThreshold ? color.green : color.red, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 4, "DI Direction", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, diPlus > diMinus ? "+DI > -DI" : "-DI > +DI", text_color=diPlus > diMinus ? color.green : color.red, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 5, "Bias", text_color=color.white, text_size=size.tiny)
+    longBias = emaFast > emaSlow and adx > i_adxThreshold and diPlus > diMinus
+    shortBias = emaFast < emaSlow and adx > i_adxThreshold and diMinus > diPlus
+    biasText = longBias ? "LONG" : shortBias ? "SHORT" : "NEUTRAL"
+    biasColor = longBias ? color.green : shortBias ? color.red : color.gray
+    table.cell(infoTable, 1, 5, biasText, text_color=biasColor, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 6, "─────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 6, "─────────", text_color=color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 7, "Type A", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 7, i_enableCreation ? "ON" : "OFF", text_color=i_enableCreation ? color.green : color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 8, "Type B1", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 8, i_enableOvernight ? "ON" : "OFF", text_color=i_enableOvernight ? color.green : color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 9, "Type B2", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 9, i_enableIntraday ? "ON" : "OFF", text_color=i_enableIntraday ? color.green : color.gray, text_size=size.tiny)
+
+    table.cell(infoTable, 0, 10, "Type C", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 10, i_enableBOS ? "ON" : "OFF", text_color=i_enableBOS ? color.green : color.gray, text_size=size.tiny)
