@@ -23,6 +23,7 @@ i_emaFast = input.int(20, "EMA Fast", minval=5, group="Filters")
 i_emaSlow = input.int(50, "EMA Slow", minval=10, group="Filters")
 i_useADXFilter = input.bool(true, "Use ADX Filter", group="Filters")
 i_adxThreshold = input.int(17, "ADX Threshold", minval=10, group="Filters")
+i_adxB1Threshold = input.int(22, "B1 Overnight ADX Min", minval=17, group="Filters")
 i_adxLength = input.int(14, "ADX Length", minval=5, group="Filters")
 i_useDisplacement = input.bool(true, "Use Displacement Filter", group="Filters")
 i_dispMultiplier = input.float(1.0, "Displacement Multiplier", minval=0.5, step=0.1, group="Filters")
@@ -251,8 +252,9 @@ if i_enableOvernight or i_enableIntraday
             // Check if price wicked into FVG zone
             wickedInto = low <= fvgHigh and low >= fvgLow - (2 * i_tickSize)
 
-            // For overnight: must be RTH and morning (if filter enabled)
-            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning)
+            // For overnight: must be RTH, morning (if filter enabled), and ADX >= 22
+            overnightADXOK = not i_useADXFilter or adx >= i_adxB1Threshold
+            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning) and overnightADXOK
             // For intraday: must be 5+ bars after creation
             intradayOK = not fvgOvernight and i_enableIntraday and (bar_index - fvgBar >= 5)
 
@@ -278,8 +280,9 @@ if i_enableOvernight or i_enableIntraday
             // Check if price wicked into FVG zone
             wickedInto = high >= fvgLow and high <= fvgHigh + (2 * i_tickSize)
 
-            // For overnight: must be RTH and morning (if filter enabled)
-            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning)
+            // For overnight: must be RTH, morning (if filter enabled), and ADX >= 22
+            overnightADXOK = not i_useADXFilter or adx >= i_adxB1Threshold
+            overnightOK = fvgOvernight and i_enableOvernight and isRTH and (not i_morningOnly or isMorning) and overnightADXOK
             // For intraday: must be 5+ bars after creation
             intradayOK = not fvgOvernight and i_enableIntraday and (bar_index - fvgBar >= 5)
 
@@ -492,7 +495,9 @@ if barstate.islast
     table.cell(infoTable, 1, 7, i_enableCreation ? "ON" : "OFF", text_color=i_enableCreation ? color.green : color.gray, text_size=size.tiny)
 
     table.cell(infoTable, 0, 8, "Type B1", text_color=color.white, text_size=size.tiny)
-    table.cell(infoTable, 1, 8, i_enableOvernight ? "ON" : "OFF", text_color=i_enableOvernight ? color.green : color.gray, text_size=size.tiny)
+    b1Status = i_enableOvernight ? (adx >= i_adxB1Threshold ? "ON (ADX OK)" : "ON (ADX LOW)") : "OFF"
+    b1Color = i_enableOvernight ? (adx >= i_adxB1Threshold ? color.green : color.orange) : color.gray
+    table.cell(infoTable, 1, 8, b1Status, text_color=b1Color, text_size=size.tiny)
 
     table.cell(infoTable, 0, 9, "Type B2", text_color=color.white, text_size=size.tiny)
     table.cell(infoTable, 1, 9, i_enableIntraday ? "ON" : "OFF", text_color=i_enableIntraday ? color.green : color.gray, text_size=size.tiny)
