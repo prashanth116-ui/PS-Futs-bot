@@ -1,71 +1,447 @@
 """
-Run ICT strategy with live/recent data from Yahoo Finance.
+V10.3 Live Trading Runner
+
+Main entry point for live trading with the V10.3 strategy.
+Integrates signal generation, order management, and risk controls.
+
+Usage:
+    python -m runners.run_live              # Demo mode
+    python -m runners.run_live --live       # Live mode (be careful!)
+    python -m runners.run_live --paper      # Paper trading (signals only)
 """
-from __future__ import annotations
+import sys
+sys.path.insert(0, '.')
+
+import os
+import argparse
+import time
+import signal
+from datetime import datetime, time as dt_time, timedelta
+from typing import Optional, Dict, List
+
+from runners.tradingview_loader import fetch_futures_bars
+from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
+from runners.tradovate_client import TradovateClient, TradovateConfig, Environment, create_client
+from runners.order_manager import OrderManager, ManagedTrade, TradeStatus
+from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_manager
+
+
+class LiveTrader:
+    """
+    V10.3 Live Trading System
+
+    Runs the strategy in real-time, generating signals and executing trades.
+    """
+
+    # Symbol configurations
+    SYMBOLS = {
+        'ES': {
+            'tradovate_symbol': 'ESH5',
+            'tick_size': 0.25,
+            'tick_value': 12.50,
+            'min_risk': 1.5,
+            'max_bos_risk': 8.0,
+            'contracts': 3,
+        },
+        'NQ': {
+            'tradovate_symbol': 'NQH5',
+            'tick_size': 0.25,
+            'tick_value': 5.00,
+            'min_risk': 6.0,
+            'max_bos_risk': 20.0,
+            'contracts': 3,
+        },
+    }
+
+    def __init__(
+        self,
+        client: Optional[TradovateClient] = None,
+        risk_manager: Optional[RiskManager] = None,
+        paper_mode: bool = True,
+        symbols: List[str] = None,
+    ):
+        """
+        Initialize live trader.
+
+        Args:
+            client: Tradovate API client (None for paper mode)
+            risk_manager: Risk manager instance
+            paper_mode: If True, only log signals without executing
+            symbols: List of symbols to trade (default: ['ES', 'NQ'])
+        """
+        self.client = client
+        self.risk_manager = risk_manager or create_default_risk_manager()
+        self.paper_mode = paper_mode
+        self.symbols = symbols or ['ES', 'NQ']
+
+        # Order manager (only if client provided)
+        self.order_manager = OrderManager(client) if client else None
+
+        # State
+        self.running = False
+        self.last_scan_time: Dict[str, datetime] = {}
+        self.processed_signals: Dict[str, set] = {s: set() for s in self.symbols}
+
+        # Scan interval (3 minutes to match bar interval)
+        self.scan_interval = 180  # seconds
+
+        # Signal for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals."""
+        print("\nShutdown signal received...")
+        self.stop()
+
+    def start(self):
+        """Start the live trading loop."""
+        self.running = True
+        print("=" * 70)
+        print("V10.3 LIVE TRADER")
+        print("=" * 70)
+        print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
+        print(f"Symbols: {', '.join(self.symbols)}")
+        print(f"Scan interval: {self.scan_interval}s")
+        print("=" * 70)
+
+        if not self.paper_mode and self.client:
+            print("\nConnecting to Tradovate...")
+            if not self.client.connect():
+                print("Failed to connect to Tradovate")
+                return
+
+            balance = self.client.get_account_balance()
+            print(f"Account balance: ${balance.get('cash_balance', 0):,.2f}")
+            print(f"Available margin: ${balance.get('available_margin', 0):,.2f}")
+
+        print("\nStarting trading loop...")
+        print("Press Ctrl+C to stop\n")
+
+        self._trading_loop()
+
+    def stop(self):
+        """Stop the trading loop."""
+        self.running = False
+        print("\nStopping trader...")
+
+        # Close any open positions if in live mode
+        if not self.paper_mode and self.order_manager:
+            active_trades = self.order_manager.get_active_trades()
+            if active_trades:
+                print(f"Closing {len(active_trades)} active trades...")
+                for trade in active_trades:
+                    # Get current price for EOD close
+                    bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=1)
+                    if bars:
+                        self.order_manager.close_trade_eod(trade, bars[-1].close)
+
+        if self.client:
+            self.client.disconnect()
+
+        # Print summary
+        self._print_summary()
+
+    def _trading_loop(self):
+        """Main trading loop."""
+        while self.running:
+            try:
+                current_time = datetime.now()
+
+                # Check if within trading hours (RTH: 9:30-16:00 ET)
+                if not self._is_trading_hours(current_time):
+                    print(f"[{current_time.strftime('%H:%M:%S')}] Outside trading hours")
+                    time.sleep(60)
+                    continue
+
+                # Check risk status
+                if not self.risk_manager.is_trading_allowed():
+                    status = self.risk_manager.get_summary()
+                    print(f"[{current_time.strftime('%H:%M:%S')}] Trading blocked: {status['blocked_reason']}")
+                    time.sleep(60)
+                    continue
+
+                # Scan each symbol
+                for symbol in self.symbols:
+                    self._scan_symbol(symbol)
+
+                # Manage active trades
+                if self.order_manager:
+                    self._manage_active_trades()
+
+                # Print status
+                self._print_status()
+
+                # Wait for next scan
+                time.sleep(self.scan_interval)
+
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"Error in trading loop: {e}")
+                time.sleep(10)
+
+    def _is_trading_hours(self, dt: datetime) -> bool:
+        """Check if within RTH trading hours."""
+        current_time = dt.time()
+        rth_start = dt_time(9, 30)
+        rth_end = dt_time(16, 0)
+        return rth_start <= current_time <= rth_end
+
+    def _scan_symbol(self, symbol: str):
+        """Scan a symbol for trading signals."""
+        config = self.SYMBOLS.get(symbol)
+        if not config:
+            return
+
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol}...")
+
+        # Fetch bars
+        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500)
+        if not bars:
+            print(f"  No data for {symbol}")
+            return
+
+        # Get today's session bars
+        today = datetime.now().date()
+        today_bars = [b for b in bars if b.timestamp.date() == today]
+
+        premarket_start = dt_time(4, 0)
+        rth_end = dt_time(16, 0)
+        session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
+
+        if len(session_bars) < 20:
+            print(f"  Not enough bars for {symbol}: {len(session_bars)}")
+            return
+
+        current_price = session_bars[-1].close
+        print(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
+
+        # Run V10.3 strategy to get signals
+        results = run_session_v10(
+            session_bars,
+            bars,
+            tick_size=config['tick_size'],
+            tick_value=config['tick_value'],
+            contracts=config['contracts'],
+            min_risk_pts=config['min_risk'],
+            enable_creation_entry=True,
+            enable_retracement_entry=True,
+            enable_bos_entry=True,
+            retracement_morning_only=True,
+            t1_fixed_4r=True,
+            midday_cutoff=True,
+            pm_cutoff_nq=True,
+            max_bos_risk_pts=config['max_bos_risk'],
+            symbol=symbol,
+        )
+
+        # Check for new signals
+        for result in results:
+            signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+
+            # Skip already processed signals
+            if signal_id in self.processed_signals[symbol]:
+                continue
+
+            # Check if signal is recent (within last scan interval)
+            signal_age = (datetime.now() - result['entry_time']).total_seconds()
+            if signal_age > self.scan_interval * 2:
+                # Old signal, just mark as processed
+                self.processed_signals[symbol].add(signal_id)
+                continue
+
+            print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
+            print(f"    Entry Type: {result['entry_type']}")
+            print(f"    Entry: {result['entry_price']:.2f}")
+            print(f"    Stop: {result['stop_price']:.2f}")
+            print(f"    Risk: {result['risk']:.2f} pts")
+            print(f"    4R Target: {result['target_4r']:.2f}")
+
+            # Check risk manager
+            allowed, reason = self.risk_manager.can_enter_trade(
+                symbol=symbol,
+                direction=result['direction'],
+                entry_type=result['entry_type'],
+                contracts=config['contracts'],
+                risk_pts=result['risk'],
+            )
+
+            if not allowed:
+                print(f"    BLOCKED: {reason}")
+                self.processed_signals[symbol].add(signal_id)
+                continue
+
+            # Execute trade
+            if self.paper_mode:
+                print(f"    [PAPER] Would enter {result['direction']} {config['contracts']} {symbol}")
+            else:
+                self._execute_signal(symbol, result, config)
+
+            self.processed_signals[symbol].add(signal_id)
+
+    def _execute_signal(self, symbol: str, result: Dict, config: Dict):
+        """Execute a trading signal."""
+        if not self.order_manager:
+            return
+
+        # Create managed trade
+        trade = self.order_manager.create_trade_from_signal(
+            symbol=config['tradovate_symbol'],
+            direction=result['direction'],
+            entry_type=result['entry_type'],
+            entry_price=result['entry_price'],
+            stop_price=result['stop_price'],
+            contracts=config['contracts'],
+        )
+
+        # Check if price has already moved to entry
+        # If so, use market order; otherwise limit
+        current_bars = fetch_futures_bars(symbol, interval='3m', n_bars=1)
+        if current_bars:
+            current_price = current_bars[-1].close
+            is_long = result['direction'] == 'LONG'
+
+            # Check if we can still get filled at entry price
+            if (is_long and current_price <= result['entry_price'] + config['tick_size']) or \
+               (not is_long and current_price >= result['entry_price'] - config['tick_size']):
+                # Use limit order at entry price
+                if self.order_manager.execute_entry(trade):
+                    self.risk_manager.record_trade_entry(symbol, config['contracts'])
+                    print(f"    ENTRY SENT: {trade.id}")
+            else:
+                print(f"    Price moved past entry, skipping")
+
+    def _manage_active_trades(self):
+        """Manage active trades - check targets and stops."""
+        if not self.order_manager:
+            return
+
+        active_trades = self.order_manager.get_active_trades()
+
+        for trade in active_trades:
+            # Get base symbol for data fetch
+            base_symbol = trade.symbol[:2]
+
+            # Fetch current price
+            bars = fetch_futures_bars(base_symbol, interval='3m', n_bars=10)
+            if not bars:
+                continue
+
+            current_price = bars[-1].close
+
+            # Check stop (before 4R)
+            if self.order_manager.check_stop_hit(trade, current_price):
+                self.risk_manager.record_trade_exit(
+                    base_symbol,
+                    trade.contracts,
+                    trade.realized_pnl,
+                    is_win=False
+                )
+                continue
+
+            # Check T1 (4R target)
+            if self.order_manager.check_and_execute_t1(trade, current_price):
+                self.risk_manager.record_partial_exit(
+                    base_symbol,
+                    trade.t1_contracts,
+                    trade.exits[-1]['pnl_dollars']
+                )
+
+            # Update trail stops based on structure
+            if len(bars) >= 5:
+                # Check for swing highs/lows
+                for i in range(len(bars) - 3, len(bars) - 1):
+                    if is_swing_high(bars, i, 2):
+                        self.order_manager.update_trail_stops(
+                            trade,
+                            swing_high=bars[i].high
+                        )
+                    if is_swing_low(bars, i, 2):
+                        self.order_manager.update_trail_stops(
+                            trade,
+                            swing_low=bars[i].low
+                        )
+
+            # Check T2 trail
+            if self.order_manager.check_and_execute_t2(trade, current_price):
+                self.risk_manager.record_partial_exit(
+                    base_symbol,
+                    trade.t2_contracts,
+                    trade.exits[-1]['pnl_dollars']
+                )
+
+            # Check runner trail
+            if self.order_manager.check_and_execute_runner(trade, current_price):
+                self.risk_manager.record_trade_exit(
+                    base_symbol,
+                    trade.runner_contracts,
+                    trade.exits[-1]['pnl_dollars'],
+                    is_win=trade.realized_pnl > 0
+                )
+
+    def _print_status(self):
+        """Print current status."""
+        risk_summary = self.risk_manager.get_summary()
+        print(f"\n--- Status [{datetime.now().strftime('%H:%M:%S')}] ---")
+        print(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+        print(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
+        print(f"Status: {risk_summary['status'].upper()}")
+
+    def _print_summary(self):
+        """Print end-of-session summary."""
+        print("\n" + "=" * 70)
+        print("SESSION SUMMARY")
+        print("=" * 70)
+
+        risk_summary = self.risk_manager.get_summary()
+        print(f"Total Trades: {risk_summary['daily_trades']}")
+        print(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+
+        if self.order_manager:
+            trade_summary = self.order_manager.get_trade_summary()
+            print(f"Closed: {trade_summary['closed']}")
+            print(f"Stopped: {trade_summary['stopped']}")
+
+        print("=" * 70)
 
 
 def main():
-    print("=" * 50)
-    print("ICT Strategy - Live Data Runner")
-    print("=" * 50)
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description='V10.3 Live Trading')
+    parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
+    parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
+    parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'], help='Symbols to trade')
+    args = parser.parse_args()
 
-    from runners.yfinance_loader import fetch_futures_bars
-    from runners.replay import ReplayEngine
-    from strategies.factory import build_ict_from_yaml
+    # Determine mode
+    paper_mode = args.paper or (not args.live)
+    environment = 'live' if args.live else 'demo'
 
-    # Configuration
-    symbol = "ES=F"
-    period = "5d"      # Last 5 days
-    interval = "5m"    # 5-minute bars
-    config_path = "config/strategies/ict_es.yaml"
+    print(f"Starting V10.3 Live Trader...")
+    print(f"Environment: {environment.upper()}")
+    print(f"Paper Mode: {paper_mode}")
 
-    print(f"\nSymbol: {symbol}")
-    print(f"Period: {period}")
-    print(f"Interval: {interval}")
-    print(f"Config: {config_path}")
-    print("-" * 50)
+    # Create client (unless paper mode)
+    client = None
+    if not paper_mode:
+        try:
+            client = create_client(environment)
+        except Exception as e:
+            print(f"Failed to create client: {e}")
+            print("Falling back to paper mode")
+            paper_mode = True
 
-    # Fetch data
-    print("\nFetching data from Yahoo Finance...")
-    bars = fetch_futures_bars(symbol=symbol, period=period, interval=interval)
-    print(f"Received {len(bars)} bars")
+    # Create trader
+    trader = LiveTrader(
+        client=client,
+        paper_mode=paper_mode,
+        symbols=args.symbols,
+    )
 
-    if not bars:
-        print("No data received. Market may be closed.")
-        return
-
-    print(f"Date range: {bars[0].timestamp} to {bars[-1].timestamp}")
-    print("-" * 50)
-
-    # Build strategy
-    print("\nLoading ICT strategy...")
-    strategy = build_ict_from_yaml(config_path)
-
-    # Run replay
-    print("Running strategy...")
-    engine = ReplayEngine(strategy)
-    result = engine.run(bars)
-
-    # Results
-    print("\n" + "=" * 50)
-    print("RESULTS")
-    print("=" * 50)
-    print(f"Bars processed: {result.bars_processed}")
-    print(f"Signals generated: {len(result.signals)}")
-
-    if result.signals:
-        print("\n--- Signals ---")
-        for i, signal in enumerate(result.signals[:10], 1):
-            print(f"{i}. {signal}")
-        if len(result.signals) > 10:
-            print(f"   ... and {len(result.signals) - 10} more")
-    else:
-        print("\nNo signals generated.")
-        print("This could mean:")
-        print("  - Market conditions don't match ICT criteria")
-        print("  - Outside killzone hours")
-        print("  - No liquidity sweeps detected")
+    # Start trading
+    trader.start()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
