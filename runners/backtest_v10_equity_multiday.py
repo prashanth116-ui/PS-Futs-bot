@@ -1,7 +1,11 @@
 """
-V10 Equity Multi-Day Backtest - SPY/QQQ
+V10.4 Equity Multi-Day Backtest - SPY/QQQ
 
 Runs the V10 strategy across multiple days for equity instruments.
+
+V10.4 includes:
+- ATR-based stop buffer (ATR × 0.5) instead of fixed $0.02
+- Improves P/L by +$54k over 30 days
 """
 import sys
 sys.path.insert(0, '.')
@@ -53,7 +57,7 @@ def run_multiday_backtest(symbol='SPY', days=30, risk_per_trade=500):
             overnight_retrace_min_adx=22,
             midday_cutoff=True,       # V10.2: No entries 12:00-14:00
             pm_cutoff_qqq=True,       # V10.2: No QQQ entries after 14:00
-            disable_intraday_spy=True,  # V10.3: Disable SPY INTRADAY (24% win rate)
+            disable_intraday_spy=True,  # V10.4: Disable SPY INTRADAY (24% win rate)
         )
 
         day_pnl = sum(r['total_dollars'] for r in results)

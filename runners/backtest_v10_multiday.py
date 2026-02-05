@@ -17,7 +17,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
     # Min risk in points (same for micro and mini)
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
-    # V10.3: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
+    # V10.4: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
 
     print(f'Fetching {symbol} 3m data for {days}-day backtest...')
@@ -49,7 +49,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print('Strategy: V10.3 Quad Entry (Hybrid Exit - T1 at 4R)')
+    print('Strategy: V10.4 Quad Entry (Hybrid Exit - T1 at 4R)')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: YES')
     print(f'  - Min risk: {min_risk_pts} pts')
@@ -85,7 +85,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
         if len(session_bars) < 50:
             continue
 
-        # Run V10.3 strategy with time filters and BOS risk cap
+        # Run V10.4 strategy with time filters and BOS risk cap
         results = run_session_v10(
             session_bars,
             all_bars,
@@ -100,7 +100,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
             t1_fixed_4r=True,
             midday_cutoff=True,       # V10.2: No entries 12:00-14:00
             pm_cutoff_nq=True,        # V10.2: No NQ entries after 14:00
-            max_bos_risk_pts=max_bos_risk_pts,  # V10.3: Cap BOS risk
+            max_bos_risk_pts=max_bos_risk_pts,  # V10.4: Cap BOS risk
             symbol=symbol,
         )
 

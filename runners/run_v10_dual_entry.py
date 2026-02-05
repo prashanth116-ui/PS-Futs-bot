@@ -298,7 +298,7 @@ def run_session_v10(
     midday_cutoff=True,  # No entries 12:00-14:00 (lunch lull)
     pm_cutoff_nq=True,   # No NQ entries after 14:00
     symbol='ES',         # Symbol for PM cutoff logic
-    # V10.3 risk caps for BOS entries
+    # V10.4 risk caps for BOS entries
     max_bos_risk_pts=None,  # Max risk for BOS entries (ES: 8, NQ: 20)
     # Exit options
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
@@ -638,7 +638,7 @@ def run_session_v10(
                 if min_risk_pts > 0 and risk < min_risk_pts:
                     continue
 
-                # V10.3: Cap max risk for BOS entries to avoid oversized losses
+                # V10.4: Cap max risk for BOS entries to avoid oversized losses
                 if max_bos_risk_pts and risk > max_bos_risk_pts:
                     continue  # Skip BOS entries with excessive risk
 

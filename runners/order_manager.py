@@ -1,8 +1,8 @@
 """
-Order Manager for V10.3 Strategy
+Order Manager for V10.4 Strategy
 
 Handles trade execution, position tracking, and order management
-for the V10.3 Quad Entry strategy.
+for the V10.4 Quad Entry strategy.
 """
 import sys
 sys.path.insert(0, '.')
@@ -86,7 +86,7 @@ class ManagedTrade:
 
 class OrderManager:
     """
-    Manages order execution for V10.3 strategy.
+    Manages order execution for V10.4 strategy.
 
     Handles:
     - Entry order placement with bracket orders

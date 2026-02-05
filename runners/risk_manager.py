@@ -1,11 +1,11 @@
 """
-Risk Manager for V10.3 Strategy
+Risk Manager for V10.4 Strategy
 
 Implements risk controls including:
 - Daily loss limit
 - Max position size
 - Max open trades
-- Time-based filters (V10.2/V10.3)
+- Time-based filters (V10.2/V10.4)
 - Kill switch for emergencies
 """
 import sys
@@ -41,7 +41,7 @@ class RiskLimits:
     # Per-symbol limits
     max_contracts_per_symbol: int = 3     # Max contracts per symbol
 
-    # Time filters (V10.2/V10.3)
+    # Time filters (V10.2/V10.4)
     midday_cutoff_start: dt_time = dt_time(12, 0)   # No entries 12:00-14:00
     midday_cutoff_end: dt_time = dt_time(14, 0)
     pm_cutoff_nq: dt_time = dt_time(14, 0)          # No NQ after 14:00
@@ -49,11 +49,11 @@ class RiskLimits:
     rth_start: dt_time = dt_time(9, 30)             # RTH start
     rth_end: dt_time = dt_time(16, 0)               # RTH end
 
-    # BOS risk caps (V10.3)
+    # BOS risk caps (V10.4)
     max_bos_risk_es: float = 8.0          # Max risk for ES BOS entries
     max_bos_risk_nq: float = 20.0         # Max risk for NQ BOS entries
 
-    # SPY INTRADAY filter (V10.3)
+    # SPY INTRADAY filter (V10.4)
     disable_spy_intraday: bool = True     # Disable SPY INTRADAY entries
 
 
@@ -199,16 +199,16 @@ class RiskManager:
             if symbol == 'QQQ' and current_time >= self.limits.pm_cutoff_qqq:
                 return False, "QQQ PM cutoff (after 14:00)"
 
-            # BOS risk cap (V10.3)
+            # BOS risk cap (V10.4)
             if entry_type == 'BOS_RETRACE':
                 if symbol in ['ES', 'MES'] and risk_pts > self.limits.max_bos_risk_es:
                     return False, f"BOS risk {risk_pts:.1f}pts exceeds ES cap ({self.limits.max_bos_risk_es}pts)"
                 if symbol in ['NQ', 'MNQ'] and risk_pts > self.limits.max_bos_risk_nq:
                     return False, f"BOS risk {risk_pts:.1f}pts exceeds NQ cap ({self.limits.max_bos_risk_nq}pts)"
 
-            # SPY INTRADAY filter (V10.3)
+            # SPY INTRADAY filter (V10.4)
             if symbol == 'SPY' and entry_type == 'INTRADAY' and self.limits.disable_spy_intraday:
-                return False, "SPY INTRADAY disabled (V10.3)"
+                return False, "SPY INTRADAY disabled (V10.4)"
 
             return True, "OK"
 
@@ -312,7 +312,7 @@ class RiskManager:
 
 
 def create_default_risk_manager() -> RiskManager:
-    """Create risk manager with default V10.3 limits."""
+    """Create risk manager with default V10.4 limits."""
     limits = RiskLimits(
         max_daily_loss=2000.0,
         max_daily_trades=10,
