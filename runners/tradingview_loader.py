@@ -14,7 +14,9 @@ Exchange: CME_MINI
 from __future__ import annotations
 
 import os
+import sys
 import warnings
+import threading
 from datetime import datetime, date, time
 from pathlib import Path
 from typing import Literal
@@ -125,24 +127,95 @@ class TvDatafeedAuth(TvDatafeed):
         self.chart_session = self._TvDatafeed__generate_chart_session()
 
 
-def _get_tv_client() -> TvDatafeed:
+# Global client singleton with thread lock
+_tv_client = None
+_tv_client_lock = threading.Lock()
+_tv_client_created_at = None
+_TV_CLIENT_MAX_AGE = 300  # Recreate client every 5 minutes
+
+
+def _get_tv_client(force_new: bool = False) -> TvDatafeed:
     """
     Get TvDatafeed client with saved session cookies.
 
+    Uses a singleton pattern with automatic refresh to avoid connection issues.
     Tries to load session from browser login first, falls back to credentials.
     """
-    # Try saved browser session first
-    auth_token = _get_auth_token_from_cookies()
-    if auth_token:
-        return TvDatafeedAuth(auth_token)
+    global _tv_client, _tv_client_created_at
 
-    # Fall back to username/password (may fail due to CAPTCHA)
-    tv_user = os.getenv("TV_USERNAME")
-    tv_pass = os.getenv("TV_PASSWORD")
-    if tv_user and tv_pass:
-        return TvDatafeed(username=tv_user, password=tv_pass)
+    with _tv_client_lock:
+        now = datetime.now()
 
-    return TvDatafeed()
+        # Check if we need a new client
+        need_new = (
+            force_new
+            or _tv_client is None
+            or _tv_client_created_at is None
+            or (now - _tv_client_created_at).total_seconds() > _TV_CLIENT_MAX_AGE
+        )
+
+        if need_new:
+            # Close existing websocket if any
+            if _tv_client is not None:
+                try:
+                    if hasattr(_tv_client, 'ws') and _tv_client.ws:
+                        _tv_client.ws.close()
+                except Exception:
+                    pass
+
+            # Try saved browser session first
+            auth_token = _get_auth_token_from_cookies()
+            if auth_token:
+                _tv_client = TvDatafeedAuth(auth_token)
+            else:
+                # Fall back to username/password (may fail due to CAPTCHA)
+                tv_user = os.getenv("TV_USERNAME")
+                tv_pass = os.getenv("TV_PASSWORD")
+                if tv_user and tv_pass:
+                    _tv_client = TvDatafeed(username=tv_user, password=tv_pass)
+                else:
+                    _tv_client = TvDatafeed()
+
+            _tv_client_created_at = now
+
+        return _tv_client
+
+
+def _fetch_with_timeout(tv: TvDatafeed, symbol: str, exchange: str,
+                         interval: Interval, n_bars: int, timeout: int = 30):
+    """
+    Fetch data with a timeout to prevent hanging.
+
+    Returns DataFrame or None if timeout/error.
+    """
+    result = [None]
+    error = [None]
+
+    def fetch():
+        try:
+            result[0] = tv.get_hist(
+                symbol=symbol,
+                exchange=exchange,
+                interval=interval,
+                n_bars=n_bars,
+            )
+        except Exception as e:
+            error[0] = e
+
+    thread = threading.Thread(target=fetch)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
+        # Timeout - thread still running
+        print(f"  Timeout fetching {symbol} after {timeout}s", flush=True)
+        return None
+
+    if error[0]:
+        raise error[0]
+
+    return result[0]
 
 
 def _aggregate_bars(bars: list[Bar], target_minutes: int) -> list[Bar]:
@@ -178,6 +251,7 @@ def fetch_futures_bars(
     interval: str = "3m",
     n_bars: int = 500,
     exchange: str = None,
+    timeout: int = 30,
 ) -> list[Bar]:
     """
     Fetch historical bars from TradingView.
@@ -187,6 +261,7 @@ def fetch_futures_bars(
         interval: Bar interval (1m, 2m, 3m, 5m, 15m, 30m, 1h, 4h, 1d)
         n_bars: Number of bars to fetch (max ~5000)
         exchange: Exchange name (auto-detected if None)
+        timeout: Timeout in seconds for each fetch attempt (default 30)
 
     Returns:
         List of Bar objects in chronological order
@@ -212,25 +287,30 @@ def fetch_futures_bars(
             raise ValueError(f"Invalid interval: {interval}. Valid: {list(INTERVAL_MAP.keys())}")
 
     # Connect using saved session cookies (from browser login) or fall back to credentials
-    tv = _get_tv_client()
     df = None
     for attempt in range(3):
         try:
-            df = tv.get_hist(
+            # Get client (force new on retry after first failure)
+            tv = _get_tv_client(force_new=(attempt > 0))
+
+            # Fetch with timeout
+            df = _fetch_with_timeout(
+                tv=tv,
                 symbol=tv_symbol,
                 exchange=exchange,
                 interval=tv_interval,
                 n_bars=n_bars,
+                timeout=timeout,
             )
             if df is not None and not df.empty:
                 break
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
+            print(f"  Attempt {attempt + 1} failed: {e}", flush=True)
             import time
             time.sleep(1)
 
     if df is None or df.empty:
-        print(f"No data returned for {tv_symbol}")
+        print(f"  No data returned for {tv_symbol}", flush=True)
         return []
 
     # Convert to Bar objects

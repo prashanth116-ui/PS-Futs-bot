@@ -85,7 +85,7 @@ class RiskManager:
         """Initialize risk manager with limits."""
         self.limits = limits or RiskLimits()
         self.state = RiskState()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Use RLock to allow reentrant locking
 
         # Callbacks for alerts
         self._alert_callbacks: List[Callable] = []

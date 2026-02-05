@@ -21,6 +21,12 @@ import signal
 from datetime import datetime, time as dt_time, timedelta
 from typing import Optional, Dict, List
 
+
+def log(msg: str):
+    """Print with explicit flush for reliable output."""
+    print(msg)
+    sys.stdout.flush()
+
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
 from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
@@ -203,42 +209,68 @@ class LiveTrader:
 
                 # Check if within trading hours (RTH: 9:30-16:00 ET)
                 if not self._is_trading_hours(current_time):
-                    print(f"[{current_time.strftime('%H:%M:%S')}] Outside trading hours")
-                    time.sleep(60)
+                    log(f"[{current_time.strftime('%H:%M:%S')}] Outside trading hours")
+                    self._interruptible_sleep(60)
                     continue
 
                 # Check risk status
                 if not self.risk_manager.is_trading_allowed():
                     status = self.risk_manager.get_summary()
-                    print(f"[{current_time.strftime('%H:%M:%S')}] Trading blocked: {status['blocked_reason']}")
-                    time.sleep(60)
+                    log(f"[{current_time.strftime('%H:%M:%S')}] Trading blocked: {status['blocked_reason']}")
+                    self._interruptible_sleep(60)
                     continue
 
                 # Scan futures symbols
                 for symbol in self.futures_symbols:
-                    self._scan_futures_symbol(symbol)
+                    if not self.running:
+                        break
+                    try:
+                        self._scan_futures_symbol(symbol)
+                    except Exception as e:
+                        log(f"  Error scanning {symbol}: {e}")
 
                 # Scan equity symbols
                 for symbol in self.equity_symbols:
-                    self._scan_equity_symbol(symbol)
+                    if not self.running:
+                        break
+                    try:
+                        self._scan_equity_symbol(symbol)
+                    except Exception as e:
+                        log(f"  Error scanning {symbol}: {e}")
+
+                sys.stdout.flush()
 
                 # Manage active trades
                 if self.order_manager:
                     self._manage_active_trades()
 
                 # Print status
-                self._print_status()
-
-                # Wait for next scan
-                time.sleep(self.scan_interval)
+                try:
+                    self._print_status()
+                except Exception as e:
+                    log(f"  Error in _print_status: {e}")
+                self._interruptible_sleep(self.scan_interval)
 
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"Error in trading loop: {e}")
+                log(f"Error in trading loop: {e}")
                 import traceback
                 traceback.print_exc()
-                time.sleep(10)
+                sys.stdout.flush()
+                self._interruptible_sleep(10)
+
+    def _interruptible_sleep(self, seconds: int):
+        """Sleep in small increments with heartbeat, allowing for interrupt."""
+        heartbeat_interval = 30  # Show heartbeat every 30 seconds
+        elapsed = 0
+        while elapsed < seconds and self.running:
+            sleep_chunk = min(heartbeat_interval, seconds - elapsed)
+            time.sleep(sleep_chunk)
+            elapsed += sleep_chunk
+            if elapsed < seconds and self.running:
+                remaining = seconds - elapsed
+                log(f"  ... waiting {remaining}s until next scan")
 
     def _is_trading_hours(self, dt: datetime) -> bool:
         """Check if within RTH trading hours."""
@@ -253,12 +285,12 @@ class LiveTrader:
         if not config:
             return
 
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
+        log(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
 
-        # Fetch bars
-        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500)
+        # Fetch bars with timeout
+        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
         if not bars:
-            print(f"  No data for {symbol}")
+            log(f"  No data for {symbol}")
             return
 
         # Get today's session bars
@@ -270,11 +302,11 @@ class LiveTrader:
         session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
         if len(session_bars) < 20:
-            print(f"  Not enough bars for {symbol}: {len(session_bars)}")
+            log(f"  Not enough bars for {symbol}: {len(session_bars)}")
             return
 
         current_price = session_bars[-1].close
-        print(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
+        log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
 
         # Run V10.3 strategy to get signals
         results = run_session_v10(
@@ -304,12 +336,12 @@ class LiveTrader:
         if not config:
             return
 
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
+        log(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
 
-        # Fetch bars
-        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500)
+        # Fetch bars with timeout
+        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
         if not bars:
-            print(f"  No data for {symbol}")
+            log(f"  No data for {symbol}")
             return
 
         # Get today's session bars
@@ -321,11 +353,11 @@ class LiveTrader:
         session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
         if len(session_bars) < 20:
-            print(f"  Not enough bars for {symbol}: {len(session_bars)}")
+            log(f"  Not enough bars for {symbol}: {len(session_bars)}")
             return
 
         current_price = session_bars[-1].close
-        print(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
+        log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
 
         # Run V10.3 equity strategy
         results = run_session_v10_equity(
@@ -525,10 +557,10 @@ class LiveTrader:
     def _print_status(self):
         """Print current status."""
         risk_summary = self.risk_manager.get_summary()
-        print(f"\n--- Status [{datetime.now().strftime('%H:%M:%S')}] ---")
-        print(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
-        print(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
-        print(f"Status: {risk_summary['status'].upper()}")
+        log(f"\n--- Status [{datetime.now().strftime('%H:%M:%S')}] ---")
+        log(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+        log(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
+        log(f"Status: {risk_summary['status'].upper()}")
 
     def _print_summary(self):
         """Print end-of-session summary."""
