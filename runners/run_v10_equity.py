@@ -59,6 +59,9 @@ def run_session_v10_equity(
     min_risk_pts=None,          # Override config
     t1_fixed_4r=True,           # HYBRID: T1 fixed at 4R
     overnight_retrace_min_adx=22,  # ADX filter for overnight retrace
+    # V10.2 time filters
+    midday_cutoff=True,         # No entries 12:00-14:00 (lunch lull)
+    pm_cutoff_qqq=True,         # No QQQ entries after 14:00 (SPY allowed)
 ):
     """
     Run V10 strategy on equity bars.
@@ -205,6 +208,13 @@ def run_session_v10_equity(
             if risk < min_risk:
                 continue
 
+            # V10.2 time filters
+            entry_hour = bar.timestamp.hour
+            if midday_cutoff and 12 <= entry_hour < 14:
+                continue  # Skip lunch lull (12:00-14:00)
+            if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                continue  # Skip QQQ afternoon entries
+
             fvg['used_for_entry'] = True
             all_valid_entries.append({
                 'entry_type': 'CREATION',
@@ -261,6 +271,13 @@ def run_session_v10_equity(
             if risk < min_risk:
                 continue
 
+            # V10.2 time filters
+            entry_hour = bar.timestamp.hour
+            if midday_cutoff and 12 <= entry_hour < 14:
+                continue  # Skip lunch lull (12:00-14:00)
+            if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                continue  # Skip QQQ afternoon entries
+
             fvg['used_for_entry'] = True
             all_valid_entries.append({
                 'entry_type': 'RETRACEMENT',
@@ -314,6 +331,13 @@ def run_session_v10_equity(
             if risk < min_risk:
                 continue
 
+            # V10.2 time filters
+            entry_hour = bar.timestamp.hour
+            if midday_cutoff and 12 <= entry_hour < 14:
+                continue  # Skip lunch lull (12:00-14:00)
+            if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                continue  # Skip QQQ afternoon entries
+
             fvg['used_for_entry'] = True
             all_valid_entries.append({
                 'entry_type': 'INTRADAY',
@@ -346,6 +370,13 @@ def run_session_v10_equity(
 
                 if risk < min_risk:
                     continue
+
+                # V10.2 time filters
+                entry_hour = bar.timestamp.hour
+                if midday_cutoff and 12 <= entry_hour < 14:
+                    continue  # Skip lunch lull (12:00-14:00)
+                if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                    continue  # Skip QQQ afternoon entries
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
@@ -380,6 +411,13 @@ def run_session_v10_equity(
 
                 if risk < min_risk:
                     continue
+
+                # V10.2 time filters
+                entry_hour = bar.timestamp.hour
+                if midday_cutoff and 12 <= entry_hour < 14:
+                    continue  # Skip lunch lull (12:00-14:00)
+                if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                    continue  # Skip QQQ afternoon entries
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
