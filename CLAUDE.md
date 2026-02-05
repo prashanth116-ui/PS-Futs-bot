@@ -9,7 +9,7 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.3 (Quad Entry + Optimized Filters) - Feb 4, 2026
+## Current Strategy: V10.4 (ATR Buffer for Equities) - Feb 5, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk |
@@ -49,7 +49,8 @@ T2/Runner exit on respective trail stops or EOD
 - **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
 - **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
 - **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
-- **Stop**: FVG boundary + 2 tick buffer
+- **Stop**: FVG boundary + buffer (futures: 2 ticks, equities: ATR × 0.5)
+- **ATR Buffer (V10.4)**: Equities use adaptive stops based on volatility (+$54k/30d improvement)
 
 ### Filters
 | Filter | Value | Purpose |
@@ -66,6 +67,7 @@ T2/Runner exit on respective trail stops or EOD
 | **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull** |
 | **PM Cutoff** | **NQ/MNQ/QQQ** | **No NQ/MNQ/QQQ entries after 14:00** |
 | **SPY INTRADAY** | **Disabled** | **Skip SPY B2 entries (24% WR drag)** |
+| **ATR Buffer** | **SPY/QQQ only** | **Adaptive stop: ATR(14) × 0.5 vs fixed $0.02** |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
 
@@ -79,12 +81,14 @@ T2/Runner exit on respective trail stops or EOD
 | **Mini Total** | **72** | **47** | **25** | **65.3%** | **14.39** | **+$157,012** |
 | **Micro Total** | **69** | **44** | **25** | **63.8%** | **11.73** | **+$13,371** |
 
-### 30-Day Equity Results (V10.3)
+### 30-Day Equity Results (V10.4 - ATR Buffer)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
 |--------|--------|------|--------|----------|-----|-----------|
-| SPY | 46 | 27 | 19 | 58.7% | 10.16 | +$86,943 |
-| QQQ | 67 | 38 | 29 | 56.7% | 5.40 | +$63,729 |
-| **Equities** | **113** | **65** | **48** | **57.5%** | **7.10** | **+$150,672** |
+| SPY | 47 | 27 | 20 | 57.4% | - | +$103,061 |
+| QQQ | 65 | 33 | 32 | 50.8% | - | +$69,249 |
+| **Equities** | **112** | **60** | **52** | **53.6%** | **-** | **+$172,310** |
+
+*Note: ATR buffer improves P/L by +$54k vs fixed $0.02 buffer despite lower win rate (wider stops = larger risk per trade but fewer stop-hunts)*
 
 ### Entry Type Breakdown (Futures)
 | Entry Type | ES | NQ | Total |
@@ -207,7 +211,7 @@ python -m runners.run_replay
 | Position Size | 3 contracts | 3 contracts | Risk-based shares |
 | Tick Value | ES:$12.50, NQ:$5 | MES:$1.25, MNQ:$0.50 | $1/share |
 | P/L Calculation | ticks × tick_value | ticks × tick_value | shares × price move |
-| Stop Buffer | 2 ticks | 2 ticks | $0.02 |
+| Stop Buffer | 2 ticks | 2 ticks | **ATR × 0.5** (V10.4) |
 | Trail Buffer | 4-6 ticks | 4-6 ticks | $0.04-0.06 |
 | Risk Input | N/A | N/A | $ per trade |
 
@@ -225,6 +229,7 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) - **+$54k/30d improvement** |
 | V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY (+$19,692 improvement) |
 | V10.2 | Midday cutoff (12-14) + NQ/QQQ PM cutoff (+$10,340/13d improvement) |
 | V10.1 | ADX >= 22 filter for Overnight Retrace |
