@@ -15,6 +15,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
     min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
+    # V10.3: Cap BOS entry risk to avoid oversized losses
+    max_bos_risk_pts = 8.0 if symbol == 'ES' else 20.0 if symbol == 'NQ' else 8.0
 
     print(f'Fetching {symbol} 3m data for {days}-day backtest...')
     # Fetch enough bars for 30+ trading days
@@ -45,10 +47,11 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print('Strategy: V10 Quad Entry (Hybrid Exit - T1 at 4R)')
+    print('Strategy: V10.3 Quad Entry (Hybrid Exit - T1 at 4R)')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: YES')
     print(f'  - Min risk: {min_risk_pts} pts')
+    print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print('='*80)
     print()
 
@@ -80,7 +83,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
         if len(session_bars) < 50:
             continue
 
-        # Run V10.2 strategy with time filters
+        # Run V10.3 strategy with time filters and BOS risk cap
         results = run_session_v10(
             session_bars,
             all_bars,
@@ -93,8 +96,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
             enable_bos_entry=True,
             retracement_morning_only=True,
             t1_fixed_4r=True,
-            midday_cutoff=True,      # V10.2: No entries 12:00-14:00
-            pm_cutoff_nq=True,       # V10.2: No NQ entries after 14:00
+            midday_cutoff=True,       # V10.2: No entries 12:00-14:00
+            pm_cutoff_nq=True,        # V10.2: No NQ entries after 14:00
+            max_bos_risk_pts=max_bos_risk_pts,  # V10.3: Cap BOS risk
             symbol=symbol,
         )
 

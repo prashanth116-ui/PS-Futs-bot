@@ -298,6 +298,8 @@ def run_session_v10(
     midday_cutoff=True,  # No entries 12:00-14:00 (lunch lull)
     pm_cutoff_nq=True,   # No NQ entries after 14:00
     symbol='ES',         # Symbol for PM cutoff logic
+    # V10.3 risk caps for BOS entries
+    max_bos_risk_pts=None,  # Max risk for BOS entries (ES: 8, NQ: 20)
     # Exit options
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
 ):
@@ -635,6 +637,10 @@ def run_session_v10(
                 risk = abs(entry_price - stop_price)
                 if min_risk_pts > 0 and risk < min_risk_pts:
                     continue
+
+                # V10.3: Cap max risk for BOS entries to avoid oversized losses
+                if max_bos_risk_pts and risk > max_bos_risk_pts:
+                    continue  # Skip BOS entries with excessive risk
 
                 # Check for duplicate entries
                 duplicate = False
@@ -1006,7 +1012,9 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print('  - HTF bias: EMA 20/50')
     print('  - ADX filter: > 17')
     print(f'  - Max open trades: {max_open_trades}')
+    max_bos_risk_pts = 8.0 if symbol == 'ES' else 20.0 if symbol == 'NQ' else 8.0
     print(f'  - Min risk: {min_risk_pts} pts')
+    print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - T1 Exit: {"4R FIXED (Hybrid)" if t1_fixed_4r else "Structure Trail"}')
     print(f'  - Midday cutoff (12-14): YES')
     print(f'  - PM cutoff (NQ only): {"YES" if symbol == "NQ" else "NO (ES allowed)"}')
@@ -1029,6 +1037,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         t1_fixed_4r=t1_fixed_4r,
         midday_cutoff=True,
         pm_cutoff_nq=True,
+        max_bos_risk_pts=max_bos_risk_pts,
         symbol=symbol,
     )
 

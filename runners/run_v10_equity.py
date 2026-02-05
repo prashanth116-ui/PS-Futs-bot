@@ -62,6 +62,8 @@ def run_session_v10_equity(
     # V10.2 time filters
     midday_cutoff=True,         # No entries 12:00-14:00 (lunch lull)
     pm_cutoff_qqq=True,         # No QQQ entries after 14:00 (SPY allowed)
+    # V10.3 entry type filters
+    disable_intraday_spy=True,  # Disable INTRADAY entries for SPY (24% win rate)
 ):
     """
     Run V10 strategy on equity bars.
@@ -292,64 +294,66 @@ def run_session_v10_equity(
             })
 
         # Type B2: Intraday FVG Retracement
-        for fvg in session_fvgs:
-            if fvg['used_for_entry']:
-                continue
-            if i - fvg['creation_bar_idx'] < 5:
-                continue
+        # V10.3: Skip INTRADAY for SPY (24% win rate - consistent loser)
+        if not (disable_intraday_spy and symbol == 'SPY'):
+            for fvg in session_fvgs:
+                if fvg['used_for_entry']:
+                    continue
+                if i - fvg['creation_bar_idx'] < 5:
+                    continue
 
-            direction = fvg['direction']
-            fvg_mid = (fvg['low'] + fvg['high']) / 2
+                direction = fvg['direction']
+                fvg_mid = (fvg['low'] + fvg['high']) / 2
 
-            # Trend filter
-            if htf_bias and htf_bias != direction:
-                continue
+                # Trend filter
+                if htf_bias and htf_bias != direction:
+                    continue
 
-            # Check for retracement
-            in_fvg = False
-            if direction == 'LONG' and bar.low <= fvg['high'] and bar.close > fvg['low']:
-                in_fvg = True
-            elif direction == 'SHORT' and bar.high >= fvg['low'] and bar.close < fvg['high']:
-                in_fvg = True
+                # Check for retracement
+                in_fvg = False
+                if direction == 'LONG' and bar.low <= fvg['high'] and bar.close > fvg['low']:
+                    in_fvg = True
+                elif direction == 'SHORT' and bar.high >= fvg['low'] and bar.close < fvg['high']:
+                    in_fvg = True
 
-            if not in_fvg:
-                continue
+                if not in_fvg:
+                    continue
 
-            # Check for rejection
-            body = abs(bar.close - bar.open)
-            wick = bar.high - max(bar.close, bar.open) if direction == 'SHORT' else min(bar.close, bar.open) - bar.low
-            if wick <= body:
-                continue
+                # Check for rejection
+                body = abs(bar.close - bar.open)
+                wick = bar.high - max(bar.close, bar.open) if direction == 'SHORT' else min(bar.close, bar.open) - bar.low
+                if wick <= body:
+                    continue
 
-            entry_price = fvg_mid
-            if direction == 'LONG':
-                stop_price = bar.low - 0.02
-            else:
-                stop_price = bar.high + 0.02
+                entry_price = fvg_mid
+                if direction == 'LONG':
+                    stop_price = bar.low - 0.02
+                else:
+                    stop_price = bar.high + 0.02
 
-            risk = abs(entry_price - stop_price)
-            if risk < min_risk:
-                continue
+                risk = abs(entry_price - stop_price)
+                if risk < min_risk:
+                    continue
 
-            # V10.2 time filters
-            entry_hour = bar.timestamp.hour
-            if midday_cutoff and 12 <= entry_hour < 14:
-                continue  # Skip lunch lull (12:00-14:00)
-            if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                continue  # Skip QQQ afternoon entries
+                # V10.2 time filters
+                entry_hour = bar.timestamp.hour
+                if midday_cutoff and 12 <= entry_hour < 14:
+                    continue  # Skip lunch lull (12:00-14:00)
+                if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
+                    continue  # Skip QQQ afternoon entries
 
-            fvg['used_for_entry'] = True
-            all_valid_entries.append({
-                'entry_type': 'INTRADAY',
-                'direction': direction,
-                'entry_bar_idx': i,
-                'entry_time': bar.timestamp,
-                'entry_price': entry_price,
-                'stop_price': stop_price,
-                'fvg_low': fvg['low'],
-                'fvg_high': fvg['high'],
-                'risk': risk,
-            })
+                fvg['used_for_entry'] = True
+                all_valid_entries.append({
+                    'entry_type': 'INTRADAY',
+                    'direction': direction,
+                    'entry_bar_idx': i,
+                    'entry_time': bar.timestamp,
+                    'entry_price': entry_price,
+                    'stop_price': stop_price,
+                    'fvg_low': fvg['low'],
+                    'fvg_high': fvg['high'],
+                    'risk': risk,
+                })
 
         # Type C: BOS + Retracement (check for BOS)
         if recent_swing_high and bar.high > recent_swing_high['price']:

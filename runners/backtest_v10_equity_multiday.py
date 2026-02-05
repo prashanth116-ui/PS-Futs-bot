@@ -51,8 +51,9 @@ def run_multiday_backtest(symbol='SPY', days=30, risk_per_trade=500):
             max_open_trades=2,
             t1_fixed_4r=True,
             overnight_retrace_min_adx=22,
-            midday_cutoff=True,      # V10.2: No entries 12:00-14:00
-            pm_cutoff_qqq=True,      # V10.2: No QQQ entries after 14:00
+            midday_cutoff=True,       # V10.2: No entries 12:00-14:00
+            pm_cutoff_qqq=True,       # V10.2: No QQQ entries after 14:00
+            disable_intraday_spy=True,  # V10.3: Disable SPY INTRADAY (24% win rate)
         )
 
         day_pnl = sum(r['total_dollars'] for r in results)
