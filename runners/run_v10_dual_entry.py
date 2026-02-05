@@ -385,7 +385,7 @@ def run_session_v10(
                     entry_hour = creating_bar.timestamp.hour
                     if midday_cutoff and 12 <= entry_hour < 14:
                         continue  # Skip lunch lull (12:00-14:00)
-                    if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                    if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
                         continue  # Skip NQ afternoon entries
 
                     valid_entries[direction].append({
@@ -515,7 +515,7 @@ def run_session_v10(
                         entry_hour = bar.timestamp.hour
                         if midday_cutoff and 12 <= entry_hour < 14:
                             continue  # Skip lunch lull (12:00-14:00)
-                        if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                        if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
                             continue  # Skip NQ afternoon entries
 
                         valid_entries[direction].append({
@@ -655,7 +655,7 @@ def run_session_v10(
                     entry_hour = bar.timestamp.hour
                     if midday_cutoff and 12 <= entry_hour < 14:
                         continue  # Skip lunch lull (12:00-14:00)
-                    if pm_cutoff_nq and symbol == 'NQ' and entry_hour >= 14:
+                    if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
                         continue  # Skip NQ afternoon entries
 
                     valid_entries[direction].append({
@@ -973,10 +973,12 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     """
 
     tick_size = 0.25
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
+    # Tick values: ES=$12.50, NQ=$5.00, MES=$1.25 (1/10 ES), MNQ=$0.50 (1/10 NQ)
+    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
 
     if min_risk_pts is None:
-        min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
+        # Min risk in points (same for micro and mini contracts)
+        min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
 
     print(f'Fetching {symbol} {interval} data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=1000)
@@ -1012,12 +1014,13 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print('  - HTF bias: EMA 20/50')
     print('  - ADX filter: > 17')
     print(f'  - Max open trades: {max_open_trades}')
-    max_bos_risk_pts = 8.0 if symbol == 'ES' else 20.0 if symbol == 'NQ' else 8.0
+    # Max BOS risk in points (same for micro and mini contracts)
+    max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - T1 Exit: {"4R FIXED (Hybrid)" if t1_fixed_4r else "Structure Trail"}')
     print(f'  - Midday cutoff (12-14): YES')
-    print(f'  - PM cutoff (NQ only): {"YES" if symbol == "NQ" else "NO (ES allowed)"}')
+    print(f'  - PM cutoff (NQ/MNQ): {"YES" if symbol in ["NQ", "MNQ"] else "NO"}')
     print('='*70)
 
     all_results = run_session_v10(

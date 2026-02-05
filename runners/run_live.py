@@ -51,6 +51,22 @@ class LiveTrader:
             'max_bos_risk': 20.0,
             'contracts': 3,
         },
+        'MES': {
+            'tradovate_symbol': 'MESH5',
+            'tick_size': 0.25,
+            'tick_value': 1.25,
+            'min_risk': 1.5,
+            'max_bos_risk': 8.0,
+            'contracts': 3,
+        },
+        'MNQ': {
+            'tradovate_symbol': 'MNQH5',
+            'tick_size': 0.25,
+            'tick_value': 0.50,
+            'min_risk': 6.0,
+            'max_bos_risk': 20.0,
+            'contracts': 3,
+        },
     }
 
     def __init__(

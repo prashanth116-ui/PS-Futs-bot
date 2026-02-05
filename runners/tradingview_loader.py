@@ -47,6 +47,8 @@ INTERVAL_MAP = {
 SYMBOL_MAP = {
     "ES": "ES1!",
     "NQ": "NQ1!",
+    "MES": "MES1!",
+    "MNQ": "MNQ1!",
     "YM": "YM1!",
     "RTY": "RTY1!",
 }

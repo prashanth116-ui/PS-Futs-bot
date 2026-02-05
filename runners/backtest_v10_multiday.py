@@ -13,10 +13,12 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
-    min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
-    # V10.3: Cap BOS entry risk to avoid oversized losses
-    max_bos_risk_pts = 8.0 if symbol == 'ES' else 20.0 if symbol == 'NQ' else 8.0
+    # Tick values: ES=$12.50, NQ=$5.00, MES=$1.25 (1/10 ES), MNQ=$0.50 (1/10 NQ)
+    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
+    # Min risk in points (same for micro and mini)
+    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
+    # V10.3: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
+    max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
 
     print(f'Fetching {symbol} 3m data for {days}-day backtest...')
     # Fetch enough bars for 30+ trading days
