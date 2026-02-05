@@ -136,6 +136,24 @@ python -m runners.plot_v10 ES 3
 python -m runners.plot_v10_date 2026 2 3
 ```
 
+### Live Trading
+```bash
+# Paper mode - all symbols (futures + equities)
+python -m runners.run_live --paper --symbols ES NQ MES MNQ SPY QQQ
+
+# Paper mode - futures only
+python -m runners.run_live --paper --symbols ES NQ MES MNQ
+
+# Paper mode - equities only (custom risk per trade)
+python -m runners.run_live --paper --symbols SPY QQQ --equity-risk 1000
+
+# Demo mode (Tradovate sim account)
+python -m runners.run_live --symbols ES NQ
+
+# Live mode (real money - be careful!)
+python -m runners.run_live --live --symbols ES NQ
+```
+
 ### Live Monitoring
 ```bash
 # Start TradingView live monitor
@@ -158,16 +176,21 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
+| `runners/run_live.py` | **Combined live trader** - futures + equities |
 | `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ/MES/MNQ) |
 | `runners/run_v10_equity.py` | V10 Quad Entry strategy - equities (SPY/QQQ) |
 | `runners/backtest_v10_multiday.py` | V10 multi-day backtest |
 | `runners/plot_v10.py` | V10 trade visualization |
 | `runners/plot_v10_date.py` | V10 date-specific plotting |
 | `runners/analyze_win_loss.py` | Win/loss day analysis |
+| `runners/tradovate_client.py` | Tradovate API client |
+| `runners/order_manager.py` | Trade execution & management |
+| `runners/risk_manager.py` | Risk controls & limits |
 | `runners/run_tv_live.py` | Live TradingView monitor |
 | `runners/tv_login.py` | TradingView browser auth |
 | `config/strategies/ict_es.yaml` | ES configuration |
 | `config/strategies/ict_nq.yaml` | NQ configuration |
+| `config/tradovate_credentials.template.json` | API credentials template |
 
 ### Strategy Functions
 | Function | Description |
@@ -192,7 +215,7 @@ python -m runners.run_replay
 
 1. **Morning**: `python health_check.py`
 2. **Pre-market**: `python -m runners.run_v10_dual_entry ES 3` (review signals)
-3. **Market hours**: `python -m runners.run_tv_live` (monitor)
+3. **Market hours**: `python -m runners.run_live --paper --symbols ES NQ SPY QQQ` (paper trade)
 4. **Post-market**: `python -m runners.plot_v10 ES 3` (review)
 
 ## TradingView Connection
