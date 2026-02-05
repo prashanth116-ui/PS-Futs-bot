@@ -9,23 +9,23 @@ python health_check.py
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.2 (Quad Entry + Time Filters) - Feb 4, 2026
+## Current Strategy: V10.3 (Quad Entry + Optimized Filters) - Feb 4, 2026
 
 ### Supported Instruments
-| Symbol | Type | Tick Value | Min Risk | Min FVG |
-|--------|------|------------|----------|---------|
-| ES | Futures | $12.50 | 1.5 pts | 5 ticks |
-| NQ | Futures | $5.00 | 6.0 pts | 5 ticks |
-| SPY | Equity | per share | $0.30 | $0.20 |
-| QQQ | Equity | per share | $0.50 | $0.40 |
+| Symbol | Type | Tick Value | Min Risk | Max BOS Risk |
+|--------|------|------------|----------|--------------|
+| ES | Futures | $12.50 | 1.5 pts | 8.0 pts |
+| NQ | Futures | $5.00 | 6.0 pts | 20.0 pts |
+| SPY | Equity | per share | $0.30 | - |
+| QQQ | Equity | per share | $0.50 | - |
 
-### V10.1 Entry Types
+### V10.3 Entry Types
 | Type | Name | Description |
 |------|------|-------------|
 | A | Creation | Enter immediately when FVG forms with displacement |
 | B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection **(ADX >= 22)** |
-| B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection |
-| C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure |
+| B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection **[Disabled for SPY]** |
+| C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure **(Risk capped)** |
 
 ### Hybrid Exit Structure
 ```
@@ -52,37 +52,47 @@ T2/Runner exit on respective trail stops or EOD
 |--------|-------|---------|
 | Min FVG | 5 ticks | Filter tiny gaps |
 | Min Risk | ES:1.5, NQ:6.0 pts | Skip small FVGs with tight targets |
+| **Max BOS Risk** | **ES:8, NQ:20 pts** | **Cap oversized BOS entries** |
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets |
 | **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends** |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
-| **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull (both ES/NQ)** |
-| **PM Cutoff** | **NQ only** | **No NQ entries after 14:00 (ES allowed)** |
+| **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull** |
+| **PM Cutoff** | **NQ/QQQ only** | **No NQ/QQQ entries after 14:00** |
+| **SPY INTRADAY** | **Disabled** | **Skip SPY B2 entries (24% WR drag)** |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
 
-### 12-Day Backtest Results
+### 13-Day Backtest Results (V10.3)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
 |--------|--------|------|--------|----------|-----|-----------|
-| ES | 37 | 21 | 16 | 56.8% | 5.47 | +$40,988 |
-| NQ | 38 | 20 | 18 | 52.6% | 11.04 | +$105,913 |
-| **Combined** | **75** | **41** | **34** | **54.7%** | **7.70** | **+$146,901** |
+| ES | 41 | 26 | 15 | 63.4% | 11.19 | +$48,594 |
+| NQ | 31 | 21 | 10 | 67.7% | 19.39 | +$108,418 |
+| **Futures** | **72** | **47** | **25** | **65.3%** | **14.39** | **+$157,012** |
 
-### Entry Type Breakdown
+### 30-Day Equity Results (V10.3)
+| Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
+|--------|--------|------|--------|----------|-----|-----------|
+| SPY | 46 | 27 | 19 | 58.7% | 10.16 | +$86,943 |
+| QQQ | 67 | 38 | 29 | 56.7% | 5.40 | +$63,729 |
+| **Equities** | **113** | **65** | **48** | **57.5%** | **7.10** | **+$150,672** |
+
+### Entry Type Breakdown (Futures)
 | Entry Type | ES | NQ | Total |
 |------------|-----|-----|-------|
-| Creation | 15 (40.5%) | 15 (39.5%) | 30 (40%) |
-| Overnight | 15 (40.5%) | 13 (34.2%) | 28 (37%) |
-| Intraday | 4 (10.8%) | 4 (10.5%) | 8 (11%) |
-| BOS | 3 (8.1%) | 6 (15.8%) | 9 (12%) |
+| Creation | 21 (51%) | 16 (52%) | 37 (51%) |
+| Overnight | 11 (27%) | 12 (39%) | 23 (32%) |
+| Intraday | 4 (10%) | 1 (3%) | 5 (7%) |
+| BOS | 5 (12%) | 2 (6%) | 7 (10%) |
 
 ### Key Insights
 - Strategy is "home run" dependent - big trending days drive profits
-- Winning days avg 85 pts range vs 53 pts on losing days
-- Creation entries perform best (73% on winning days)
-- Breakeven at 2R tested but REJECTED - hurts runners more than helps
+- Creation entries dominate profits across all symbols
+- BOS risk cap prevents oversized losses (ES -$900 improvement)
+- SPY INTRADAY disabled: 41% → 59% win rate, +$16k improvement
+- NQ benefits most from time filters (69% day win rate)
 
 ## Key Commands
 
@@ -178,7 +188,8 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.2 | Midday cutoff (12-14) + NQ PM cutoff (+$10,340/13d improvement) |
+| V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY (+$19,692 improvement) |
+| V10.2 | Midday cutoff (12-14) + NQ/QQQ PM cutoff (+$10,340/13d improvement) |
 | V10.1 | ADX >= 22 filter for Overnight Retrace |
 | V10 | Quad Entry (Creation, Overnight, Intraday, BOS) + Hybrid Exit |
 | V9 | Min Risk Filter + Opposing FVG Exit |
