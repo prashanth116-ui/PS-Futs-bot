@@ -1,13 +1,15 @@
 """
-V10.3 Live Trading Runner
+V10.3 Live Trading Runner - Combined Futures + Equities
 
 Main entry point for live trading with the V10.3 strategy.
-Integrates signal generation, order management, and risk controls.
+Supports both futures (ES, NQ, MES, MNQ) and equities (SPY, QQQ).
 
 Usage:
-    python -m runners.run_live              # Demo mode
-    python -m runners.run_live --live       # Live mode (be careful!)
-    python -m runners.run_live --paper      # Paper trading (signals only)
+    python -m runners.run_live --paper                    # Paper mode, default symbols
+    python -m runners.run_live --paper --symbols ES NQ    # Paper mode, specific futures
+    python -m runners.run_live --paper --symbols SPY QQQ  # Paper mode, equities
+    python -m runners.run_live --paper --symbols ES NQ SPY QQQ  # All supported
+    python -m runners.run_live --live                     # Live mode (be careful!)
 """
 import sys
 sys.path.insert(0, '.')
@@ -21,6 +23,7 @@ from typing import Optional, Dict, List
 
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
+from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
 from runners.tradovate_client import TradovateClient, TradovateConfig, Environment, create_client
 from runners.order_manager import OrderManager, ManagedTrade, TradeStatus
 from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_manager
@@ -28,13 +31,13 @@ from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_ma
 
 class LiveTrader:
     """
-    V10.3 Live Trading System
+    V10.3 Live Trading System - Combined Futures + Equities
 
     Runs the strategy in real-time, generating signals and executing trades.
     """
 
-    # Symbol configurations
-    SYMBOLS = {
+    # Futures symbol configurations
+    FUTURES_SYMBOLS = {
         'ES': {
             'tradovate_symbol': 'ESH5',
             'tick_size': 0.25,
@@ -42,6 +45,7 @@ class LiveTrader:
             'min_risk': 1.5,
             'max_bos_risk': 8.0,
             'contracts': 3,
+            'type': 'futures',
         },
         'NQ': {
             'tradovate_symbol': 'NQH5',
@@ -50,6 +54,7 @@ class LiveTrader:
             'min_risk': 6.0,
             'max_bos_risk': 20.0,
             'contracts': 3,
+            'type': 'futures',
         },
         'MES': {
             'tradovate_symbol': 'MESH5',
@@ -58,6 +63,7 @@ class LiveTrader:
             'min_risk': 1.5,
             'max_bos_risk': 8.0,
             'contracts': 3,
+            'type': 'futures',
         },
         'MNQ': {
             'tradovate_symbol': 'MNQH5',
@@ -66,6 +72,23 @@ class LiveTrader:
             'min_risk': 6.0,
             'max_bos_risk': 20.0,
             'contracts': 3,
+            'type': 'futures',
+        },
+    }
+
+    # Equity symbol configurations
+    EQUITY_SYMBOLS = {
+        'SPY': {
+            'name': 'S&P 500 ETF',
+            'min_risk': 0.30,
+            'risk_per_trade': 500,  # $ risk per trade
+            'type': 'equity',
+        },
+        'QQQ': {
+            'name': 'Nasdaq 100 ETF',
+            'min_risk': 0.50,
+            'risk_per_trade': 500,  # $ risk per trade
+            'type': 'equity',
         },
     }
 
@@ -75,6 +98,7 @@ class LiveTrader:
         risk_manager: Optional[RiskManager] = None,
         paper_mode: bool = True,
         symbols: List[str] = None,
+        equity_risk: int = 500,
     ):
         """
         Initialize live trader.
@@ -84,11 +108,21 @@ class LiveTrader:
             risk_manager: Risk manager instance
             paper_mode: If True, only log signals without executing
             symbols: List of symbols to trade (default: ['ES', 'NQ'])
+            equity_risk: Risk per trade for equities in dollars
         """
         self.client = client
         self.risk_manager = risk_manager or create_default_risk_manager()
         self.paper_mode = paper_mode
         self.symbols = symbols or ['ES', 'NQ']
+        self.equity_risk = equity_risk
+
+        # Categorize symbols
+        self.futures_symbols = [s for s in self.symbols if s in self.FUTURES_SYMBOLS]
+        self.equity_symbols = [s for s in self.symbols if s in self.EQUITY_SYMBOLS]
+
+        # Update equity risk config
+        for sym in self.equity_symbols:
+            self.EQUITY_SYMBOLS[sym]['risk_per_trade'] = equity_risk
 
         # Order manager (only if client provided)
         self.order_manager = OrderManager(client) if client else None
@@ -114,10 +148,13 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.3 LIVE TRADER")
+        print("V10.3 LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
-        print(f"Symbols: {', '.join(self.symbols)}")
+        if self.futures_symbols:
+            print(f"Futures: {', '.join(self.futures_symbols)}")
+        if self.equity_symbols:
+            print(f"Equities: {', '.join(self.equity_symbols)} (${self.equity_risk}/trade risk)")
         print(f"Scan interval: {self.scan_interval}s")
         print("=" * 70)
 
@@ -177,9 +214,13 @@ class LiveTrader:
                     time.sleep(60)
                     continue
 
-                # Scan each symbol
-                for symbol in self.symbols:
-                    self._scan_symbol(symbol)
+                # Scan futures symbols
+                for symbol in self.futures_symbols:
+                    self._scan_futures_symbol(symbol)
+
+                # Scan equity symbols
+                for symbol in self.equity_symbols:
+                    self._scan_equity_symbol(symbol)
 
                 # Manage active trades
                 if self.order_manager:
@@ -195,6 +236,8 @@ class LiveTrader:
                 break
             except Exception as e:
                 print(f"Error in trading loop: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(10)
 
     def _is_trading_hours(self, dt: datetime) -> bool:
@@ -204,13 +247,13 @@ class LiveTrader:
         rth_end = dt_time(16, 0)
         return rth_start <= current_time <= rth_end
 
-    def _scan_symbol(self, symbol: str):
-        """Scan a symbol for trading signals."""
-        config = self.SYMBOLS.get(symbol)
+    def _scan_futures_symbol(self, symbol: str):
+        """Scan a futures symbol for trading signals."""
+        config = self.FUTURES_SYMBOLS.get(symbol)
         if not config:
             return
 
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol}...")
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
 
         # Fetch bars
         bars = fetch_futures_bars(symbol, interval='3m', n_bars=500)
@@ -252,7 +295,57 @@ class LiveTrader:
             symbol=symbol,
         )
 
-        # Check for new signals
+        # Process signals
+        self._process_futures_signals(symbol, results, config)
+
+    def _scan_equity_symbol(self, symbol: str):
+        """Scan an equity symbol for trading signals."""
+        config = self.EQUITY_SYMBOLS.get(symbol)
+        if not config:
+            return
+
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
+
+        # Fetch bars
+        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500)
+        if not bars:
+            print(f"  No data for {symbol}")
+            return
+
+        # Get today's session bars
+        today = datetime.now().date()
+        today_bars = [b for b in bars if b.timestamp.date() == today]
+
+        premarket_start = dt_time(4, 0)
+        rth_end = dt_time(16, 0)
+        session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
+
+        if len(session_bars) < 20:
+            print(f"  Not enough bars for {symbol}: {len(session_bars)}")
+            return
+
+        current_price = session_bars[-1].close
+        print(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
+
+        # Run V10.3 equity strategy
+        results = run_session_v10_equity(
+            session_bars,
+            bars,
+            symbol=symbol,
+            risk_per_trade=config['risk_per_trade'],
+            max_open_trades=2,
+            t1_fixed_4r=True,
+            overnight_retrace_min_adx=22,
+            midday_cutoff=True,
+            pm_cutoff_qqq=True,
+            disable_intraday_spy=True,
+        )
+
+        # Process signals
+        self._process_equity_signals(symbol, results, config)
+
+    def _process_futures_signals(self, symbol: str, results: List[Dict], config: Dict):
+        """Process signals from futures strategy."""
         for result in results:
             signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
 
@@ -292,12 +385,44 @@ class LiveTrader:
             if self.paper_mode:
                 print(f"    [PAPER] Would enter {result['direction']} {config['contracts']} {symbol}")
             else:
-                self._execute_signal(symbol, result, config)
+                self._execute_futures_signal(symbol, result, config)
 
             self.processed_signals[symbol].add(signal_id)
 
-    def _execute_signal(self, symbol: str, result: Dict, config: Dict):
-        """Execute a trading signal."""
+    def _process_equity_signals(self, symbol: str, results: List[Dict], config: Dict):
+        """Process signals from equity strategy."""
+        for result in results:
+            signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+
+            # Skip already processed signals
+            if signal_id in self.processed_signals[symbol]:
+                continue
+
+            # Check if signal is recent (within last scan interval)
+            signal_age = (datetime.now() - result['entry_time']).total_seconds()
+            if signal_age > self.scan_interval * 2:
+                # Old signal, just mark as processed
+                self.processed_signals[symbol].add(signal_id)
+                continue
+
+            print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
+            print(f"    Entry Type: {result['entry_type']}")
+            print(f"    Entry: ${result['entry_price']:.2f}")
+            print(f"    Stop: ${result['stop_price']:.2f}")
+            print(f"    Risk: ${result['risk']:.2f}")
+            print(f"    Shares: {result['total_shares']}")
+            print(f"    P/L: ${result['total_dollars']:+,.2f}")
+
+            # Execute trade (paper mode only for equities currently)
+            if self.paper_mode:
+                print(f"    [PAPER] Would enter {result['direction']} {result['total_shares']} shares {symbol}")
+            else:
+                print(f"    [EQUITY LIVE NOT IMPLEMENTED]")
+
+            self.processed_signals[symbol].add(signal_id)
+
+    def _execute_futures_signal(self, symbol: str, result: Dict, config: Dict):
+        """Execute a futures trading signal."""
         if not self.order_manager:
             return
 
@@ -312,7 +437,6 @@ class LiveTrader:
         )
 
         # Check if price has already moved to entry
-        # If so, use market order; otherwise limit
         current_bars = fetch_futures_bars(symbol, interval='3m', n_bars=1)
         if current_bars:
             current_price = current_bars[-1].close
@@ -338,6 +462,8 @@ class LiveTrader:
         for trade in active_trades:
             # Get base symbol for data fetch
             base_symbol = trade.symbol[:2]
+            if base_symbol == 'ME':
+                base_symbol = trade.symbol[:3]  # MES, MNQ
 
             # Fetch current price
             bars = fetch_futures_bars(base_symbol, interval='3m', n_bars=10)
@@ -424,19 +550,41 @@ class LiveTrader:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='V10.3 Live Trading')
+    parser = argparse.ArgumentParser(description='V10.3 Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
-    parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'], help='Symbols to trade')
+    parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
+                       help='Symbols to trade (ES, NQ, MES, MNQ, SPY, QQQ)')
+    parser.add_argument('--equity-risk', type=int, default=500,
+                       help='Risk per trade for equities in dollars (default: 500)')
     args = parser.parse_args()
+
+    # Validate symbols
+    valid_futures = ['ES', 'NQ', 'MES', 'MNQ']
+    valid_equities = ['SPY', 'QQQ']
+    valid_symbols = valid_futures + valid_equities
+
+    for sym in args.symbols:
+        if sym not in valid_symbols:
+            print(f"Invalid symbol: {sym}")
+            print(f"Valid symbols: {', '.join(valid_symbols)}")
+            return
 
     # Determine mode
     paper_mode = args.paper or (not args.live)
     environment = 'live' if args.live else 'demo'
 
+    # Categorize symbols
+    futures = [s for s in args.symbols if s in valid_futures]
+    equities = [s for s in args.symbols if s in valid_equities]
+
     print(f"Starting V10.3 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
+    if futures:
+        print(f"Futures: {', '.join(futures)}")
+    if equities:
+        print(f"Equities: {', '.join(equities)} (${args.equity_risk}/trade)")
 
     # Create client (unless paper mode)
     client = None
@@ -453,6 +601,7 @@ def main():
         client=client,
         paper_mode=paper_mode,
         symbols=args.symbols,
+        equity_risk=args.equity_risk,
     )
 
     # Start trading
