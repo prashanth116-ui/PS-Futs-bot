@@ -14,10 +14,14 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk |
 |--------|------|------------|----------|--------------|
-| ES | Futures | $12.50 | 1.5 pts | 8.0 pts |
-| NQ | Futures | $5.00 | 6.0 pts | 20.0 pts |
-| SPY | Equity | per share | $0.30 | - |
-| QQQ | Equity | per share | $0.50 | - |
+| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts |
+| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts |
+| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts |
+| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts |
+| SPY | S&P 500 ETF | per share | $0.30 | - |
+| QQQ | Nasdaq 100 ETF | per share | $0.50 | - |
+
+**Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
 ### V10.3 Entry Types
 | Type | Name | Description |
@@ -60,7 +64,7 @@ T2/Runner exit on respective trail stops or EOD
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
 | **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull** |
-| **PM Cutoff** | **NQ/QQQ only** | **No NQ/QQQ entries after 14:00** |
+| **PM Cutoff** | **NQ/MNQ/QQQ** | **No NQ/MNQ/QQQ entries after 14:00** |
 | **SPY INTRADAY** | **Disabled** | **Skip SPY B2 entries (24% WR drag)** |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
@@ -70,7 +74,10 @@ T2/Runner exit on respective trail stops or EOD
 |--------|--------|------|--------|----------|-----|-----------|
 | ES | 41 | 26 | 15 | 63.4% | 11.19 | +$48,594 |
 | NQ | 31 | 21 | 10 | 67.7% | 19.39 | +$108,418 |
-| **Futures** | **72** | **47** | **25** | **65.3%** | **14.39** | **+$157,012** |
+| MES | 39 | 23 | 16 | 59.0% | 9.09 | +$3,893 |
+| MNQ | 30 | 21 | 9 | 70.0% | 15.13 | +$9,478 |
+| **Mini Total** | **72** | **47** | **25** | **65.3%** | **14.39** | **+$157,012** |
+| **Micro Total** | **69** | **44** | **25** | **63.8%** | **11.73** | **+$13,371** |
 
 ### 30-Day Equity Results (V10.3)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
@@ -98,9 +105,13 @@ T2/Runner exit on respective trail stops or EOD
 
 ### Backtesting
 ```bash
-# V10 futures backtest today
+# V10 futures backtest today (mini contracts)
 python -m runners.run_v10_dual_entry ES 3
 python -m runners.run_v10_dual_entry NQ 3
+
+# V10 futures backtest today (micro contracts)
+python -m runners.run_v10_dual_entry MES 3
+python -m runners.run_v10_dual_entry MNQ 3
 
 # V10 equity backtest today (SPY/QQQ)
 python -m runners.run_v10_equity SPY 500   # $500 risk per trade
@@ -109,6 +120,8 @@ python -m runners.run_v10_equity QQQ 500
 # V10 multi-day backtest (30 days)
 python -m runners.backtest_v10_multiday ES 30
 python -m runners.backtest_v10_multiday NQ 30
+python -m runners.backtest_v10_multiday MES 30
+python -m runners.backtest_v10_multiday MNQ 30
 
 # Analyze winning vs losing days
 python -m runners.analyze_win_loss ES
@@ -145,7 +158,7 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
-| `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ) |
+| `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ/MES/MNQ) |
 | `runners/run_v10_equity.py` | V10 Quad Entry strategy - equities (SPY/QQQ) |
 | `runners/backtest_v10_multiday.py` | V10 multi-day backtest |
 | `runners/plot_v10.py` | V10 trade visualization |
@@ -159,20 +172,21 @@ python -m runners.run_replay
 ### Strategy Functions
 | Function | Description |
 |----------|-------------|
-| `run_session_v10()` | V10 Quad Entry - futures (ES/NQ) |
+| `run_session_v10()` | V10 Quad Entry - futures (ES/NQ/MES/MNQ) |
 | `run_session_v10_equity()` | V10 Quad Entry - equities (SPY/QQQ) |
 | `run_session_with_position_limit()` | V8-Independent with position limit |
 | `run_multi_trade()` | V7-MultiEntry with profit-protected 2nd entry |
 | `run_trade()` | V6-Aggressive single entry (legacy) |
 
-### Equity vs Futures Differences
-| Aspect | Futures (ES/NQ) | Equities (SPY/QQQ) |
-|--------|-----------------|-------------------|
-| Position Size | Fixed contracts (3) | Risk-based shares |
-| P/L Calculation | ticks × tick_value | shares × price move |
-| Stop Buffer | 2 ticks | $0.02 |
-| Trail Buffer | 4-6 ticks | $0.04-0.06 |
-| Risk Input | N/A | $ per trade |
+### Instrument Differences
+| Aspect | Mini (ES/NQ) | Micro (MES/MNQ) | Equities (SPY/QQQ) |
+|--------|--------------|-----------------|-------------------|
+| Position Size | 3 contracts | 3 contracts | Risk-based shares |
+| Tick Value | ES:$12.50, NQ:$5 | MES:$1.25, MNQ:$0.50 | $1/share |
+| P/L Calculation | ticks × tick_value | ticks × tick_value | shares × price move |
+| Stop Buffer | 2 ticks | 2 ticks | $0.02 |
+| Trail Buffer | 4-6 ticks | 4-6 ticks | $0.04-0.06 |
+| Risk Input | N/A | N/A | $ per trade |
 
 ## Daily Workflow
 
