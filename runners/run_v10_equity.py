@@ -148,8 +148,8 @@ def run_session_v10_equity(
     for i, bar in enumerate(session_bars):
         bar_time = bar.timestamp.time()
 
-        # Update indicators periodically
-        if i % 20 == 0:
+        # Update indicators every 5 bars (was 20 - caused stale bias issues)
+        if i % 5 == 0:
             bars_to_now = [b for b in all_bars if b.timestamp <= bar.timestamp][-100:]
             ema_20 = calculate_ema(bars_to_now, 20)
             ema_50 = calculate_ema(bars_to_now, 50)
@@ -305,9 +305,16 @@ def run_session_v10_equity(
                 direction = fvg['direction']
                 fvg_mid = (fvg['low'] + fvg['high']) / 2
 
-                # Trend filter
+                # Trend filter (HTF bias)
                 if htf_bias and htf_bias != direction:
                     continue
+
+                # DI filter (was missing - caused QQQ losses)
+                if plus_di and minus_di:
+                    if direction == 'LONG' and plus_di < minus_di:
+                        continue
+                    if direction == 'SHORT' and minus_di < plus_di:
+                        continue
 
                 # Check for retracement
                 in_fvg = False
