@@ -372,8 +372,9 @@ def run_session_v10(
 
                 ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
                 # V10.5: Skip ADX check if displacement >= 3x average body (high momentum override)
+                # But still require ADX >= 10 as a safety floor
                 high_disp = high_displacement_override > 0 and body >= avg_body_size * high_displacement_override
-                adx_ok = adx is None or adx >= min_adx or high_disp
+                adx_ok = adx is None or adx >= min_adx or (high_disp and adx is not None and adx >= 10)
                 di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
 
                 if ema_ok and adx_ok and di_ok:
@@ -1025,7 +1026,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print(f'  - Entry Type C (BOS + Retrace): {"ENABLED" if enable_bos else "DISABLED"}')
     print('  - Stop buffer: +2 ticks')
     print('  - HTF bias: EMA 20/50')
-    print('  - ADX filter: > 17 (or 3x displacement override)')
+    print('  - ADX filter: > 17 (or 3x displacement with ADX >= 10)')
     print(f'  - Max open trades: {max_open_trades}')
     # Max BOS risk in points (same for micro and mini contracts)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0

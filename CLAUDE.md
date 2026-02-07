@@ -67,7 +67,7 @@ T2/Runner exit on respective trail stops or EOD
 | Min Risk | ES:1.5, NQ:6.0 pts | Skip small FVGs with tight targets |
 | **Max BOS Risk** | **ES:8, NQ:20 pts** | **Cap oversized BOS entries** |
 | Displacement | 1.0x avg body | Lower threshold for more setups |
-| **3x Displacement** | **>= 3.0x avg body** | **Skip ADX for high-momentum Creation entries** |
+| **3x Displacement** | **>= 3.0x avg body** | **Reduce ADX to >= 10 for high-momentum Creation entries** |
 | HTF Bias | EMA 20/50 | Trade with trend |
 | ADX | > 17 | Only trending markets (bypassed by 3x displacement) |
 | **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends** |

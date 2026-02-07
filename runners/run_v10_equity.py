@@ -238,11 +238,14 @@ def run_session_v10_equity(
                     continue
 
             # V10.5: Skip ADX check if displacement >= 3x average body (high momentum override)
+            # But still require ADX >= 10 as a safety floor
             high_disp = high_displacement_override > 0 and avg_body > 0 and body >= avg_body * high_displacement_override
 
             # Trend filter
             if not high_disp and (adx is None or adx < 17):
                 continue
+            if high_disp and (adx is None or adx < 10):
+                continue  # Safety floor for high displacement
             if htf_bias and htf_bias != direction:
                 continue
 
