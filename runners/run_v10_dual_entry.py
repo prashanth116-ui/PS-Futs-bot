@@ -997,6 +997,15 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
 
     print(f'Date: {today}')
     print(f'Session bars: {len(session_bars)}')
+
+    # Print RTH key levels (safeguard against misreading data)
+    rth_bars = [b for b in session_bars if b.timestamp.time() >= dt_time(9, 30)]
+    if rth_bars:
+        rth_open = rth_bars[0].open
+        rth_high = max(b.high for b in rth_bars)
+        rth_low = min(b.low for b in rth_bars)
+        print(f'RTH: Open={rth_open:.2f} High={rth_high:.2f} Low={rth_low:.2f}')
+
     print()
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')

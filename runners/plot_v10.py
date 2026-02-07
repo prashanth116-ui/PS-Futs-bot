@@ -54,6 +54,15 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
     print(f'Date: {today}')
     print(f'Session bars: {len(session_bars)}')
 
+    # Print RTH key levels (safeguard against misreading chart)
+    rth_bars = [b for b in session_bars if b.timestamp.time() >= dt_time(9, 30)]
+    if rth_bars:
+        rth_open = rth_bars[0].open
+        rth_high = max(b.high for b in rth_bars)
+        rth_low = min(b.low for b in rth_bars)
+        rth_close = rth_bars[-1].close
+        print(f'RTH: Open={rth_open:.2f} High={rth_high:.2f} Low={rth_low:.2f} Close={rth_close:.2f}')
+
     if len(session_bars) < 50:
         print('Not enough bars')
         return
@@ -306,6 +315,21 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
     ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=9,
             verticalalignment='top', horizontalalignment='right',
             fontweight='bold', bbox=props, family='monospace')
+
+    # Add RTH key levels box (bottom left) - prevents misreading chart
+    rth_bars = [b for b in session_bars if b.timestamp.time() >= dt_time(9, 30)]
+    if rth_bars:
+        rth_info = (
+            f"RTH KEY LEVELS\n"
+            f"Open:  {rth_bars[0].open:.2f}\n"
+            f"High:  {max(b.high for b in rth_bars):.2f}\n"
+            f"Low:   {min(b.low for b in rth_bars):.2f}\n"
+            f"Close: {rth_bars[-1].close:.2f}"
+        )
+        rth_props = dict(boxstyle='round', facecolor='#E3F2FD', alpha=0.95, edgecolor='#1976D2', linewidth=2)
+        ax.text(0.02, 0.02, rth_info, transform=ax.transAxes, fontsize=10,
+                verticalalignment='bottom', horizontalalignment='left',
+                fontweight='bold', bbox=rth_props, family='monospace')
 
     plt.tight_layout()
     filename = f'backtest_{symbol}_V10_{today}.png'

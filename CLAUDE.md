@@ -6,6 +6,13 @@ Run the health check script at the beginning of each session:
 python health_check.py
 ```
 
+## Important: Data Verification
+**ALWAYS verify numerical data before making claims about prices.** Do NOT rely on visual interpretation of chart images. The backtest and plot scripts now print RTH key levels:
+```
+RTH: Open=6856.25 High=6965.50 Low=6850.25
+```
+Use these printed values, not the chart image, to reference price levels.
+
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
