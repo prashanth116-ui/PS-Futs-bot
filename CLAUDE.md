@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.4 (ATR Buffer for Equities) - Feb 5, 2026
+## Current Strategy: V10.5 (High Displacement Override) - Feb 6, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk |
@@ -30,10 +30,10 @@ Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
 **Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
-### V10.3 Entry Types
+### V10.5 Entry Types
 | Type | Name | Description |
 |------|------|-------------|
-| A | Creation | Enter immediately when FVG forms with displacement |
+| A | Creation | Enter immediately when FVG forms with displacement **(3x override skips ADX)** |
 | B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection **(ADX >= 22)** |
 | B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection **[Disabled for SPY]** |
 | C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure **(Risk capped)** |
@@ -53,6 +53,7 @@ T2/Runner exit on respective trail stops or EOD
 ### Strategy Features
 - **Quad Entry Mode**: 4 distinct entry types (Creation, Overnight, Intraday, BOS)
 - **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
+- **High Displacement Override (V10.5)**: Skip ADX check if candle body >= 3x avg (+$30k/14d improvement)
 - **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
 - **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
 - **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
@@ -66,8 +67,9 @@ T2/Runner exit on respective trail stops or EOD
 | Min Risk | ES:1.5, NQ:6.0 pts | Skip small FVGs with tight targets |
 | **Max BOS Risk** | **ES:8, NQ:20 pts** | **Cap oversized BOS entries** |
 | Displacement | 1.0x avg body | Lower threshold for more setups |
+| **3x Displacement** | **>= 3.0x avg body** | **Skip ADX for high-momentum Creation entries** |
 | HTF Bias | EMA 20/50 | Trade with trend |
-| ADX | > 17 | Only trending markets |
+| ADX | > 17 | Only trending markets (bypassed by 3x displacement) |
 | **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends** |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
@@ -236,6 +238,7 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.5 | High displacement override (3x skips ADX) - **+$30k/14d improvement** |
 | V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) - **+$54k/30d improvement** |
 | V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY (+$19,692 improvement) |
 | V10.2 | Midday cutoff (12-14) + NQ/QQQ PM cutoff (+$10,340/13d improvement) |

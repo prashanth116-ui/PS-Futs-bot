@@ -99,6 +99,8 @@ def run_session_v10_equity(
     disable_intraday_spy=True,  # Disable INTRADAY entries for SPY (24% win rate)
     # V10.4 ATR buffer
     atr_buffer_multiplier=0.5,  # Stop buffer = ATR × multiplier (0 = use fixed $0.02)
+    # V10.5 high displacement override
+    high_displacement_override=3.0,  # Skip ADX check if displacement >= 3x avg body
 ):
     """
     Run V10 strategy on equity bars.
@@ -225,8 +227,21 @@ def run_session_v10_equity(
 
             direction = fvg['direction']
 
+            # Displacement check (needed before ADX for override logic)
+            body = 0
+            avg_body = 0
+            if i >= 1:
+                prev_bar = session_bars[i-1]
+                body = abs(prev_bar.close - prev_bar.open)
+                avg_body = sum(abs(b.close - b.open) for b in session_bars[max(0,i-10):i]) / min(10, i) if i > 0 else body
+                if body < avg_body * 1.0:
+                    continue
+
+            # V10.5: Skip ADX check if displacement >= 3x average body (high momentum override)
+            high_disp = high_displacement_override > 0 and avg_body > 0 and body >= avg_body * high_displacement_override
+
             # Trend filter
-            if adx is None or adx < 17:
+            if not high_disp and (adx is None or adx < 17):
                 continue
             if htf_bias and htf_bias != direction:
                 continue
@@ -236,14 +251,6 @@ def run_session_v10_equity(
                 if direction == 'LONG' and plus_di < minus_di:
                     continue
                 if direction == 'SHORT' and minus_di < plus_di:
-                    continue
-
-            # Displacement check
-            if i >= 1:
-                prev_bar = session_bars[i-1]
-                body = abs(prev_bar.close - prev_bar.open)
-                avg_body = sum(abs(b.close - b.open) for b in session_bars[max(0,i-10):i]) / min(10, i) if i > 0 else body
-                if body < avg_body * 1.0:
                     continue
 
             entry_price = (fvg['low'] + fvg['high']) / 2
