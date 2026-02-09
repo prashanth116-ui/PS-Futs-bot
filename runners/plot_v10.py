@@ -1,10 +1,15 @@
 """
-Plot today's trades with V10 Triple Entry Mode.
+Plot today's trades with V10.6 Quad Entry Mode.
 
-V10 Entry Types:
+V10.6 Entry Types:
 - Type A (Creation): Enter when FVG forms with displacement
-- Type B (Overnight Retrace): Enter when price retraces into overnight FVG
-- Type C (BOS + Retrace): Enter when price retraces into session FVG after BOS
+- Type B1 (Overnight Retrace): Enter when price retraces into overnight FVG (ADX >= 22)
+- Type B2 (Intraday Retrace): Enter when price retraces into session FVG
+- Type C (BOS + Retrace): Per-symbol control with daily loss limit
+
+V10.6 BOS Settings:
+- ES/MES: BOS disabled (20% win rate)
+- NQ/MNQ: BOS enabled with 1 loss/day limit
 """
 import sys
 sys.path.insert(0, '.')
@@ -31,11 +36,14 @@ def calculate_ema(closes, period):
 
 
 def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
-    """Plot today's trades with V10 Triple Entry strategy."""
+    """Plot today's trades with V10.6 Quad Entry strategy."""
 
     tick_size = 0.25
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25
-    min_risk_pts = 1.5 if symbol == 'ES' else 6.0 if symbol == 'NQ' else 1.5
+    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
+    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
+    max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
+    # V10.6: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
+    disable_bos = symbol in ['ES', 'MES']
 
     print(f'Fetching {symbol} 3m data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)
@@ -67,7 +75,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
         print('Not enough bars')
         return
 
-    # Run V10 strategy with all entry types (Hybrid exit: T1 at 4R)
+    # Run V10.6 strategy with all entry types (Hybrid exit: T1 at 4R)
     all_results = run_session_v10(
         session_bars,
         all_bars,
@@ -80,6 +88,14 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
         enable_bos_entry=True,
         retracement_morning_only=retracement_morning_only,
         t1_fixed_4r=True,  # Hybrid: T1 takes profit at 4R
+        overnight_retrace_min_adx=22,  # V10.1: ADX filter for overnight
+        midday_cutoff=True,  # V10.2: No entries 12-14
+        pm_cutoff_nq=True,  # V10.2: No NQ after 14:00
+        symbol=symbol,
+        max_bos_risk_pts=max_bos_risk,  # V10.4: Cap BOS risk
+        high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
+        disable_bos_retrace=disable_bos,  # V10.6: Per-symbol BOS control
+        bos_daily_loss_limit=1,  # V10.6: Stop BOS after 1 loss/day
     )
 
     if not all_results:
@@ -270,8 +286,9 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
     bos_count = sum(1 for r in all_results if r['entry_type'] == 'BOS_RETRACE')
 
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
-    ax.set_title(f'{symbol} 3-Minute | {today} | V10 Quad Entry Mode\n'
-                 f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | '
+    bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
+    ax.set_title(f'{symbol} 3-Minute | {today} | V10.6 Quad Entry Mode\n'
+                 f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
     ax.legend(loc='upper left', fontsize=10)
@@ -332,7 +349,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
                 fontweight='bold', bbox=rth_props, family='monospace')
 
     plt.tight_layout()
-    filename = f'backtest_{symbol}_V10_{today}.png'
+    filename = f'backtest_{symbol}_V10.6_{today}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()
