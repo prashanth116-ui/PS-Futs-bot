@@ -24,8 +24,17 @@ import os
 import argparse
 import time
 import signal
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Optional, Dict, List
+from zoneinfo import ZoneInfo
+
+# EST timezone for all trading operations
+EST = ZoneInfo('America/New_York')
+
+
+def get_est_now() -> datetime:
+    """Get current time in EST."""
+    return datetime.now(EST)
 
 
 def log(msg: str):
@@ -170,6 +179,8 @@ class LiveTrader:
         if self.equity_symbols:
             print(f"Equities: {', '.join(self.equity_symbols)} (${self.equity_risk}/trade, ATR buffer)")
         print(f"Scan interval: {self.scan_interval}s")
+        print(f"Timezone: EST (Current: {get_est_now().strftime('%H:%M:%S')})")
+        print(f"Futures hours: 4:00-16:00 ET | Equities: 9:30-16:00 ET")
         print("=" * 70)
 
         if not self.paper_mode and self.client:
@@ -213,7 +224,7 @@ class LiveTrader:
         """Main trading loop."""
         while self.running:
             try:
-                current_time = datetime.now()
+                current_time = get_est_now()
 
                 # Check if within trading hours (RTH: 9:30-16:00 ET)
                 if not self._is_trading_hours(current_time):
@@ -281,11 +292,34 @@ class LiveTrader:
                 log(f"  ... waiting {remaining}s until next scan")
 
     def _is_trading_hours(self, dt: datetime) -> bool:
-        """Check if within RTH trading hours."""
+        """Check if within trading hours (EST).
+
+        Futures: 4:00-16:00 ET (pre-market + RTH)
+        Equities: 9:30-16:00 ET (RTH only)
+        """
+        # Convert to EST if not already
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=EST)
+        else:
+            dt = dt.astimezone(EST)
+
         current_time = dt.time()
-        rth_start = dt_time(9, 30)
-        rth_end = dt_time(16, 0)
-        return rth_start <= current_time <= rth_end
+
+        # Futures trade pre-market (4:00 AM ET)
+        if self.futures_symbols:
+            futures_start = dt_time(4, 0)
+            futures_end = dt_time(16, 0)
+            if futures_start <= current_time <= futures_end:
+                return True
+
+        # Equities trade RTH only (9:30 AM ET)
+        if self.equity_symbols:
+            equity_start = dt_time(9, 30)
+            equity_end = dt_time(16, 0)
+            if equity_start <= current_time <= equity_end:
+                return True
+
+        return False
 
     def _scan_futures_symbol(self, symbol: str):
         """Scan a futures symbol for trading signals."""
@@ -293,7 +327,7 @@ class LiveTrader:
         if not config:
             return
 
-        log(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
+        log(f"\n[{get_est_now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
 
         # Fetch bars with timeout
         bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
@@ -302,7 +336,7 @@ class LiveTrader:
             return
 
         # Get today's session bars
-        today = datetime.now().date()
+        today = get_est_now().date()
         today_bars = [b for b in bars if b.timestamp.date() == today]
 
         premarket_start = dt_time(4, 0)
@@ -350,7 +384,7 @@ class LiveTrader:
         if not config:
             return
 
-        log(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
+        log(f"\n[{get_est_now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
 
         # Fetch bars with timeout
         bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
@@ -359,7 +393,7 @@ class LiveTrader:
             return
 
         # Get today's session bars
-        today = datetime.now().date()
+        today = get_est_now().date()
         today_bars = [b for b in bars if b.timestamp.date() == today]
 
         premarket_start = dt_time(4, 0)
@@ -406,7 +440,7 @@ class LiveTrader:
                 continue
 
             # Check if signal is recent (within last scan interval)
-            signal_age = (datetime.now() - result['entry_time']).total_seconds()
+            signal_age = (get_est_now() - result['entry_time']).total_seconds()
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
@@ -451,7 +485,7 @@ class LiveTrader:
                 continue
 
             # Check if signal is recent (within last scan interval)
-            signal_age = (datetime.now() - result['entry_time']).total_seconds()
+            signal_age = (get_est_now() - result['entry_time']).total_seconds()
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
@@ -579,7 +613,7 @@ class LiveTrader:
     def _print_status(self):
         """Print current status."""
         risk_summary = self.risk_manager.get_summary()
-        log(f"\n--- Status [{datetime.now().strftime('%H:%M:%S')}] ---")
+        log(f"\n--- Status [{get_est_now().strftime('%H:%M:%S')}] ---")
         log(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
         log(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
         log(f"Status: {risk_summary['status'].upper()}")
