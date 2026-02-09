@@ -57,23 +57,8 @@ def create_bullish_setup_bars() -> list[Bar]:
     4. FVG forms during the move up
     5. Price retraces into FVG (entry)
 
-    Price action visualization:
-
-        Bar 15:     ████  <- Price retraces into FVG (entry trigger)
-        Bar 14:   ████████ <- Top of move
-        Bar 13:     ████   <- FVG forms here (bar[11].high < bar[13].low)
-        Bar 12:   ████████ <- Displacement candle (big body)
-        Bar 11:     ████   <- Start of BOS move
-        ----- BOS Level (swing high from bar 6) -----
-        Bar 6-10:  ranging
-        ----- Swing High ~4502 -----
-        Bar 5:      ████
-        Bar 4:    ████████ <- Swing high bar
-        Bar 3:      ████
-        ----- Swing Low ~4495 -----
-        Bar 2:      ████   <- Sweep bar (wick below, close inside)
-        Bar 1:    ████     <- Swing low bar
-        Bar 0:      ████
+    Note: Swing detection requires swing_left_bars=2, swing_right_bars=1
+    So swing points need at least 2 bars to the left and 1 bar to the right.
     """
     bars: list[Bar] = []
 
@@ -81,78 +66,79 @@ def create_bullish_setup_bars() -> list[Bar]:
     base_time = datetime(2024, 1, 15, 9, 30, tzinfo=ET)
 
     # -----------------------------------------------------------------
-    # Bars 0-5: Establish initial structure with swing low and swing high
+    # Bars 0-2: Leading context (higher lows to set up swing low detection)
     # -----------------------------------------------------------------
 
-    # Bar 0: Setup bar
+    # Bar 0: Context bar with higher low
     bars.append(make_bar(base_time, 4498.00, 4499.00, 4497.00, 4498.50))
 
-    # Bar 1: Swing LOW forms here (low = 4495.00)
-    bars.append(make_bar(base_time + timedelta(minutes=5), 4498.50, 4499.00, 4495.00, 4496.00))
+    # Bar 1: Context bar with higher low
+    bars.append(make_bar(base_time + timedelta(minutes=5), 4498.50, 4499.50, 4496.50, 4497.00))
 
-    # Bar 2: Recovery bar
-    bars.append(make_bar(base_time + timedelta(minutes=10), 4496.00, 4498.00, 4495.50, 4497.50))
-
-    # Bar 3: Move up
-    bars.append(make_bar(base_time + timedelta(minutes=15), 4497.50, 4500.00, 4497.00, 4499.50))
-
-    # Bar 4: Swing HIGH forms here (high = 4502.00)
-    bars.append(make_bar(base_time + timedelta(minutes=20), 4499.50, 4502.00, 4499.00, 4501.00))
-
-    # Bar 5: Pullback from high
-    bars.append(make_bar(base_time + timedelta(minutes=25), 4501.00, 4501.50, 4499.50, 4500.00))
+    # Bar 2: Context bar with higher low (still above 4495)
+    bars.append(make_bar(base_time + timedelta(minutes=10), 4497.00, 4498.00, 4496.00, 4496.50))
 
     # -----------------------------------------------------------------
-    # Bars 6-9: Ranging / consolidation (confirms swing structure)
+    # Bar 3: Swing LOW forms here (low = 4495.00)
+    # Needs: bars 1,2 with higher lows (left), bar 4 with higher low (right)
     # -----------------------------------------------------------------
 
-    # Bar 6
-    bars.append(make_bar(base_time + timedelta(minutes=30), 4500.00, 4501.00, 4498.50, 4499.00))
+    bars.append(make_bar(base_time + timedelta(minutes=15), 4496.50, 4497.00, 4495.00, 4496.00))
 
-    # Bar 7
-    bars.append(make_bar(base_time + timedelta(minutes=35), 4499.00, 4500.00, 4497.50, 4498.00))
+    # Bar 4: Recovery bar (higher low confirms bar 3 as swing low)
+    bars.append(make_bar(base_time + timedelta(minutes=20), 4496.00, 4498.00, 4495.50, 4497.50))
 
-    # Bar 8
-    bars.append(make_bar(base_time + timedelta(minutes=40), 4498.00, 4499.50, 4497.00, 4498.50))
-
-    # Bar 9
-    bars.append(make_bar(base_time + timedelta(minutes=45), 4498.50, 4499.00, 4496.50, 4497.00))
+    # Bar 5: Move up
+    bars.append(make_bar(base_time + timedelta(minutes=25), 4497.50, 4500.00, 4497.00, 4499.50))
 
     # -----------------------------------------------------------------
-    # Bar 10: SWEEP - Price sweeps below swing low (4495) then closes back inside
-    # This is the liquidity grab that triggers our setup
+    # Bar 6: Swing HIGH forms here (high = 4502.00)
+    # Needs: bars 4,5 with lower highs (left), bar 7 with lower high (right)
     # -----------------------------------------------------------------
 
-    # Sweep bar: low = 4494.00 (below swing low 4495), close = 4496.50 (back inside)
-    bars.append(make_bar(base_time + timedelta(minutes=50), 4497.00, 4497.50, 4494.00, 4496.50))
+    bars.append(make_bar(base_time + timedelta(minutes=30), 4499.50, 4502.00, 4499.00, 4501.00))
+
+    # Bar 7: Pullback from high (lower high confirms bar 6 as swing high)
+    bars.append(make_bar(base_time + timedelta(minutes=35), 4501.00, 4501.50, 4499.50, 4500.00))
 
     # -----------------------------------------------------------------
-    # Bars 11-13: BOS + FVG formation
-    # Price breaks above swing high (4502) with displacement
+    # Bars 8-11: Ranging / consolidation
     # -----------------------------------------------------------------
 
-    # Bar 11: Start of bullish move
-    bars.append(make_bar(base_time + timedelta(minutes=55), 4496.50, 4500.00, 4496.00, 4499.50))
+    bars.append(make_bar(base_time + timedelta(minutes=40), 4500.00, 4501.00, 4498.50, 4499.00))
+    bars.append(make_bar(base_time + timedelta(minutes=45), 4499.00, 4500.00, 4497.50, 4498.00))
+    bars.append(make_bar(base_time + timedelta(minutes=50), 4498.00, 4499.50, 4497.00, 4498.50))
+    bars.append(make_bar(base_time + timedelta(minutes=55), 4498.50, 4499.00, 4496.50, 4497.00))
 
-    # Bar 12: Displacement candle (big bullish body) - creates FVG
-    # This bar's body should be large to show conviction
-    bars.append(make_bar(base_time + timedelta(minutes=60), 4499.50, 4505.00, 4499.00, 4504.50))
+    # -----------------------------------------------------------------
+    # Bar 12: SWEEP - Price sweeps below swing low (4495) then closes back inside
+    # -----------------------------------------------------------------
 
-    # Bar 13: Continuation - completes FVG and BOS
-    # FVG: bar[11].high (4500.00) < bar[13].low (4503.00) = gap of 3 points
+    bars.append(make_bar(base_time + timedelta(minutes=60), 4497.00, 4497.50, 4494.00, 4496.50))
+
+    # -----------------------------------------------------------------
+    # Bars 13-15: BOS + FVG formation
+    # -----------------------------------------------------------------
+
+    # Bar 13: Start of bullish move
+    bars.append(make_bar(base_time + timedelta(minutes=65), 4496.50, 4500.00, 4496.00, 4499.50))
+
+    # Bar 14: Displacement candle (big bullish body) - creates FVG
+    bars.append(make_bar(base_time + timedelta(minutes=70), 4499.50, 4505.00, 4499.00, 4504.50))
+
+    # Bar 15: Continuation - completes FVG and BOS
+    # FVG: bar[13].high (4500.00) < bar[15].low (4503.00) = gap of 3 points
     # BOS: close (4507) > swing high (4502)
-    bars.append(make_bar(base_time + timedelta(minutes=65), 4504.50, 4508.00, 4503.00, 4507.00))
+    bars.append(make_bar(base_time + timedelta(minutes=75), 4504.50, 4508.00, 4503.00, 4507.00))
 
     # -----------------------------------------------------------------
-    # Bars 14-15: Retracement into FVG (entry trigger)
+    # Bars 16-17: Retracement into FVG (entry trigger)
     # -----------------------------------------------------------------
 
-    # Bar 14: Slight pullback begins
-    bars.append(make_bar(base_time + timedelta(minutes=70), 4507.00, 4508.50, 4504.00, 4505.00))
+    bars.append(make_bar(base_time + timedelta(minutes=80), 4507.00, 4508.50, 4504.00, 4505.00))
 
-    # Bar 15: Price retraces into FVG zone (4500-4503)
-    # Entry should trigger here
-    bars.append(make_bar(base_time + timedelta(minutes=75), 4505.00, 4506.00, 4501.00, 4502.50))
+    # Bar 17: Price retraces into FVG zone (4500-4503)
+    bars.append(make_bar(base_time + timedelta(minutes=85), 4505.00, 4506.00, 4501.00, 4502.50))
 
     return bars
 
@@ -165,6 +151,8 @@ def create_bearish_setup_bars() -> list[Bar]:
     3. BOS below swing low (bearish confirmation)
     4. FVG forms during the move down
     5. Price retraces into FVG (entry)
+
+    Note: Swing detection requires swing_left_bars=2, swing_right_bars=1
     """
     bars: list[Bar] = []
 
@@ -172,65 +160,79 @@ def create_bearish_setup_bars() -> list[Bar]:
     base_time = datetime(2024, 1, 16, 9, 30, tzinfo=ET)
 
     # -----------------------------------------------------------------
-    # Bars 0-5: Establish initial structure
+    # Bars 0-2: Leading context (lower highs to set up swing high detection)
     # -----------------------------------------------------------------
 
-    # Bar 0: Setup
-    bars.append(make_bar(base_time, 4502.00, 4503.00, 4501.00, 4502.50))
+    # Bar 0: Context bar with lower high
+    bars.append(make_bar(base_time, 4501.00, 4502.00, 4500.00, 4501.50))
 
-    # Bar 1: Swing HIGH forms (high = 4505.00)
-    bars.append(make_bar(base_time + timedelta(minutes=5), 4502.50, 4505.00, 4502.00, 4504.00))
+    # Bar 1: Context bar with lower high
+    bars.append(make_bar(base_time + timedelta(minutes=5), 4501.50, 4503.00, 4501.00, 4502.50))
 
-    # Bar 2: Pullback
-    bars.append(make_bar(base_time + timedelta(minutes=10), 4504.00, 4504.50, 4501.00, 4501.50))
-
-    # Bar 3: Move down
-    bars.append(make_bar(base_time + timedelta(minutes=15), 4501.50, 4502.00, 4498.00, 4498.50))
-
-    # Bar 4: Swing LOW forms (low = 4497.00)
-    bars.append(make_bar(base_time + timedelta(minutes=20), 4498.50, 4500.00, 4497.00, 4499.00))
-
-    # Bar 5: Recovery
-    bars.append(make_bar(base_time + timedelta(minutes=25), 4499.00, 4501.00, 4498.50, 4500.50))
+    # Bar 2: Context bar with lower high (still below 4505)
+    bars.append(make_bar(base_time + timedelta(minutes=10), 4502.50, 4504.00, 4502.00, 4503.50))
 
     # -----------------------------------------------------------------
-    # Bars 6-9: Consolidation
+    # Bar 3: Swing HIGH forms here (high = 4505.00)
+    # Needs: bars 1,2 with lower highs (left), bar 4 with lower high (right)
     # -----------------------------------------------------------------
 
-    bars.append(make_bar(base_time + timedelta(minutes=30), 4500.50, 4502.00, 4499.50, 4501.00))
-    bars.append(make_bar(base_time + timedelta(minutes=35), 4501.00, 4503.00, 4500.50, 4502.50))
-    bars.append(make_bar(base_time + timedelta(minutes=40), 4502.50, 4504.00, 4501.50, 4503.00))
-    bars.append(make_bar(base_time + timedelta(minutes=45), 4503.00, 4504.50, 4502.00, 4504.00))
+    bars.append(make_bar(base_time + timedelta(minutes=15), 4503.50, 4505.00, 4502.50, 4504.00))
+
+    # Bar 4: Pullback (lower high confirms bar 3 as swing high)
+    bars.append(make_bar(base_time + timedelta(minutes=20), 4504.00, 4504.50, 4501.00, 4501.50))
+
+    # Bar 5: Move down
+    bars.append(make_bar(base_time + timedelta(minutes=25), 4501.50, 4502.00, 4498.00, 4498.50))
 
     # -----------------------------------------------------------------
-    # Bar 10: SWEEP - Price sweeps above swing high (4505) then closes back inside
+    # Bar 6: Swing LOW forms here (low = 4497.00)
+    # Needs: bars 4,5 with higher lows (left), bar 7 with higher low (right)
     # -----------------------------------------------------------------
 
-    bars.append(make_bar(base_time + timedelta(minutes=50), 4504.00, 4506.50, 4503.50, 4504.00))
+    bars.append(make_bar(base_time + timedelta(minutes=30), 4498.50, 4500.00, 4497.00, 4499.00))
+
+    # Bar 7: Recovery (higher low confirms bar 6 as swing low)
+    bars.append(make_bar(base_time + timedelta(minutes=35), 4499.00, 4501.00, 4498.50, 4500.50))
 
     # -----------------------------------------------------------------
-    # Bars 11-13: BOS + FVG formation (bearish)
+    # Bars 8-11: Consolidation
     # -----------------------------------------------------------------
 
-    # Bar 11: Start of bearish move
-    bars.append(make_bar(base_time + timedelta(minutes=55), 4504.00, 4504.50, 4500.00, 4500.50))
+    bars.append(make_bar(base_time + timedelta(minutes=40), 4500.50, 4502.00, 4499.50, 4501.00))
+    bars.append(make_bar(base_time + timedelta(minutes=45), 4501.00, 4503.00, 4500.50, 4502.50))
+    bars.append(make_bar(base_time + timedelta(minutes=50), 4502.50, 4504.00, 4501.50, 4503.00))
+    bars.append(make_bar(base_time + timedelta(minutes=55), 4503.00, 4504.50, 4502.00, 4504.00))
 
-    # Bar 12: Displacement candle (big bearish body)
-    bars.append(make_bar(base_time + timedelta(minutes=60), 4500.50, 4501.00, 4494.00, 4494.50))
+    # -----------------------------------------------------------------
+    # Bar 12: SWEEP - Price sweeps above swing high (4505) then closes back inside
+    # -----------------------------------------------------------------
 
-    # Bar 13: Continuation - completes FVG and BOS
-    # FVG: bar[11].low (4500.00) > bar[13].high (4496.00) = bearish gap
+    bars.append(make_bar(base_time + timedelta(minutes=60), 4504.00, 4506.50, 4503.50, 4504.00))
+
+    # -----------------------------------------------------------------
+    # Bars 13-15: BOS + FVG formation (bearish)
+    # -----------------------------------------------------------------
+
+    # Bar 13: Start of bearish move
+    bars.append(make_bar(base_time + timedelta(minutes=65), 4504.00, 4504.50, 4500.00, 4500.50))
+
+    # Bar 14: Displacement candle (big bearish body)
+    bars.append(make_bar(base_time + timedelta(minutes=70), 4500.50, 4501.00, 4494.00, 4494.50))
+
+    # Bar 15: Continuation - completes FVG and BOS
+    # FVG: bar[13].low (4500.00) > bar[15].high (4496.00) = bearish gap
     # BOS: close (4493) < swing low (4497)
-    bars.append(make_bar(base_time + timedelta(minutes=65), 4494.50, 4496.00, 4492.00, 4493.00))
+    bars.append(make_bar(base_time + timedelta(minutes=75), 4494.50, 4496.00, 4492.00, 4493.00))
 
     # -----------------------------------------------------------------
-    # Bars 14-15: Retracement into FVG (entry trigger)
+    # Bars 16-17: Retracement into FVG (entry trigger)
     # -----------------------------------------------------------------
 
-    bars.append(make_bar(base_time + timedelta(minutes=70), 4493.00, 4497.00, 4492.50, 4496.00))
+    bars.append(make_bar(base_time + timedelta(minutes=80), 4493.00, 4497.00, 4492.50, 4496.00))
 
-    # Bar 15: Price retraces into FVG zone
-    bars.append(make_bar(base_time + timedelta(minutes=75), 4496.00, 4499.00, 4495.50, 4498.00))
+    # Bar 17: Price retraces into FVG zone
+    bars.append(make_bar(base_time + timedelta(minutes=85), 4496.00, 4499.00, 4495.50, 4498.00))
 
     return bars
 
@@ -313,12 +315,12 @@ def test_bullish_setup():
     bars = create_bullish_setup_bars()
 
     print(f"\nFeeding {len(bars)} bars to strategy...")
-    print(f"Swing low target: 4495.00")
-    print(f"Swing high target: 4502.00")
-    print(f"Sweep bar (#10): low=4494.00 (below 4495)")
-    print(f"BOS bar (#13): close=4507.00 (above 4502)")
+    print(f"Swing low at bar 3: 4495.00")
+    print(f"Swing high at bar 6: 4502.00")
+    print(f"Sweep bar (#12): low=4494.00 (below 4495)")
+    print(f"BOS bar (#15): close=4507.00 (above 4502)")
     print(f"FVG zone: ~4500.00 - 4503.00")
-    print(f"Entry bar (#15): low=4501.00 (enters FVG)")
+    print(f"Entry bar (#17): low=4501.00 (enters FVG)")
 
     # Process bars
     signals: list[Signal] = []
@@ -329,7 +331,7 @@ def test_bullish_setup():
             print(f"\n>>> Signal emitted on bar {i}!")
 
         # Print state periodically
-        if i in [10, 13, 15]:
+        if i in [12, 15, 17]:
             state = strategy.get_state_summary()
             print(f"\nBar {i} state:")
             print(f"  Session: {state['session']}")
@@ -343,9 +345,7 @@ def test_bullish_setup():
     print("RESULTS:")
     print("-" * 40)
 
-    if not signals:
-        print("FAIL: No signals generated!")
-        return False
+    assert signals, "No signals generated!"
 
     signal = signals[0]
     print(f"Signal count: {len(signals)}")
@@ -382,7 +382,7 @@ def test_bullish_setup():
     else:
         print("PASS: Reason dict has sweep, bos, fvg")
 
-    return passed
+    assert passed, "One or more assertions failed"
 
 
 def test_bearish_setup():
@@ -405,12 +405,12 @@ def test_bearish_setup():
     bars = create_bearish_setup_bars()
 
     print(f"\nFeeding {len(bars)} bars to strategy...")
-    print(f"Swing high target: 4505.00")
-    print(f"Swing low target: 4497.00")
-    print(f"Sweep bar (#10): high=4506.50 (above 4505)")
-    print(f"BOS bar (#13): close=4493.00 (below 4497)")
+    print(f"Swing high at bar 3: 4505.00")
+    print(f"Swing low at bar 6: 4497.00")
+    print(f"Sweep bar (#12): high=4506.50 (above 4505)")
+    print(f"BOS bar (#15): close=4493.00 (below 4497)")
     print(f"FVG zone: ~4496.00 - 4500.00")
-    print(f"Entry bar (#15): high=4499.00 (enters FVG)")
+    print(f"Entry bar (#17): high=4499.00 (enters FVG)")
 
     # Process bars
     signals: list[Signal] = []
@@ -421,7 +421,7 @@ def test_bearish_setup():
             print(f"\n>>> Signal emitted on bar {i}!")
 
         # Print state periodically
-        if i in [10, 13, 15]:
+        if i in [12, 15, 17]:
             state = strategy.get_state_summary()
             print(f"\nBar {i} state:")
             print(f"  Session: {state['session']}")
@@ -435,9 +435,7 @@ def test_bearish_setup():
     print("RESULTS:")
     print("-" * 40)
 
-    if not signals:
-        print("FAIL: No signals generated!")
-        return False
+    assert signals, "No signals generated!"
 
     signal = signals[0]
     print(f"Signal count: {len(signals)}")
@@ -468,7 +466,7 @@ def test_bearish_setup():
     else:
         print(f"PASS: Targets are below entry")
 
-    return passed
+    assert passed, "One or more assertions failed"
 
 
 def test_no_signal_outside_killzone():
@@ -500,12 +498,8 @@ def test_no_signal_outside_killzone():
     print(f"Session: {strategy.current_session}")
     print(f"Signals generated: {len(signals)}")
 
-    if signals:
-        print("FAIL: Should not generate signals outside killzone")
-        return False
-
+    assert not signals, "Should not generate signals outside killzone"
     print("PASS: No signals outside killzone")
-    return True
 
 
 def test_state_reset():
@@ -554,7 +548,7 @@ def test_state_reset():
     if passed:
         print("PASS: State properly reset")
 
-    return passed
+    assert passed, "State not properly reset"
 
 
 def test_daily_reset():
@@ -600,7 +594,7 @@ def test_daily_reset():
     if passed:
         print("PASS: Daily reset works correctly")
 
-    return passed
+    assert passed, "Daily reset did not work correctly"
 
 
 # =============================================================================
@@ -624,8 +618,11 @@ def run_all_tests():
     results = []
     for name, test_fn in tests:
         try:
-            passed = test_fn()
-            results.append((name, passed, None))
+            test_fn()
+            results.append((name, True, None))
+        except AssertionError as e:
+            results.append((name, False, str(e)))
+            print(f"\nASSERTION FAILED: {e}")
         except Exception as e:
             results.append((name, False, str(e)))
             print(f"\nEXCEPTION: {e}")
