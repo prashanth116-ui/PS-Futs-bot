@@ -440,7 +440,10 @@ class LiveTrader:
                 continue
 
             # Check if signal is recent (within last scan interval)
-            signal_age = (get_est_now() - result['entry_time']).total_seconds()
+            entry_time = result['entry_time']
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=EST)
+            signal_age = (get_est_now() - entry_time).total_seconds()
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
@@ -485,7 +488,10 @@ class LiveTrader:
                 continue
 
             # Check if signal is recent (within last scan interval)
-            signal_age = (get_est_now() - result['entry_time']).total_seconds()
+            entry_time = result['entry_time']
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=EST)
+            signal_age = (get_est_now() - entry_time).total_seconds()
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
