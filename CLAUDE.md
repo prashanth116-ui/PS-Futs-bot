@@ -16,27 +16,37 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.5 (High Displacement Override) - Feb 6, 2026
+## Current Strategy: V10.6 (BOS LOSS_LIMIT) - Feb 8, 2026
 
 ### Supported Instruments
-| Symbol | Type | Tick Value | Min Risk | Max BOS Risk |
-|--------|------|------------|----------|--------------|
-| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts |
-| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts |
-| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts |
-| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts |
-| SPY | S&P 500 ETF | per share | $0.30 | - |
-| QQQ | Nasdaq 100 ETF | per share | $0.50 | - |
+| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
+|--------|------|------------|----------|--------------|-------------|
+| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **OFF** |
+| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | ON (loss limit) |
+| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **OFF** |
+| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | ON (loss limit) |
+| SPY | S&P 500 ETF | per share | $0.30 | - | **OFF** |
+| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | ON (loss limit) |
 
 **Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
-### V10.5 Entry Types
+### V10.6 BOS LOSS_LIMIT Strategy
+Per-symbol BOS optimization with daily loss limit:
+- **ES/MES/SPY**: BOS disabled entirely (low win rate: 20-38%)
+- **NQ/MNQ/QQQ**: BOS enabled with 1 loss/day limit
+  - Take first BOS entry of the day
+  - If it loses → disable BOS for rest of day
+  - If it wins → continue taking BOS entries
+
+**Result**: +$1.2k P/L improvement, -$500 drawdown, 64% BOS win rate (up from 47.5%)
+
+### V10.6 Entry Types
 | Type | Name | Description |
 |------|------|-------------|
 | A | Creation | Enter immediately when FVG forms with displacement **(3x override skips ADX)** |
 | B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection **(ADX >= 22)** |
 | B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection **[Disabled for SPY]** |
-| C | BOS + Retrace | Enter when price retraces into FVG after Break of Structure **(Risk capped)** |
+| C | BOS + Retrace | Enter when price retraces into FVG after BOS **[Per-symbol control with loss limit]** |
 
 ### Hybrid Exit Structure
 ```
@@ -51,14 +61,15 @@ T2/Runner exit on respective trail stops or EOD
 ```
 
 ### Strategy Features
-- **Quad Entry Mode**: 4 distinct entry types (Creation, Overnight, Intraday, BOS)
+- **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
 - **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
-- **High Displacement Override (V10.5)**: Skip ADX check if candle body >= 3x avg (+$30k/14d improvement)
+- **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit (+$1.2k P/L, -$500 DD)
+- **High Displacement Override (V10.5)**: Skip ADX check if candle body >= 3x avg
 - **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
 - **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
 - **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
 - **Stop**: FVG boundary + buffer (futures: 2 ticks, equities: ATR × 0.5)
-- **ATR Buffer (V10.4)**: Equities use adaptive stops based on volatility (+$54k/30d improvement)
+- **ATR Buffer (V10.4)**: Equities use adaptive stops based on volatility
 
 ### Filters
 | Filter | Value | Purpose |
@@ -77,6 +88,8 @@ T2/Runner exit on respective trail stops or EOD
 | **PM Cutoff** | **NQ/MNQ/QQQ** | **No NQ/MNQ/QQQ entries after 14:00** |
 | **SPY INTRADAY** | **Disabled** | **Skip SPY B2 entries (24% WR drag)** |
 | **ATR Buffer** | **SPY/QQQ only** | **Adaptive stop: ATR(14) × 0.5 vs fixed $0.02** |
+| **BOS Disable** | **ES/MES/SPY** | **BOS off for low win-rate symbols (V10.6)** |
+| **BOS Loss Limit** | **NQ/MNQ/QQQ: 1/day** | **Stop BOS after 1 loss per day (V10.6)** |
 | Max Losses | 2/day | Circuit breaker |
 | Max Open Trades | 2 | Combined position limit |
 
@@ -238,10 +251,11 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.5 | High displacement override (3x skips ADX) - **+$30k/14d improvement** |
-| V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) - **+$54k/30d improvement** |
-| V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY (+$19,692 improvement) |
-| V10.2 | Midday cutoff (12-14) + NQ/QQQ PM cutoff (+$10,340/13d improvement) |
+| V10.6 | BOS LOSS_LIMIT - per-symbol control + 1 loss/day limit (**+$1.2k P/L, -$500 DD**) |
+| V10.5 | High displacement override (3x skips ADX) |
+| V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) |
+| V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY |
+| V10.2 | Midday cutoff (12-14) + NQ/QQQ PM cutoff |
 | V10.1 | ADX >= 22 filter for Overnight Retrace |
 | V10 | Quad Entry (Creation, Overnight, Intraday, BOS) + Hybrid Exit |
 | V9 | Min Risk Filter + Opposing FVG Exit |

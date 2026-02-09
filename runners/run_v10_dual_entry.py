@@ -1,44 +1,46 @@
 """
-V10 Quad Entry Mode - FVG Creation + Overnight/Intraday Retracement + BOS
+V10.6 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
 
 ENTRY TYPES:
 ============
-Entry Type A: FVG Creation (existing V9 logic)
+Entry Type A: FVG Creation
 - Enter immediately when FVG forms with displacement
 - Aggressive entry, catches momentum moves
 
 Entry Type B1: Overnight FVG Retracement + Rejection
 - Track FVGs from overnight/premarket (before 9:30)
-- Enter when price wicks INTO FVG zone and rejects (wick > body)
-- Morning-only filter available (9:30-12:00)
-- Stop beyond rejection wick + 2 tick buffer
+- Enter when price wicks INTO FVG zone and rejects
+- ADX >= 22 required for overnight retrace
 
 Entry Type B2: Intraday FVG Retracement + Rejection
 - Track FVGs created during RTH session
 - Enter when price retraces into FVG (min 5 bars after creation)
-- Requires rejection candle (wick > body)
-- Must pass EMA/ADX trend filters
-- Stop beyond rejection wick + 2 tick buffer
 
 Entry Type C: BOS + Session FVG Retracement
-- Detect Break of Structure (swing high/low broken)
-- Track FVGs that form within 5 bars after BOS
-- Enter when price retraces into the BOS-confirmed FVG
-- Stop beyond FVG boundary + 2 tick buffer
+- V10.6: Per-symbol control + daily loss limit
+- ES: Disabled (20% win rate)
+- NQ/SPY/QQQ: Enabled with LOSS_LIMIT (stop after 1 BOS loss/day)
 
-EXIT STRUCTURE (HYBRID - Default):
-==================================
-Entry: 3 contracts
-  |
-  v 4R hit
-T1 (1 ct): FIXED 4R profit - guaranteed, isolated from trail
-  |
-  v 8R hit
-T2 (1 ct): Structure trail with 4-tick buffer
-Runner (1 ct): Structure trail with 6-tick buffer
-  |
-  v Swing pullback
-T2/Runner exit on respective trail stops or EOD
+V10.6 BOS LOSS_LIMIT STRATEGY:
+==============================
+- Take first BOS entry of the day
+- If it loses -> disable BOS for rest of day
+- If it wins -> continue taking BOS entries
+- Result: +$1.2k P/L, -$500 drawdown, 64% BOS win rate
+
+EXIT STRUCTURE (HYBRID):
+========================
+Entry: 3 contracts at FVG midpoint
+T1 (1 ct): FIXED profit at 4R
+T2 (1 ct): Structure trail with 4-tick buffer after 8R
+Runner (1 ct): Structure trail with 6-tick buffer after 8R
+
+VERSION HISTORY:
+================
+V10.6: BOS LOSS_LIMIT (stop after 1 loss/day), ES BOS disabled
+V10.5: High displacement override (3x body skips ADX >= 17)
+V10.4: BOS risk cap (ES: 8pts, NQ: 20pts)
+V10.3: Midday cutoff, PM cutoff for NQ
 """
 import sys
 sys.path.insert(0, '.')
@@ -302,6 +304,9 @@ def run_session_v10(
     max_bos_risk_pts=None,  # Max risk for BOS entries (ES: 8, NQ: 20)
     # V10.5 high displacement override
     high_displacement_override=3.0,  # Skip ADX check if displacement >= 3x avg body
+    # V10.6 BOS controls
+    disable_bos_retrace=False,  # Disable BOS entries entirely (use for ES)
+    bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
     # Exit options
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
 ):
@@ -537,7 +542,8 @@ def run_session_v10(
                         })
 
     # === Entry Type C: BOS + Session FVG Retracement ===
-    if enable_bos_entry:
+    # V10.6: Skip BOS_RETRACE entries entirely (25% win rate drag)
+    if enable_bos_entry and not disable_bos_retrace:
         rth_start = dt_time(9, 30)
 
         # Track BOS events and their associated FVGs
@@ -686,6 +692,7 @@ def run_session_v10(
     completed_results = []
     entries_taken = {'LONG': 0, 'SHORT': 0}
     loss_count = 0
+    bos_loss_count = 0  # V10.6: Track BOS losses for daily limit
 
     cts_t1 = 1
     cts_t2 = 1
@@ -796,6 +803,9 @@ def run_session_v10(
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'cts': remaining})
                     trade['remaining'] = 0
                     loss_count += 1
+                    # V10.6: Track BOS losses for daily limit
+                    if 'BOS' in trade.get('entry_type', ''):
+                        bos_loss_count += 1
                     remaining = 0
 
             # After 4R but before 8R
@@ -866,6 +876,11 @@ def run_session_v10(
                 continue
 
             direction = entry['direction']
+            entry_type = entry.get('entry_type', '')
+
+            # V10.6: Skip BOS entries if daily loss limit reached
+            if 'BOS' in entry_type and bos_daily_loss_limit > 0 and bos_loss_count >= bos_daily_loss_limit:
+                continue
 
             if current_open >= max_open_trades:
                 continue

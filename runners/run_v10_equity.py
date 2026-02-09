@@ -1,5 +1,5 @@
 """
-V10 Equity Runner - SPY/QQQ Support (V10.4 - ATR Buffer)
+V10 Equity Runner - SPY/QQQ Support (V10.6)
 
 Adapts the V10 Quad Entry strategy for equity trading.
 Uses share-based position sizing instead of contracts.
@@ -10,9 +10,10 @@ Key Differences from Futures:
 - Same session times: 9:30-16:00 ET
 - Same FVG/entry logic
 
-V10.4 Changes:
-- ATR-based stop buffer (ATR × 0.5) instead of fixed $0.02
-- Improves P/L by ~$54k over 30 days by avoiding stop hunts
+Version History:
+- V10.4: ATR-based stop buffer (ATR × 0.5) instead of fixed $0.02
+- V10.5: High displacement override (3x body skips ADX >= 17)
+- V10.6: Disable BOS entries (25% win rate drag) - +$1k P/L improvement
 """
 import sys
 sys.path.insert(0, '.')
@@ -101,6 +102,9 @@ def run_session_v10_equity(
     atr_buffer_multiplier=0.5,  # Stop buffer = ATR × multiplier (0 = use fixed $0.02)
     # V10.5 high displacement override
     high_displacement_override=3.0,  # Skip ADX check if displacement >= 3x avg body
+    # V10.6 BOS controls
+    disable_bos_retrace=False,  # Disable BOS entries entirely
+    bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
 ):
     """
     Run V10 strategy on equity bars.
@@ -184,6 +188,9 @@ def run_session_v10_equity(
     # Track swing highs/lows for BOS
     recent_swing_high = None
     recent_swing_low = None
+
+    # V10.6: Track BOS losses for daily limit
+    bos_loss_count = 0
 
     # Process session bars
     for i, bar in enumerate(session_bars):
@@ -425,7 +432,8 @@ def run_session_v10_equity(
                 })
 
         # Type C: BOS + Retracement (check for BOS)
-        if recent_swing_high and bar.high > recent_swing_high['price']:
+        # V10.6: Skip BOS entries entirely (low win rate)
+        if not disable_bos_retrace and recent_swing_high and bar.high > recent_swing_high['price']:
             # Bullish BOS - look for LONG FVGs
             for fvg in session_fvgs:
                 if fvg['used_for_entry']:
@@ -468,7 +476,7 @@ def run_session_v10_equity(
 
             recent_swing_high = None
 
-        if recent_swing_low and bar.low < recent_swing_low['price']:
+        if not disable_bos_retrace and recent_swing_low and bar.low < recent_swing_low['price']:
             # Bearish BOS - look for SHORT FVGs
             for fvg in session_fvgs:
                 if fvg['used_for_entry']:
@@ -623,6 +631,9 @@ def run_session_v10_equity(
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'shares': remaining})
                     trade['remaining_shares'] = 0
                     loss_count += 1
+                    # V10.6: Track BOS losses for daily limit
+                    if 'BOS' in trade.get('entry_type', ''):
+                        bos_loss_count += 1
                     remaining = 0
 
             # After 4R but before 8R
@@ -676,6 +687,11 @@ def run_session_v10_equity(
                 continue
 
             direction = entry['direction']
+            entry_type = entry.get('entry_type', '')
+
+            # V10.6: Skip BOS entries if daily loss limit reached
+            if 'BOS' in entry_type and bos_daily_loss_limit > 0 and bos_loss_count >= bos_daily_loss_limit:
+                continue
 
             if current_open >= max_open_trades:
                 continue

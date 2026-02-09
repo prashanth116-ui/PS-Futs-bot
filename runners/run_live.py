@@ -1,12 +1,14 @@
 """
-V10.4 Live Trading Runner - Combined Futures + Equities
+V10.6 Live Trading Runner - Combined Futures + Equities
 
-Main entry point for live trading with the V10.4 strategy.
+Main entry point for live trading with the V10.6 strategy.
 Supports both futures (ES, NQ, MES, MNQ) and equities (SPY, QQQ).
 
-V10.4 Changes:
-- ATR-based stop buffer for equities (ATR × 0.5 vs fixed $0.02)
-- Improves equity P/L by +$54k over 30 days
+V10.6 Changes:
+- BOS LOSS_LIMIT strategy: Stop taking BOS entries after 1 loss per day
+- ES BOS disabled (20% win rate), NQ BOS enabled with loss limit
+- SPY BOS disabled, QQQ BOS enabled with loss limit
+- Result: +$1.2k P/L improvement, -$500 drawdown reduction
 
 Usage:
     python -m runners.run_live --paper                    # Paper mode, default symbols
@@ -41,11 +43,11 @@ from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_ma
 
 class LiveTrader:
     """
-    V10.4 Live Trading System - Combined Futures + Equities
+    V10.6 Live Trading System - Combined Futures + Equities
 
     Runs the strategy in real-time, generating signals and executing trades.
 
-    V10.4: ATR buffer for equities (adaptive stops based on volatility)
+    V10.6: BOS LOSS_LIMIT (stop after 1 BOS loss/day), ES/SPY BOS disabled
     """
 
     # Futures symbol configurations
@@ -160,7 +162,7 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.4 LIVE TRADER - Combined Futures + Equities")
+        print("V10.6 LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.futures_symbols:
@@ -314,7 +316,10 @@ class LiveTrader:
         current_price = session_bars[-1].close
         log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
 
-        # Run V10.3 strategy to get signals
+        # V10.6: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
+        disable_bos = symbol in ['ES', 'MES']
+
+        # Run V10.6 strategy to get signals
         results = run_session_v10(
             session_bars,
             bars,
@@ -331,6 +336,9 @@ class LiveTrader:
             pm_cutoff_nq=True,
             max_bos_risk_pts=config['max_bos_risk'],
             symbol=symbol,
+            # V10.6 BOS controls
+            disable_bos_retrace=disable_bos,  # ES/MES: off, NQ/MNQ: on
+            bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
         )
 
         # Process signals
@@ -365,7 +373,10 @@ class LiveTrader:
         current_price = session_bars[-1].close
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
 
-        # Run V10.3 equity strategy
+        # V10.6: SPY BOS disabled, QQQ BOS enabled with loss limit
+        disable_bos = symbol == 'SPY'
+
+        # Run V10.6 equity strategy
         results = run_session_v10_equity(
             session_bars,
             bars,
@@ -377,6 +388,9 @@ class LiveTrader:
             midday_cutoff=True,
             pm_cutoff_qqq=True,
             disable_intraday_spy=True,
+            # V10.6 BOS controls
+            disable_bos_retrace=disable_bos,  # SPY: off, QQQ: on
+            bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
         )
 
         # Process signals
@@ -590,7 +604,7 @@ class LiveTrader:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='V10.4 Live Trading - Futures + Equities')
+    parser = argparse.ArgumentParser(description='V10.6 Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
     parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
@@ -618,7 +632,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print(f"Starting V10.4 Live Trader...")
+    print(f"Starting V10.6 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:
