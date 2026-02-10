@@ -801,6 +801,58 @@ def reclassify_with_thresholds(df):
     return df
 
 
+def normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names to expected format.
+
+    Maps Excel display names to internal field names.
+    """
+    column_mapping = {
+        # Excel display name -> internal name
+        "Server": "hostname",
+        "Instance ID": "server_id",
+        "Instance Type": "instance_type",
+        "Current Type": "instance_type",
+        "vCPU": "vcpu",
+        "RAM (GB)": "memory_gb",
+        "CPU Avg %": "cpu_avg",
+        "CPU P95 %": "cpu_p95",
+        "Mem Avg %": "memory_avg",
+        "Mem P95 %": "memory_p95",
+        "Disk Avg %": "disk_avg",
+        "Data Days": "data_days",
+        "Classification": "classification",
+        "Recommended Type": "recommended_type",
+        "Recommended": "recommended_type",
+        "Monthly Savings": "monthly_savings",
+        "Current Monthly": "current_monthly",
+        "Recommended Monthly": "recommended_monthly",
+        "Yearly Savings": "yearly_savings",
+        "Confidence": "confidence",
+        "Risk": "risk_level",
+        "Risk Level": "risk_level",
+        "Reason": "reason",
+        "Has Contention": "has_contention",
+        "Contention Events": "contention_events",
+    }
+
+    # Rename columns that exist in the mapping
+    rename_dict = {old: new for old, new in column_mapping.items() if old in df.columns}
+    if rename_dict:
+        df = df.rename(columns=rename_dict)
+
+    # Also normalize any remaining columns to lowercase with underscores
+    new_columns = []
+    for c in df.columns:
+        if c not in column_mapping.values():
+            new_c = c.lower().replace(" ", "_").replace("%", "").replace("(", "").replace(")", "").strip("_")
+            new_columns.append(new_c)
+        else:
+            new_columns.append(c)
+    df.columns = new_columns
+
+    return df
+
+
 def display_dashboard():
     """Display the main dashboard with analysis results."""
     # Load data from appropriate source
@@ -811,8 +863,24 @@ def display_dashboard():
             report_file = st.session_state["report_file"]
             if isinstance(report_file, (str, Path)):
                 df = pd.read_excel(report_file, sheet_name="Server Details")
+                # Also try to load recommendations for cost data
+                try:
+                    recs_df = pd.read_excel(report_file, sheet_name="Recommendations")
+                    recs_df = normalize_column_names(recs_df)
+                    # Merge recommendation data
+                    if "server_id" in recs_df.columns or "hostname" in recs_df.columns:
+                        merge_key = "server_id" if "server_id" in recs_df.columns else "hostname"
+                        df = normalize_column_names(df)
+                        for col in ["recommended_type", "monthly_savings", "current_monthly", "confidence", "risk_level"]:
+                            if col in recs_df.columns and col not in df.columns:
+                                merge_data = recs_df[[merge_key, col]].drop_duplicates()
+                                df = df.merge(merge_data, on=merge_key, how="left")
+                except Exception:
+                    pass  # Recommendations sheet optional
             else:
                 df = pd.read_excel(report_file, sheet_name="Server Details")
+            # Normalize column names
+            df = normalize_column_names(df)
         except Exception as e:
             st.error(f"Failed to read report: {e}")
             return
@@ -828,12 +896,14 @@ def display_dashboard():
         st.warning("No data available for analysis.")
         return
 
-    # Check for minimum required data
-    required_cols = ["server_id"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        st.error(f"Report missing required columns: {missing}")
+    # Check for minimum required data - now check for either server_id or hostname
+    if "server_id" not in df.columns and "hostname" not in df.columns:
+        st.error("Report missing required columns: need either 'server_id' or 'hostname'")
         return
+
+    # Ensure server_id exists (use hostname as fallback)
+    if "server_id" not in df.columns and "hostname" in df.columns:
+        df["server_id"] = df["hostname"]
 
     df = reclassify_with_thresholds(df)
     use_custom = st.checkbox("Use custom thresholds", value=False)

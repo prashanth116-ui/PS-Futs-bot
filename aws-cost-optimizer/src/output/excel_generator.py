@@ -159,8 +159,13 @@ class ExcelGenerator:
             ("Disk Avg %", "disk_avg", 12),
             ("Data Days", "data_days", 10),
             ("Classification", "classification", 15),
-            ("GSI", "tags.GSI", 15),
-            ("Environment", "tags.Environment", 15),
+            ("Recommended Type", "recommended_type", 15),
+            ("Current Monthly", "current_monthly", 15),
+            ("Monthly Savings", "monthly_savings", 15),
+            ("Confidence", "confidence", 12),
+            ("Risk Level", "risk_level", 10),
+            ("GSI", "GSI", 15),
+            ("Environment", "Environment", 15),
         ]
 
         # Headers
@@ -172,10 +177,11 @@ class ExcelGenerator:
 
         # Data rows
         for row_num, server in enumerate(servers, 2):
-            for col, (_, field, _) in enumerate(columns, 1):
-                if field.startswith("tags."):
-                    tag_key = field.split(".")[1]
-                    value = server.get("tags", {}).get(tag_key, "")
+            for col, (header, field, _) in enumerate(columns, 1):
+                # Check if field is a direct key or nested in tags
+                if field in ["GSI", "Environment", "Team"]:
+                    # These might be at top level (from report_data.to_dict()) or in tags
+                    value = server.get(field) or server.get("tags", {}).get(field, "")
                 else:
                     value = server.get(field)
 
