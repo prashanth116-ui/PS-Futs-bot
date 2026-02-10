@@ -1,0 +1,276 @@
+# AWS Instance Type Catalog
+# Used for rightsizing recommendations
+
+# Instance families and their characteristics
+families:
+  # General Purpose
+  t3:
+    description: "Burstable general purpose"
+    use_case: "Variable workloads, dev/test"
+    burstable: true
+    types:
+      - name: t3.nano
+        vcpu: 2
+        memory_gb: 0.5
+      - name: t3.micro
+        vcpu: 2
+        memory_gb: 1
+      - name: t3.small
+        vcpu: 2
+        memory_gb: 2
+      - name: t3.medium
+        vcpu: 2
+        memory_gb: 4
+      - name: t3.large
+        vcpu: 2
+        memory_gb: 8
+      - name: t3.xlarge
+        vcpu: 4
+        memory_gb: 16
+      - name: t3.2xlarge
+        vcpu: 8
+        memory_gb: 32
+
+  t3a:
+    description: "AMD burstable general purpose"
+    use_case: "Variable workloads, cost-sensitive"
+    burstable: true
+    types:
+      - name: t3a.nano
+        vcpu: 2
+        memory_gb: 0.5
+      - name: t3a.micro
+        vcpu: 2
+        memory_gb: 1
+      - name: t3a.small
+        vcpu: 2
+        memory_gb: 2
+      - name: t3a.medium
+        vcpu: 2
+        memory_gb: 4
+      - name: t3a.large
+        vcpu: 2
+        memory_gb: 8
+      - name: t3a.xlarge
+        vcpu: 4
+        memory_gb: 16
+      - name: t3a.2xlarge
+        vcpu: 8
+        memory_gb: 32
+
+  m5:
+    description: "General purpose"
+    use_case: "Balanced compute, memory, networking"
+    burstable: false
+    types:
+      - name: m5.large
+        vcpu: 2
+        memory_gb: 8
+      - name: m5.xlarge
+        vcpu: 4
+        memory_gb: 16
+      - name: m5.2xlarge
+        vcpu: 8
+        memory_gb: 32
+      - name: m5.4xlarge
+        vcpu: 16
+        memory_gb: 64
+      - name: m5.8xlarge
+        vcpu: 32
+        memory_gb: 128
+      - name: m5.12xlarge
+        vcpu: 48
+        memory_gb: 192
+      - name: m5.16xlarge
+        vcpu: 64
+        memory_gb: 256
+      - name: m5.24xlarge
+        vcpu: 96
+        memory_gb: 384
+
+  m6i:
+    description: "Intel general purpose (latest gen)"
+    use_case: "Balanced compute, memory, networking"
+    burstable: false
+    types:
+      - name: m6i.large
+        vcpu: 2
+        memory_gb: 8
+      - name: m6i.xlarge
+        vcpu: 4
+        memory_gb: 16
+      - name: m6i.2xlarge
+        vcpu: 8
+        memory_gb: 32
+      - name: m6i.4xlarge
+        vcpu: 16
+        memory_gb: 64
+      - name: m6i.8xlarge
+        vcpu: 32
+        memory_gb: 128
+      - name: m6i.12xlarge
+        vcpu: 48
+        memory_gb: 192
+      - name: m6i.16xlarge
+        vcpu: 64
+        memory_gb: 256
+
+  # Compute Optimized
+  c5:
+    description: "Compute optimized"
+    use_case: "Batch processing, gaming servers, HPC"
+    burstable: false
+    types:
+      - name: c5.large
+        vcpu: 2
+        memory_gb: 4
+      - name: c5.xlarge
+        vcpu: 4
+        memory_gb: 8
+      - name: c5.2xlarge
+        vcpu: 8
+        memory_gb: 16
+      - name: c5.4xlarge
+        vcpu: 16
+        memory_gb: 32
+      - name: c5.9xlarge
+        vcpu: 36
+        memory_gb: 72
+      - name: c5.12xlarge
+        vcpu: 48
+        memory_gb: 96
+      - name: c5.18xlarge
+        vcpu: 72
+        memory_gb: 144
+      - name: c5.24xlarge
+        vcpu: 96
+        memory_gb: 192
+
+  c6i:
+    description: "Intel compute optimized (latest gen)"
+    use_case: "Batch processing, gaming servers, HPC"
+    burstable: false
+    types:
+      - name: c6i.large
+        vcpu: 2
+        memory_gb: 4
+      - name: c6i.xlarge
+        vcpu: 4
+        memory_gb: 8
+      - name: c6i.2xlarge
+        vcpu: 8
+        memory_gb: 16
+      - name: c6i.4xlarge
+        vcpu: 16
+        memory_gb: 32
+      - name: c6i.8xlarge
+        vcpu: 32
+        memory_gb: 64
+      - name: c6i.12xlarge
+        vcpu: 48
+        memory_gb: 96
+
+  # Memory Optimized
+  r5:
+    description: "Memory optimized"
+    use_case: "Databases, in-memory caching"
+    burstable: false
+    types:
+      - name: r5.large
+        vcpu: 2
+        memory_gb: 16
+      - name: r5.xlarge
+        vcpu: 4
+        memory_gb: 32
+      - name: r5.2xlarge
+        vcpu: 8
+        memory_gb: 64
+      - name: r5.4xlarge
+        vcpu: 16
+        memory_gb: 128
+      - name: r5.8xlarge
+        vcpu: 32
+        memory_gb: 256
+      - name: r5.12xlarge
+        vcpu: 48
+        memory_gb: 384
+      - name: r5.16xlarge
+        vcpu: 64
+        memory_gb: 512
+
+  r6i:
+    description: "Intel memory optimized (latest gen)"
+    use_case: "Databases, in-memory caching"
+    burstable: false
+    types:
+      - name: r6i.large
+        vcpu: 2
+        memory_gb: 16
+      - name: r6i.xlarge
+        vcpu: 4
+        memory_gb: 32
+      - name: r6i.2xlarge
+        vcpu: 8
+        memory_gb: 64
+      - name: r6i.4xlarge
+        vcpu: 16
+        memory_gb: 128
+      - name: r6i.8xlarge
+        vcpu: 32
+        memory_gb: 256
+
+  # Storage Optimized
+  i3:
+    description: "Storage optimized (NVMe SSD)"
+    use_case: "NoSQL databases, data warehousing"
+    burstable: false
+    types:
+      - name: i3.large
+        vcpu: 2
+        memory_gb: 15.25
+        storage_gb: 475
+      - name: i3.xlarge
+        vcpu: 4
+        memory_gb: 30.5
+        storage_gb: 950
+      - name: i3.2xlarge
+        vcpu: 8
+        memory_gb: 61
+        storage_gb: 1900
+      - name: i3.4xlarge
+        vcpu: 16
+        memory_gb: 122
+        storage_gb: 3800
+
+# Upgrade paths: which families can be recommended as alternatives
+upgrade_paths:
+  t3: [t3a, m5, m6i]
+  t3a: [t3, m5, m6i]
+  m4: [m5, m6i]
+  m5: [m5, m6i]
+  m6i: [m6i]
+  c4: [c5, c6i]
+  c5: [c5, c6i]
+  c6i: [c6i]
+  r4: [r5, r6i]
+  r5: [r5, r6i]
+  r6i: [r6i]
+  i2: [i3]
+  i3: [i3]
+
+# Sizing order within families (smallest to largest)
+sizing_order:
+  - nano
+  - micro
+  - small
+  - medium
+  - large
+  - xlarge
+  - 2xlarge
+  - 4xlarge
+  - 8xlarge
+  - 9xlarge
+  - 12xlarge
+  - 16xlarge
+  - 18xlarge
+  - 24xlarge

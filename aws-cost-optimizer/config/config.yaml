@@ -1,0 +1,76 @@
+# AWS Cost Optimizer Configuration
+
+# Analysis settings
+analysis:
+  # Default analysis period in months
+  default_months: 3
+  # Maximum analysis period
+  max_months: 12
+
+  # Rightsizing thresholds
+  thresholds:
+    # CPU thresholds (percentage)
+    cpu:
+      oversized_p95_max: 40      # Below this = oversized
+      rightsized_p95_max: 70     # Below this = right-sized, above = undersized
+      contention_threshold: 80   # Above this = contention
+
+    # Memory thresholds (percentage)
+    memory:
+      oversized_p95_max: 50
+      rightsized_p95_max: 75
+      contention_threshold: 85
+
+    # Disk thresholds (percentage)
+    disk:
+      contention_threshold: 90
+
+  # Minimum months of data required for confidence
+  min_data_months: 2
+
+  # Safety buffer for recommendations (percentage)
+  safety_buffer: 20
+
+# Dynatrace settings
+dynatrace:
+  # API timeout in seconds
+  timeout: 30
+  # Metrics resolution (h=hour, d=day)
+  resolution: "1h"
+  # Rate limiting (requests per minute)
+  rate_limit: 50
+
+# AWS settings
+aws:
+  # Default region
+  default_region: "us-east-1"
+  # Cost Explorer granularity (DAILY, MONTHLY)
+  cost_granularity: "MONTHLY"
+  # Regions to analyze (empty = all)
+  regions: []
+
+# Output settings
+output:
+  # Excel file settings
+  excel:
+    # Number format for currency
+    currency_format: "$#,##0.00"
+    # Number format for percentages
+    percent_format: "0.0%"
+    # Date format
+    date_format: "YYYY-MM-DD"
+
+  # Chart settings
+  charts:
+    # Default chart height (pixels)
+    height: 400
+    # Color scheme
+    colors:
+      oversized: "#28a745"    # Green - savings opportunity
+      rightsized: "#6c757d"   # Gray - no change needed
+      undersized: "#dc3545"   # Red - needs upgrade
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
