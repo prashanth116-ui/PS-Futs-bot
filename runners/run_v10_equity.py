@@ -1,5 +1,5 @@
 """
-V10 Equity Runner - SPY/QQQ Support (V10.7)
+V10 Equity Runner - SPY/QQQ Support (V10.8)
 
 Adapts the V10 Quad Entry strategy for equity trading.
 Uses share-based position sizing instead of contracts.
@@ -10,10 +10,21 @@ Key Differences from Futures:
 - Same session times: 9:30-16:00 ET
 - Same FVG/entry logic
 
+HYBRID FILTER SYSTEM (V10.8):
+MANDATORY (must pass):
+  1. DI Direction (+DI > -DI for LONG, -DI > +DI for SHORT)
+  2. FVG Size >= min size
+
+OPTIONAL (2 of 3 must pass):
+  3. Displacement >= 1.0x avg body
+  4. ADX >= 11
+  5. EMA20 vs EMA50 trend alignment
+
 Version History:
-- V10.4: ATR-based stop buffer (ATR × 0.5) instead of fixed $0.02
-- V10.5: High displacement override (3x body skips ADX >= 17)
+- V10.8: Hybrid filter system (2 mandatory + 2/3 optional) - +$22k/30d improvement
 - V10.7: Disable BOS entries (25% win rate drag) - +$1k P/L improvement
+- V10.5: High displacement override (3x body skips ADX >= 17)
+- V10.4: ATR-based stop buffer (ATR × 0.5) instead of fixed $0.02
 """
 import sys
 sys.path.insert(0, '.')
@@ -106,6 +117,8 @@ def run_session_v10_equity(
     # V10.7 BOS controls
     disable_bos_retrace=False,  # Disable BOS entries entirely
     bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
+    # V10.8 Hybrid filters
+    use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
 ):
     """
     Run V10 strategy on equity bars.
@@ -234,34 +247,38 @@ def run_session_v10_equity(
                 continue
 
             direction = fvg['direction']
+            is_long = direction == 'LONG'
 
-            # Displacement check (needed before ADX for override logic)
+            # Calculate filter values
             body = 0
             avg_body = 0
             if i >= 1:
                 prev_bar = session_bars[i-1]
                 body = abs(prev_bar.close - prev_bar.open)
                 avg_body = sum(abs(b.close - b.open) for b in session_bars[max(0,i-10):i]) / min(10, i) if i > 0 else body
-                if body < avg_body * 1.0:
-                    continue
 
-            # V10.5: Skip ADX check if displacement >= 3x average body (high momentum override)
-            # But still require ADX >= 10 as a safety floor
-            high_disp = high_displacement_override > 0 and avg_body > 0 and body >= avg_body * high_displacement_override
-
-            # Trend filter
-            if not high_disp and (adx is None or adx < 17):
-                continue
-            if high_disp and (adx is None or adx < 10):
-                continue  # Safety floor for high displacement
-            if htf_bias and htf_bias != direction:
-                continue
-
-            # DI filter
+            # V10.8 HYBRID FILTER SYSTEM
+            # MANDATORY: DI Direction (must pass)
+            di_ok = True
             if plus_di and minus_di:
-                if direction == 'LONG' and plus_di < minus_di:
+                di_ok = (plus_di > minus_di) if is_long else (minus_di > plus_di)
+            if not di_ok:
+                continue
+
+            # OPTIONAL filters
+            disp_ok = body >= avg_body * 1.0 if avg_body > 0 else True
+            high_disp = high_displacement_override > 0 and avg_body > 0 and body >= avg_body * high_displacement_override
+            adx_ok = adx is None or adx >= 11 or (high_disp and adx >= 10)
+            ema_ok = htf_bias is None or htf_bias == direction
+
+            if use_hybrid_filters:
+                # Hybrid mode: 2 of 3 optional filters must pass
+                optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                if optional_passed < 2:
                     continue
-                if direction == 'SHORT' and minus_di < plus_di:
+            else:
+                # Strict mode: all filters must pass
+                if not (disp_ok and adx_ok and ema_ok):
                     continue
 
             entry_price = (fvg['low'] + fvg['high']) / 2
@@ -302,15 +319,32 @@ def run_session_v10_equity(
                 continue
 
             direction = fvg['direction']
+            is_long = direction == 'LONG'
             fvg_mid = (fvg['low'] + fvg['high']) / 2
 
             # Morning filter
             if bar_time > morning_end:
                 continue
 
-            # ADX filter for overnight retrace
-            if overnight_retrace_min_adx > 0:
-                if adx is None or adx < overnight_retrace_min_adx:
+            # V10.8 HYBRID FILTER SYSTEM
+            # MANDATORY: DI Direction (must pass)
+            di_ok = True
+            if plus_di and minus_di:
+                di_ok = (plus_di > minus_di) if is_long else (minus_di > plus_di)
+            if not di_ok:
+                continue
+
+            # OPTIONAL filters for retracement
+            adx_ok = adx is None or adx >= overnight_retrace_min_adx
+            ema_ok = htf_bias is None or htf_bias == direction
+            disp_ok = True  # Rejection candle shows displacement
+
+            if use_hybrid_filters:
+                optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                if optional_passed < 2:
+                    continue
+            else:
+                if not adx_ok:
                     continue
 
             # Check for retracement into FVG

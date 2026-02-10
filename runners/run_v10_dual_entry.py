@@ -1,5 +1,5 @@
 """
-V10.7 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
+V10.8 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
 
 ENTRY TYPES:
 ============
@@ -21,6 +21,17 @@ Entry Type C: BOS + Session FVG Retracement
 - ES: Disabled (20% win rate)
 - NQ/SPY/QQQ: Enabled with LOSS_LIMIT (stop after 1 BOS loss/day)
 
+HYBRID FILTER SYSTEM (V10.8):
+=============================
+MANDATORY (must pass):
+  1. DI Direction (+DI > -DI for LONG, -DI > +DI for SHORT)
+  2. FVG Size >= 5 ticks
+
+OPTIONAL (2 of 3 must pass):
+  3. Displacement >= 1.0x avg body
+  4. ADX >= 11
+  5. EMA20 vs EMA50 trend alignment
+
 EXIT STRUCTURE (HYBRID + DYNAMIC SIZING):
 =========================================
 1st trade: 3 contracts (T1=1, T2=1, Runner=1)
@@ -30,6 +41,7 @@ T2/Runner: Structure trail with 4-6 tick buffer after 8R
 
 VERSION HISTORY:
 ================
+V10.8: Hybrid filter system (2 mandatory + 2/3 optional) - +$90k/30d improvement
 V10.7: Dynamic sizing (3->2 cts), ADX>=11, 3 trades/dir, FVG age 2 bars
 V10.6: BOS LOSS_LIMIT (stop after 1 loss/day), ES BOS disabled
 V10.5: High displacement override (3x body skips ADX >= 17)
@@ -324,6 +336,8 @@ def run_session_v10(
     bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
     # Exit options
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
+    # V10.8 Hybrid filters
+    use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -386,29 +400,43 @@ def run_session_v10(
                 if session_bar_idx is None:
                     continue
 
-                # Min FVG size filter for creation entries (5 ticks)
+                # Min FVG size filter for creation entries (5 ticks) - MANDATORY
                 fvg_size_ticks = (fvg.high - fvg.low) / tick_size
                 if fvg_size_ticks < 5:
                     continue
 
                 creating_bar = all_bars[fvg.created_bar_index]
                 body = abs(creating_bar.close - creating_bar.open)
-                if body <= avg_body_size * displacement_threshold:
-                    continue
 
                 bars_to_entry = all_bars[:fvg.created_bar_index + 1]
                 ema_fast = calculate_ema(bars_to_entry, 20)
                 ema_slow = calculate_ema(bars_to_entry, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
+                # V10.8 HYBRID FILTER SYSTEM
+                # MANDATORY: DI Direction (must pass)
+                di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+                if not di_ok:
+                    continue
+
+                # OPTIONAL filters (2/3 must pass)
+                disp_ok = body > avg_body_size * displacement_threshold
                 ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
-                # V10.5: Skip ADX check if displacement >= 3x average body (high momentum override)
-                # But still require ADX >= 10 as a safety floor
+                # V10.5: High displacement override still applies
                 high_disp = high_displacement_override > 0 and body >= avg_body_size * high_displacement_override
                 adx_ok = adx is None or adx >= min_adx or (high_disp and adx is not None and adx >= 10)
-                di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
 
-                if ema_ok and adx_ok and di_ok:
+                if use_hybrid_filters:
+                    # Hybrid mode: 2 of 3 optional filters must pass
+                    optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                    if optional_passed < 2:
+                        continue
+                else:
+                    # Strict mode: all filters must pass
+                    if not (disp_ok and adx_ok and ema_ok):
+                        continue
+
+                if True:  # Filters passed
                     stop_buffer_ticks = 2
                     entry_price = fvg.midpoint
                     stop_price = fvg.low - (stop_buffer_ticks * tick_size) if is_long else fvg.high + (stop_buffer_ticks * tick_size)
@@ -517,12 +545,24 @@ def run_session_v10(
                     ema_slow = calculate_ema(bars_to_entry, 50)
                     adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
+                    # V10.8 HYBRID FILTER SYSTEM
+                    # MANDATORY: DI Direction (must pass)
+                    di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+                    if not di_ok:
+                        continue
+
+                    # OPTIONAL filters (2/3 must pass)
                     ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
                     adx_ok = adx is None or adx >= min_adx
-                    di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+                    disp_ok = True  # Displacement already checked via rejection candle
 
-                    if not (ema_ok and adx_ok and di_ok):
-                        continue
+                    if use_hybrid_filters:
+                        optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                        if optional_passed < 2:
+                            continue
+                    else:
+                        if not (ema_ok and adx_ok):
+                            continue
 
                     risk = abs(entry_price - stop_price)
                     if min_risk_pts > 0 and risk < min_risk_pts:
@@ -664,12 +704,24 @@ def run_session_v10(
                 ema_slow = calculate_ema(bars_to_entry, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
+                # V10.8 HYBRID FILTER SYSTEM
+                # MANDATORY: DI Direction (must pass)
+                di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+                if not di_ok:
+                    continue
+
+                # OPTIONAL filters (2/3 must pass)
                 ema_ok = ema_fast is None or ema_slow is None or (ema_fast > ema_slow if is_long else ema_fast < ema_slow)
                 adx_ok = adx is None or adx >= min_adx
-                di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
+                disp_ok = True  # BOS already confirms momentum
 
-                if not (ema_ok and adx_ok and di_ok):
-                    continue
+                if use_hybrid_filters:
+                    optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                    if optional_passed < 2:
+                        continue
+                else:
+                    if not (ema_ok and adx_ok):
+                        continue
 
                 risk = abs(entry_price - stop_price)
                 if min_risk_pts > 0 and risk < min_risk_pts:

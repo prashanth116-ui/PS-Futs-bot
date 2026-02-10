@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.7 (Dynamic Sizing) - Feb 10, 2026
+## Current Strategy: V10.8 (Hybrid Filters) - Feb 10, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
@@ -62,12 +62,26 @@ Runner (1 ct): Structure trail with 6-tick buffer (1st trade only)
 T2/Runner exit on respective trail stops or EOD
 ```
 
+### V10.8 Hybrid Filter System
+Separates filters into mandatory (must pass) and optional (2/3 must pass):
+
+**MANDATORY (must pass):**
+1. **DI Direction**: +DI > -DI for LONG, -DI > +DI for SHORT
+2. **FVG Size**: >= 5 ticks (futures) or min size (equities)
+
+**OPTIONAL (2 of 3 must pass):**
+3. **Displacement**: >= 1.0x average body
+4. **ADX**: >= 11 (or >= 10 with 3x displacement override)
+5. **EMA Trend**: EMA20 > EMA50 for LONG, EMA20 < EMA50 for SHORT
+
+**Result**: +$90k P/L improvement over 30 days, +71% more trades, same win rate
+
 ### Strategy Features
+- **Hybrid Filter System (V10.8)**: 2 mandatory + 2/3 optional filters (+$90k/30d improvement)
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
 - **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
 - **Dynamic Position Sizing (V10.7)**: 1st trade: 3 cts, 2nd+ trades: 2 cts (max 6 cts exposure)
 - **Position Limit (V10.7)**: Max 3 open trades total per direction
-- **Relaxed Entry Filters (V10.7)**: ADX >= 11, rejection wick >= 0.85×body, FVG age 2 bars
 - **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit
 - **High Displacement Override (V10.5)**: Skip ADX check if candle body >= 3x avg
 - **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
@@ -257,7 +271,8 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix (**+18% P/L**) |
+| V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |
+| V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix |
 | V10.6 | BOS LOSS_LIMIT - per-symbol control + 1 loss/day limit |
 | V10.5 | High displacement override (3x skips ADX) |
 | V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) |

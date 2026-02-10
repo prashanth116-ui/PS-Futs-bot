@@ -35,7 +35,7 @@ def calculate_ema(closes, period):
     return ema
 
 
-def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
+def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m'):
     """Plot today's trades with V10.7 Quad Entry strategy."""
 
     tick_size = 0.25
@@ -45,8 +45,8 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
     # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
 
-    print(f'Fetching {symbol} 3m data...')
-    all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)
+    print(f'Fetching {symbol} {interval} data...')
+    all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=1000)
 
     if not all_bars:
         print('No data available')
@@ -360,4 +360,5 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
 if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    plot_v10(symbol=symbol, contracts=contracts)
+    interval = sys.argv[3] if len(sys.argv) > 3 else '3m'
+    plot_v10(symbol=symbol, contracts=contracts, interval=interval)
