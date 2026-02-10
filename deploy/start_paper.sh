@@ -6,6 +6,25 @@ SERVICE_NAME="paper-trading"
 
 echo "=== Starting V10.7 Paper Trading ==="
 
+# Auto-import TV cookies if available
+if [ -f "$REPO_DIR/deploy/tv_cookies.json" ]; then
+    echo "Found TradingView cookies, importing..."
+    mkdir -p "$HOME/.tvdatafeed"
+    cp "$REPO_DIR/deploy/tv_cookies.json" "$HOME/.tvdatafeed/cookies.json"
+    echo "Cookies imported!"
+fi
+
+# Check if cookies exist
+if [ ! -f "$HOME/.tvdatafeed/cookies.json" ]; then
+    echo ""
+    echo "WARNING: No TradingView cookies found!"
+    echo "Data fetching may fail. To fix:"
+    echo "  1. On your PC: python deploy/export_tv_cookies.py"
+    echo "  2. Copy to server: scp deploy/tv_cookies.json root@SERVER:~/tradovate-futures-bot/deploy/"
+    echo "  3. Restart: ./deploy/start_paper.sh"
+    echo ""
+fi
+
 # Create systemd service file
 sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << EOF
 [Unit]
@@ -17,6 +36,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$REPO_DIR
 Environment="PATH=$REPO_DIR/.venv/bin:/usr/bin"
+Environment="HOME=$HOME"
 ExecStart=$REPO_DIR/.venv/bin/python -u -m runners.run_live --paper --symbols ES NQ SPY QQQ
 Restart=always
 RestartSec=60
@@ -40,4 +60,5 @@ echo "Stop:   sudo systemctl stop ${SERVICE_NAME}"
 echo ""
 
 # Show status
+sleep 2
 sudo systemctl status ${SERVICE_NAME} --no-pager
