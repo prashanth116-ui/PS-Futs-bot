@@ -1,4 +1,4 @@
-"""Plot V10.6 strategy for a specific date."""
+"""Plot V10.7 strategy for a specific date."""
 import sys
 sys.path.insert(0, '.')
 
@@ -13,7 +13,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
     max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    # V10.6: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
+    # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
 
     print(f'Fetching {symbol} 3m data...')
@@ -33,7 +33,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
         print('Not enough bars')
         return
 
-    # Run V10.6 with Hybrid exit
+    # Run V10.7 with Hybrid exit
     all_results = run_session_v10(
         session_bars,
         all_bars,
@@ -52,8 +52,8 @@ def plot_v10_date(symbol, target_date, contracts=3):
         symbol=symbol,
         max_bos_risk_pts=max_bos_risk,  # V10.4: Cap BOS risk
         high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
-        disable_bos_retrace=disable_bos,  # V10.6: Per-symbol BOS control
-        bos_daily_loss_limit=1,  # V10.6: Stop BOS after 1 loss/day
+        disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
+        bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
     )
 
     if not all_results:
@@ -184,14 +184,14 @@ def plot_v10_date(symbol, target_date, contracts=3):
 
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
     bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
-    ax.set_title(f'{symbol} 3-Minute | {target_date} | V10.6 Quad Entry (Hybrid Exit)\n'
+    ax.set_title(f'{symbol} 3-Minute | {target_date} | V10.7 Quad Entry (Hybrid Exit)\n'
                  f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}', fontsize=14, fontweight='bold')
     ax.legend(loc='upper left', fontsize=10)
     ax.grid(True, alpha=0.3)
 
     # Summary box
-    summary_lines = ['V10.6 HYBRID EXIT', f'Symbol: {symbol}', f'BOS: {bos_status}', f'Trades: {len(all_results)}', f'  Creation: {creation_count}', f'  Overnight: {overnight_count}', f'  Intraday: {intraday_count}', f'  BOS: {bos_count}', '-' * 20]
+    summary_lines = ['V10.7 HYBRID EXIT', f'Symbol: {symbol}', f'BOS: {bos_status}', f'Trades: {len(all_results)}', f'  Creation: {creation_count}', f'  Overnight: {overnight_count}', f'  Intraday: {intraday_count}', f'  BOS: {bos_count}', '-' * 20]
     for result in all_results:
         entry_type = result['entry_type']
         direction = result['direction']
@@ -215,7 +215,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
     ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=9, verticalalignment='top', horizontalalignment='right', fontweight='bold', bbox=props, family='monospace')
 
     plt.tight_layout()
-    filename = f'backtest_{symbol}_V10.6_{target_date}.png'
+    filename = f'backtest_{symbol}_V10.7_{target_date}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()

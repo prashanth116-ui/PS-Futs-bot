@@ -1,5 +1,5 @@
 """
-V10.6 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
+V10.7 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
 
 ENTRY TYPES:
 ============
@@ -14,29 +14,23 @@ Entry Type B1: Overnight FVG Retracement + Rejection
 
 Entry Type B2: Intraday FVG Retracement + Rejection
 - Track FVGs created during RTH session
-- Enter when price retraces into FVG (min 5 bars after creation)
+- Enter when price retraces into FVG (min 2 bars after creation)
 
 Entry Type C: BOS + Session FVG Retracement
-- V10.6: Per-symbol control + daily loss limit
+- Per-symbol control + daily loss limit
 - ES: Disabled (20% win rate)
 - NQ/SPY/QQQ: Enabled with LOSS_LIMIT (stop after 1 BOS loss/day)
 
-V10.6 BOS LOSS_LIMIT STRATEGY:
-==============================
-- Take first BOS entry of the day
-- If it loses -> disable BOS for rest of day
-- If it wins -> continue taking BOS entries
-- Result: +$1.2k P/L, -$500 drawdown, 64% BOS win rate
-
-EXIT STRUCTURE (HYBRID):
-========================
-Entry: 3 contracts at FVG midpoint
-T1 (1 ct): FIXED profit at 4R
-T2 (1 ct): Structure trail with 4-tick buffer after 8R
-Runner (1 ct): Structure trail with 6-tick buffer after 8R
+EXIT STRUCTURE (HYBRID + DYNAMIC SIZING):
+=========================================
+1st trade: 3 contracts (T1=1, T2=1, Runner=1)
+2nd+ trades: 2 contracts (T1=1, T2=1, no runner)
+T1: FIXED profit at 4R
+T2/Runner: Structure trail with 4-6 tick buffer after 8R
 
 VERSION HISTORY:
 ================
+V10.7: Dynamic sizing (3->2 cts), ADX>=11, 3 trades/dir, FVG age 2 bars
 V10.6: BOS LOSS_LIMIT (stop after 1 loss/day), ES BOS disabled
 V10.5: High displacement override (3x body skips ADX >= 17)
 V10.4: BOS risk cap (ES: 8pts, NQ: 20pts)

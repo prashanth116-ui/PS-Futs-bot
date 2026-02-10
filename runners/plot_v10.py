@@ -1,13 +1,13 @@
 """
-Plot today's trades with V10.6 Quad Entry Mode.
+Plot today's trades with V10.7 Quad Entry Mode.
 
-V10.6 Entry Types:
+V10.7 Entry Types:
 - Type A (Creation): Enter when FVG forms with displacement
 - Type B1 (Overnight Retrace): Enter when price retraces into overnight FVG (ADX >= 22)
 - Type B2 (Intraday Retrace): Enter when price retraces into session FVG
 - Type C (BOS + Retrace): Per-symbol control with daily loss limit
 
-V10.6 BOS Settings:
+V10.7 BOS Settings:
 - ES/MES: BOS disabled (20% win rate)
 - NQ/MNQ: BOS enabled with 1 loss/day limit
 """
@@ -36,13 +36,13 @@ def calculate_ema(closes, period):
 
 
 def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
-    """Plot today's trades with V10.6 Quad Entry strategy."""
+    """Plot today's trades with V10.7 Quad Entry strategy."""
 
     tick_size = 0.25
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
     max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    # V10.6: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
+    # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
 
     print(f'Fetching {symbol} 3m data...')
@@ -75,7 +75,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
         print('Not enough bars')
         return
 
-    # Run V10.6 strategy with all entry types (Hybrid exit: T1 at 4R)
+    # Run V10.7 strategy with all entry types (Hybrid exit: T1 at 4R)
     all_results = run_session_v10(
         session_bars,
         all_bars,
@@ -94,8 +94,8 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
         symbol=symbol,
         max_bos_risk_pts=max_bos_risk,  # V10.4: Cap BOS risk
         high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
-        disable_bos_retrace=disable_bos,  # V10.6: Per-symbol BOS control
-        bos_daily_loss_limit=1,  # V10.6: Stop BOS after 1 loss/day
+        disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
+        bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
     )
 
     if not all_results:
@@ -287,7 +287,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
 
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
     bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
-    ax.set_title(f'{symbol} 3-Minute | {today} | V10.6 Quad Entry Mode\n'
+    ax.set_title(f'{symbol} 3-Minute | {today} | V10.7 Quad Entry Mode\n'
                  f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
@@ -349,7 +349,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True):
                 fontweight='bold', bbox=rth_props, family='monospace')
 
     plt.tight_layout()
-    filename = f'backtest_{symbol}_V10.6_{today}.png'
+    filename = f'backtest_{symbol}_V10.7_{today}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()
