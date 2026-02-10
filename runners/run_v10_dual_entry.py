@@ -222,8 +222,8 @@ def is_rejection_candle(bar, fvg, direction, tick_size=0.25, proximity_ticks=4):
         wick_bottom = min(bar.open, bar.close)
         wick_size = wick_bottom - bar.low
 
-        # Rejection: wick > body
-        if wick_size <= body:
+        # Rejection: wick >= body * 0.85 (relaxed from wick > body to catch more setups)
+        if wick_size < body * 0.85:
             return False, None, None
 
         # Close should be above FVG high (strong rejection)
@@ -251,8 +251,8 @@ def is_rejection_candle(bar, fvg, direction, tick_size=0.25, proximity_ticks=4):
         wick_top = max(bar.open, bar.close)
         wick_size = bar.high - wick_top
 
-        # Rejection: wick > body (shows selling pressure)
-        if wick_size <= body:
+        # Rejection: wick >= body * 0.85 (relaxed from wick > body to catch more setups)
+        if wick_size < body * 0.85:
             return False, None, None
 
         # Close should show rejection - close below the wick top (bearish close)
@@ -280,10 +280,10 @@ def run_session_v10(
     tick_size=0.25,
     tick_value=12.50,
     contracts=3,
-    max_open_trades=2,
+    max_open_trades=3,  # V10.7: Increased from 2 to allow 3rd entry
     max_losses_per_day=2,
     displacement_threshold=1.0,
-    min_adx=17,
+    min_adx=11,  # V10.7: Lowered from 17 to catch earlier setups
     min_risk_pts=0,
     use_opposing_fvg_exit=False,
     # V10 specific
@@ -331,6 +331,17 @@ def run_session_v10(
 
     # Detect FVGs from ALL bars (including overnight)
     all_fvgs = detect_fvgs(all_bars, fvg_config)
+
+    # Update FVG mitigation status for all detected FVGs
+    # This fixes the bug where mitigated FVGs were still being used for entries
+    for fvg in all_fvgs:
+        if fvg.mitigated:
+            continue
+        # Check all bars after FVG creation for mitigation
+        for bar_idx in range(fvg.created_bar_index + 1, len(all_bars)):
+            update_fvg_mitigation(fvg, all_bars[bar_idx], bar_idx, fvg_config)
+            if fvg.mitigated:
+                break  # Stop once mitigated
 
     # Create mappings between session_bars and all_bars indices
     session_to_all_idx = {}
@@ -465,8 +476,8 @@ def run_session_v10(
                 if not retracement_morning_only or is_morning:
                     fvgs_to_check.extend(overnight_fvgs)
 
-                # Add intraday FVGs created at least 5 bars ago (give time for price to move away)
-                min_bars_ago = 5
+                # Add intraday FVGs created at least 2 bars ago (V10.7: reduced from 5 for quicker retrace)
+                min_bars_ago = 2
                 for fvg in session_fvgs:
                     fvg_session_idx = all_to_session_idx.get(fvg.created_bar_index)
                     if fvg_session_idx is not None and i - fvg_session_idx >= min_bars_ago:
@@ -694,9 +705,9 @@ def run_session_v10(
     loss_count = 0
     bos_loss_count = 0  # V10.6: Track BOS losses for daily limit
 
-    cts_t1 = 1
-    cts_t2 = 1
-    cts_runner = contracts - cts_t1 - cts_t2
+    # V10.7: T1/T2/runner splits are now calculated per-trade based on trade's contract count
+    # For 3 contracts: T1=1, T2=1, Runner=1
+    # For 2 contracts: T1=1, T2=1, Runner=0
 
     for i in range(len(session_bars)):
         bar = session_bars[i]
@@ -706,6 +717,12 @@ def run_session_v10(
         for trade in active_trades:
             is_long = trade['direction'] == 'LONG'
             remaining = trade['remaining']
+
+            # V10.7: Calculate T1/T2/runner based on this trade's contract count
+            trade_cts = trade.get('contracts', contracts)
+            cts_t1 = 1
+            cts_t2 = 1
+            cts_runner = max(0, trade_cts - cts_t1 - cts_t2)
 
             if remaining <= 0:
                 trades_to_remove.append(trade)
@@ -885,13 +902,18 @@ def run_session_v10(
             if current_open >= max_open_trades:
                 continue
 
-            if entries_taken[direction] >= 2:
+            if entries_taken[direction] >= max_open_trades:  # V10.7: Use max_open_trades instead of hardcoded 2
                 continue
 
             is_long = direction == 'LONG'
             entry_price = entry['entry_price']
             stop_price = entry['stop_price']
             risk = abs(entry_price - stop_price)
+
+            # V10.7: Dynamic position sizing - scale down when multiple trades open
+            # 0 trades open: 3 contracts, 1+ trades open: 2 contracts
+            # This keeps max exposure at 6 contracts (vs 9 with fixed 3)
+            trade_contracts = contracts if current_open == 0 else max(2, contracts - 1)
 
             target_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
             target_8r = entry_price + (8 * risk) if is_long else entry_price - (8 * risk)
@@ -921,7 +943,8 @@ def run_session_v10(
                 'runner_stop': plus_4r,
                 'runner_last_swing': entry_price,
                 'is_2nd_entry': entries_taken[direction] > 0,
-                'remaining': contracts,
+                'remaining': trade_contracts,  # V10.7: Use dynamic size
+                'contracts': trade_contracts,  # V10.7: Store for reference
                 'exits': [],
             }
 
@@ -956,7 +979,7 @@ def run_session_v10(
             'entry_price': trade['entry_price'],
             'edge_price': trade['fvg_high'] if is_long else trade['fvg_low'],
             'midpoint_price': trade['entry_price'],
-            'contracts_filled': contracts,
+            'contracts_filled': trade.get('contracts', contracts),  # V10.7: Use trade's actual contract count
             'fill_type': 'FULL',
             'stop_price': trade['stop_price'],
             'fvg_low': trade['fvg_low'],
@@ -970,6 +993,7 @@ def run_session_v10(
             'was_stopped': any(e['type'] == 'STOP' for e in trade['exits']),
             'exits': trade['exits'],
             'is_reentry': trade.get('is_2nd_entry', False),
+            'contracts': trade.get('contracts', contracts),  # V10.7: Actual contracts used
         })
 
     return final_results

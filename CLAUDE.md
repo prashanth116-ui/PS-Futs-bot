@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.6 (BOS LOSS_LIMIT) - Feb 8, 2026
+## Current Strategy: V10.7 (Dynamic Sizing) - Feb 10, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
@@ -40,22 +40,24 @@ Per-symbol BOS optimization with daily loss limit:
 
 **Result**: +$1.2k P/L improvement, -$500 drawdown, 64% BOS win rate (up from 47.5%)
 
-### V10.6 Entry Types
+### V10.7 Entry Types
 | Type | Name | Description |
 |------|------|-------------|
 | A | Creation | Enter immediately when FVG forms with displacement **(3x override skips ADX)** |
 | B1 | Overnight Retrace | Enter when price retraces into overnight FVG + rejection **(ADX >= 22)** |
-| B2 | Intraday Retrace | Enter when price retraces into session FVG (5+ bars old) + rejection **[Disabled for SPY]** |
+| B2 | Intraday Retrace | Enter when price retraces into session FVG **(2+ bars old)** + rejection **[Disabled for SPY]** |
 | C | BOS + Retrace | Enter when price retraces into FVG after BOS **[Per-symbol control with loss limit]** |
 
-### Hybrid Exit Structure
+### Hybrid Exit Structure (Dynamic Sizing)
 ```
-Entry: 3 contracts at FVG midpoint
+Entry: Dynamic contracts at FVG midpoint
+  - 1st trade of direction: 3 contracts (1 T1 + 1 T2 + 1 Runner)
+  - 2nd/3rd trade: 2 contracts (1 T1 + 1 T2, no runner)
     ↓ Price hits 4R target
 T1 (1 ct): FIXED profit at 4R - guaranteed, isolated from trail
     ↓ Price hits 8R target
 T2 (1 ct): Structure trail with 4-tick buffer
-Runner (1 ct): Structure trail with 6-tick buffer
+Runner (1 ct): Structure trail with 6-tick buffer (1st trade only)
     ↓ Swing pullback
 T2/Runner exit on respective trail stops or EOD
 ```
@@ -63,11 +65,12 @@ T2/Runner exit on respective trail stops or EOD
 ### Strategy Features
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
 - **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
-- **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit (+$1.2k P/L, -$500 DD)
+- **Dynamic Position Sizing (V10.7)**: 1st trade: 3 cts, 2nd+ trades: 2 cts (max 6 cts exposure)
+- **Position Limit (V10.7)**: Max 3 open trades total per direction
+- **Relaxed Entry Filters (V10.7)**: ADX >= 11, rejection wick >= 0.85×body, FVG age 2 bars
+- **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit
 - **High Displacement Override (V10.5)**: Skip ADX check if candle body >= 3x avg
 - **ADX Filter for B1**: Overnight retrace requires ADX >= 22 (filters weak trends)
-- **2nd Entry**: INDEPENDENT - taken regardless of 1st trade status
-- **Position Limit**: Max 2 open trades total (combined LONG + SHORT)
 - **Stop**: FVG boundary + buffer (futures: 2 ticks, equities: ATR × 0.5)
 - **ATR Buffer (V10.4)**: Equities use adaptive stops based on volatility
 
@@ -80,9 +83,11 @@ T2/Runner exit on respective trail stops or EOD
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | **3x Displacement** | **>= 3.0x avg body** | **Reduce ADX to >= 10 for high-momentum Creation entries** |
 | HTF Bias | EMA 20/50 | Trade with trend |
-| ADX | > 17 | Only trending markets (bypassed by 3x displacement) |
+| **ADX** | **>= 11** | **V10.7: Lowered from 17 to catch earlier setups** |
 | **B1 ADX** | **>= 22** | **Overnight retrace only in strong trends** |
 | DI Direction | +DI/-DI | LONG if +DI > -DI, SHORT if -DI > +DI |
+| **Rejection Wick** | **>= 0.85×body** | **V10.7: Relaxed from wick > body** |
+| **FVG Age (B2)** | **2+ bars** | **V10.7: Reduced from 5 bars for quicker retrace** |
 | Morning Only | Overnight retrace | B1 entries only 9:30-12:00 |
 | **Midday Cutoff** | **12:00-14:00** | **No entries during lunch lull** |
 | **PM Cutoff** | **NQ/MNQ/QQQ** | **No NQ/MNQ/QQQ entries after 14:00** |
@@ -91,17 +96,17 @@ T2/Runner exit on respective trail stops or EOD
 | **BOS Disable** | **ES/MES/SPY** | **BOS off for low win-rate symbols (V10.6)** |
 | **BOS Loss Limit** | **NQ/MNQ/QQQ: 1/day** | **Stop BOS after 1 loss per day (V10.6)** |
 | Max Losses | 2/day | Circuit breaker |
-| Max Open Trades | 2 | Combined position limit |
+| **Max Open Trades** | **3 per direction** | **V10.7: Increased from 2** |
+| **Position Sizing** | **Dynamic** | **V10.7: 1st trade: 3 cts, 2nd+: 2 cts (max 6 cts)** |
 
-### 13-Day Backtest Results (V10.3)
-| Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
-|--------|--------|------|--------|----------|-----|-----------|
-| ES | 41 | 26 | 15 | 63.4% | 11.19 | +$48,594 |
-| NQ | 31 | 21 | 10 | 67.7% | 19.39 | +$108,418 |
-| MES | 39 | 23 | 16 | 59.0% | 9.09 | +$3,893 |
-| MNQ | 30 | 21 | 9 | 70.0% | 15.13 | +$9,478 |
-| **Mini Total** | **72** | **47** | **25** | **65.3%** | **14.39** | **+$157,012** |
-| **Micro Total** | **69** | **44** | **25** | **63.8%** | **11.73** | **+$13,371** |
+### 11-Day Backtest Results (V10.7 - Dynamic Sizing)
+| Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L | Avg Daily |
+|--------|--------|------|--------|----------|-----|-----------|-----------|
+| ES | 44 | 33 | 10 | 75.0% | 39.57 | +$71,844 | +$6,531 |
+| NQ | 32 | 25 | 7 | 78.1% | 83.02 | +$114,412 | +$10,401 |
+| **Mini Total** | **76** | **58** | **17** | **76.3%** | **-** | **+$186,256** | **+$16,932** |
+
+*V10.7 vs V10.6: +18% higher P/L, +11% higher win rate, lower max drawdown ($1,395 vs $1,862)*
 
 ### 30-Day Equity Results (V10.4 - ATR Buffer)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
@@ -112,20 +117,21 @@ T2/Runner exit on respective trail stops or EOD
 
 *Note: ATR buffer improves P/L by +$54k vs fixed $0.02 buffer despite lower win rate (wider stops = larger risk per trade but fewer stop-hunts)*
 
-### Entry Type Breakdown (Futures)
+### Entry Type Breakdown (V10.7 - 11 Days)
 | Entry Type | ES | NQ | Total |
 |------------|-----|-----|-------|
-| Creation | 21 (51%) | 16 (52%) | 37 (51%) |
-| Overnight | 11 (27%) | 12 (39%) | 23 (32%) |
-| Intraday | 4 (10%) | 1 (3%) | 5 (7%) |
-| BOS | 5 (12%) | 2 (6%) | 7 (10%) |
+| Creation | 31 (70.5%) | 24 (75.0%) | 55 (72.4%) |
+| Overnight | 3 (6.8%) | 2 (6.2%) | 5 (6.6%) |
+| Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
+| BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights
+### Key Insights (V10.7)
 - Strategy is "home run" dependent - big trending days drive profits
-- Creation entries dominate profits across all symbols
-- BOS risk cap prevents oversized losses (ES -$900 improvement)
-- SPY INTRADAY disabled: 41% → 59% win rate, +$16k improvement
-- NQ benefits most from time filters (69% day win rate)
+- Creation entries dominate (72% of trades) - lower ADX catches more setups
+- Dynamic sizing caps exposure at 6 contracts vs 9 with fixed sizing
+- NQ leads with 90.9% day win rate and 78.1% trade win rate
+- FVG mitigation fix prevents entries on invalidated gaps
+- 3 trades per direction allows capturing extended moves
 
 ## Key Commands
 
@@ -230,12 +236,12 @@ python -m runners.run_replay
 ### Instrument Differences
 | Aspect | Mini (ES/NQ) | Micro (MES/MNQ) | Equities (SPY/QQQ) |
 |--------|--------------|-----------------|-------------------|
-| Position Size | 3 contracts | 3 contracts | Risk-based shares |
+| Position Size | **Dynamic (3→2 cts)** | **Dynamic (3→2 cts)** | Risk-based shares |
 | Tick Value | ES:$12.50, NQ:$5 | MES:$1.25, MNQ:$0.50 | $1/share |
 | P/L Calculation | ticks × tick_value | ticks × tick_value | shares × price move |
 | Stop Buffer | 2 ticks | 2 ticks | **ATR × 0.5** (V10.4) |
 | Trail Buffer | 4-6 ticks | 4-6 ticks | $0.04-0.06 |
-| Risk Input | N/A | N/A | $ per trade |
+| Max Exposure | **6 contracts** | **6 contracts** | Risk-based |
 
 ## Daily Workflow
 
@@ -251,7 +257,8 @@ python -m runners.run_replay
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.6 | BOS LOSS_LIMIT - per-symbol control + 1 loss/day limit (**+$1.2k P/L, -$500 DD**) |
+| V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix (**+18% P/L**) |
+| V10.6 | BOS LOSS_LIMIT - per-symbol control + 1 loss/day limit |
 | V10.5 | High displacement override (3x skips ADX) |
 | V10.4 | ATR buffer for equities (ATR × 0.5 vs $0.02) |
 | V10.3 | BOS risk cap (ES:8, NQ:20) + Disable SPY INTRADAY |
