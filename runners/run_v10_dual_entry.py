@@ -40,8 +40,29 @@ import sys
 sys.path.insert(0, '.')
 
 from datetime import date, time as dt_time
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+
+
+# EST timezone for time-based filters
+EST = ZoneInfo('America/New_York')
+
+
+def get_est_hour(timestamp):
+    """Get hour in EST timezone from a timestamp.
+
+    Handles both naive (assumed EST) and aware datetimes.
+    """
+    if timestamp.tzinfo is None:
+        # Naive datetime - assume it's already EST (TradingView convention for CME futures)
+        return timestamp.hour
+    else:
+        # Aware datetime - convert to EST
+        return timestamp.astimezone(EST).hour
 
 
 def calculate_ema(bars, period):
@@ -396,12 +417,12 @@ def run_session_v10(
                     if min_risk_pts > 0 and risk < min_risk_pts:
                         continue
 
-                    # V10.2 time filters
-                    entry_hour = creating_bar.timestamp.hour
+                    # V10.2 time filters (V10.7: use EST timezone)
+                    entry_hour = get_est_hour(creating_bar.timestamp)
                     if midday_cutoff and 12 <= entry_hour < 14:
-                        continue  # Skip lunch lull (12:00-14:00)
+                        continue  # Skip lunch lull (12:00-14:00 EST)
                     if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
-                        continue  # Skip NQ afternoon entries
+                        continue  # Skip NQ afternoon entries (after 14:00 EST)
 
                     valid_entries[direction].append({
                         'fvg': fvg,
@@ -526,12 +547,12 @@ def run_session_v10(
                             if adx is None or adx < overnight_retrace_min_adx:
                                 continue  # Skip overnight retrace if ADX too low
 
-                        # V10.2 time filters
-                        entry_hour = bar.timestamp.hour
+                        # V10.2 time filters (V10.7: use EST timezone)
+                        entry_hour = get_est_hour(bar.timestamp)
                         if midday_cutoff and 12 <= entry_hour < 14:
-                            continue  # Skip lunch lull (12:00-14:00)
+                            continue  # Skip lunch lull (12:00-14:00 EST)
                         if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
-                            continue  # Skip NQ afternoon entries
+                            continue  # Skip NQ afternoon entries (after 14:00 EST)
 
                         valid_entries[direction].append({
                             'fvg': fvg,
@@ -667,12 +688,12 @@ def run_session_v10(
                             break
 
                 if not duplicate:
-                    # V10.2 time filters
-                    entry_hour = bar.timestamp.hour
+                    # V10.2 time filters (V10.7: use EST timezone)
+                    entry_hour = get_est_hour(bar.timestamp)
                     if midday_cutoff and 12 <= entry_hour < 14:
-                        continue  # Skip lunch lull (12:00-14:00)
+                        continue  # Skip lunch lull (12:00-14:00 EST)
                     if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
-                        continue  # Skip NQ afternoon entries
+                        continue  # Skip NQ afternoon entries (after 14:00 EST)
 
                     valid_entries[direction].append({
                         'fvg': fvg,

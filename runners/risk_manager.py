@@ -1,5 +1,5 @@
 """
-Risk Manager for V10.4 Strategy
+Risk Manager for V10.7 Strategy
 
 Implements risk controls including:
 - Daily loss limit
@@ -7,6 +7,7 @@ Implements risk controls including:
 - Max open trades
 - Time-based filters (V10.2/V10.4)
 - Kill switch for emergencies
+- EST timezone handling (V10.7)
 """
 import sys
 sys.path.insert(0, '.')
@@ -16,6 +17,38 @@ from typing import Optional, Dict, List, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+# EST timezone for time-based filters
+EST = ZoneInfo('America/New_York')
+
+
+def get_est_time(dt: datetime = None) -> dt_time:
+    """Get current time in EST timezone.
+
+    Args:
+        dt: Optional datetime to convert. If None, uses current time.
+
+    Returns:
+        time object in EST timezone
+    """
+    if dt is None:
+        dt = datetime.now(EST)
+    elif dt.tzinfo is None:
+        # Naive datetime - assume EST (TradingView convention)
+        return dt.time()
+    else:
+        # Convert to EST
+        dt = dt.astimezone(EST)
+    return dt.time()
+
+
+def get_est_date():
+    """Get current date in EST timezone."""
+    return datetime.now(EST).date()
 
 
 class RiskStatus(Enum):
@@ -70,8 +103,8 @@ class RiskState:
     kill_switch_active: bool = False
     blocked_reason: Optional[str] = None
 
-    # Today's date for reset
-    current_date: datetime = field(default_factory=lambda: datetime.now().date())
+    # Today's date for reset (V10.7: use EST timezone)
+    current_date: datetime = field(default_factory=get_est_date)
 
 
 class RiskManager:
@@ -103,8 +136,8 @@ class RiskManager:
                 print(f"Alert callback error: {e}")
 
     def _check_daily_reset(self):
-        """Reset daily counters if new day."""
-        today = datetime.now().date()
+        """Reset daily counters if new day (based on EST)."""
+        today = get_est_date()
         if self.state.current_date != today:
             self.state.daily_pnl = 0.0
             self.state.daily_trades = 0
@@ -152,8 +185,8 @@ class RiskManager:
             (allowed: bool, reason: str)
         """
         self._check_daily_reset()
-        entry_time = entry_time or datetime.now()
-        current_time = entry_time.time()
+        # V10.7: Use EST timezone for time-based filters
+        current_time = get_est_time(entry_time)
 
         with self._lock:
             # Kill switch check

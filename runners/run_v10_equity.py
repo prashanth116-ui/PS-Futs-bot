@@ -27,6 +27,7 @@ from runners.run_v10_dual_entry import (
     is_swing_low,
     find_recent_swing_high,
     find_recent_swing_low,
+    get_est_hour,  # V10.7: EST timezone for time filters
 )
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
@@ -273,12 +274,12 @@ def run_session_v10_equity(
             if risk < min_risk:
                 continue
 
-            # V10.2 time filters
-            entry_hour = bar.timestamp.hour
+            # V10.2 time filters (V10.7: use EST timezone)
+            entry_hour = get_est_hour(bar.timestamp)
             if midday_cutoff and 12 <= entry_hour < 14:
-                continue  # Skip lunch lull (12:00-14:00)
+                continue  # Skip lunch lull (12:00-14:00 EST)
             if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                continue  # Skip QQQ afternoon entries
+                continue  # Skip QQQ afternoon entries (after 14:00 EST)
 
             fvg['used_for_entry'] = True
             all_valid_entries.append({
@@ -338,12 +339,12 @@ def run_session_v10_equity(
             if risk < min_risk:
                 continue
 
-            # V10.2 time filters
-            entry_hour = bar.timestamp.hour
+            # V10.2 time filters (V10.7: use EST timezone)
+            entry_hour = get_est_hour(bar.timestamp)
             if midday_cutoff and 12 <= entry_hour < 14:
-                continue  # Skip lunch lull (12:00-14:00)
+                continue  # Skip lunch lull (12:00-14:00 EST)
             if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                continue  # Skip QQQ afternoon entries
+                continue  # Skip QQQ afternoon entries (after 14:00 EST)
 
             fvg['used_for_entry'] = True
             all_valid_entries.append({
@@ -409,12 +410,12 @@ def run_session_v10_equity(
                 if risk < min_risk:
                     continue
 
-                # V10.2 time filters
-                entry_hour = bar.timestamp.hour
+                # V10.2 time filters (V10.7: use EST timezone)
+                entry_hour = get_est_hour(bar.timestamp)
                 if midday_cutoff and 12 <= entry_hour < 14:
-                    continue  # Skip lunch lull (12:00-14:00)
+                    continue  # Skip lunch lull (12:00-14:00 EST)
                 if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                    continue  # Skip QQQ afternoon entries
+                    continue  # Skip QQQ afternoon entries (after 14:00 EST)
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
@@ -452,12 +453,12 @@ def run_session_v10_equity(
                 if risk < min_risk:
                     continue
 
-                # V10.2 time filters
-                entry_hour = bar.timestamp.hour
+                # V10.2 time filters (V10.7: use EST timezone)
+                entry_hour = get_est_hour(bar.timestamp)
                 if midday_cutoff and 12 <= entry_hour < 14:
-                    continue  # Skip lunch lull (12:00-14:00)
+                    continue  # Skip lunch lull (12:00-14:00 EST)
                 if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                    continue  # Skip QQQ afternoon entries
+                    continue  # Skip QQQ afternoon entries (after 14:00 EST)
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
@@ -495,12 +496,12 @@ def run_session_v10_equity(
                 if risk < min_risk:
                     continue
 
-                # V10.2 time filters
-                entry_hour = bar.timestamp.hour
+                # V10.2 time filters (V10.7: use EST timezone)
+                entry_hour = get_est_hour(bar.timestamp)
                 if midday_cutoff and 12 <= entry_hour < 14:
-                    continue  # Skip lunch lull (12:00-14:00)
+                    continue  # Skip lunch lull (12:00-14:00 EST)
                 if pm_cutoff_qqq and symbol == 'QQQ' and entry_hour >= 14:
-                    continue  # Skip QQQ afternoon entries
+                    continue  # Skip QQQ afternoon entries (after 14:00 EST)
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
