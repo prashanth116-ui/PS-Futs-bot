@@ -55,7 +55,7 @@ class ServerReport:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "server_id": self.server_id,
             "hostname": self.hostname,
             "instance_id": self.instance_id,
@@ -63,7 +63,10 @@ class ServerReport:
             "vcpu": self.vcpu,
             "memory_gb": self.memory_gb,
             "region": self.region,
-            "tags": self.tags,
+            # Flatten common tags as top-level columns
+            "GSI": self.tags.get("GSI", ""),
+            "Environment": self.tags.get("Environment", ""),
+            "Team": self.tags.get("Team", ""),
             "cpu_avg": round(self.cpu_avg, 1) if self.cpu_avg else None,
             "cpu_p95": round(self.cpu_p95, 1) if self.cpu_p95 else None,
             "memory_avg": round(self.memory_avg, 1) if self.memory_avg else None,
@@ -84,6 +87,7 @@ class ServerReport:
             "monthly_savings": round(self.monthly_savings, 2),
             "yearly_savings": round(self.yearly_savings, 2),
         }
+        return result
 
 
 class ReportDataBuilder:
