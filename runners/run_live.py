@@ -48,6 +48,7 @@ from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
 from runners.tradovate_client import TradovateClient, TradovateConfig, Environment, create_client
 from runners.order_manager import OrderManager, ManagedTrade, TradeStatus
 from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_manager
+from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_error
 
 
 class LiveTrader:
@@ -195,6 +196,10 @@ class LiveTrader:
 
         print("\nStarting trading loop...")
         print("Press Ctrl+C to stop\n")
+
+        # Send Telegram startup notification
+        mode = "PAPER" if self.paper_mode else "LIVE"
+        notify_status(f"V10.7 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
 
         self._trading_loop()
 
@@ -456,6 +461,17 @@ class LiveTrader:
             print(f"    Risk: {result['risk']:.2f} pts")
             print(f"    4R Target: {result['target_4r']:.2f}")
 
+            # Send Telegram notification
+            notify_entry(
+                symbol=symbol,
+                direction=result['direction'],
+                entry_type=result['entry_type'],
+                entry_price=result['entry_price'],
+                stop_price=result['stop_price'],
+                contracts=config['contracts'],
+                risk_pts=result['risk'],
+            )
+
             # Check risk manager
             allowed, reason = self.risk_manager.can_enter_trade(
                 symbol=symbol,
@@ -506,6 +522,17 @@ class LiveTrader:
             print(f"    Risk: ${result['risk']:.2f} | Buffer: {buffer_str} {atr_str}")
             print(f"    Shares: {result['total_shares']}")
             print(f"    P/L: ${result['total_dollars']:+,.2f}")
+
+            # Send Telegram notification
+            notify_entry(
+                symbol=symbol,
+                direction=result['direction'],
+                entry_type=result['entry_type'],
+                entry_price=result['entry_price'],
+                stop_price=result['stop_price'],
+                contracts=result['total_shares'],
+                risk_pts=result['risk'],
+            )
 
             # Execute trade (paper mode only for equities currently)
             if self.paper_mode:
@@ -640,6 +667,15 @@ class LiveTrader:
             print(f"Stopped: {trade_summary['stopped']}")
 
         print("=" * 70)
+
+        # Send Telegram daily summary
+        notify_daily_summary(
+            trades=risk_summary['daily_trades'],
+            wins=risk_summary.get('daily_wins', 0),
+            losses=risk_summary.get('daily_losses', 0),
+            total_pnl=risk_summary['daily_pnl'],
+            symbols_traded=self.symbols,
+        )
 
 
 def main():
