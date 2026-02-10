@@ -35,18 +35,19 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def load_credentials(credentials_path: Optional[str] = None) -> Dict[str, Any]:
+def load_credentials(credentials_path: Optional[str] = None, auto_create: bool = True) -> Dict[str, Any]:
     """Load API credentials.
 
     Args:
         credentials_path: Optional path to credentials file. If not provided,
                           uses default config/credentials.yaml
+        auto_create: If True, auto-create credentials file from template
 
     Returns:
         Credentials dictionary
 
     Raises:
-        FileNotFoundError: If credentials file not found
+        FileNotFoundError: If credentials file not found and auto_create is False
     """
     if credentials_path is None:
         credentials_path = get_project_root() / "config" / "credentials.yaml"
@@ -55,13 +56,92 @@ def load_credentials(credentials_path: Optional[str] = None) -> Dict[str, Any]:
 
     if not credentials_path.exists():
         template_path = get_project_root() / "config" / "credentials.template.yaml"
-        raise FileNotFoundError(
-            f"Credentials file not found: {credentials_path}\n"
-            f"Please copy {template_path} to {credentials_path} and fill in your credentials."
-        )
+
+        if auto_create and template_path.exists():
+            # Auto-create credentials from template
+            import shutil
+            shutil.copy(template_path, credentials_path)
+            print(f"\n{'='*60}")
+            print("CREDENTIALS SETUP")
+            print("="*60)
+            print(f"Created credentials file: {credentials_path}")
+            print("\nTo use this tool with real AWS/Dynatrace data, edit the file")
+            print("and add your credentials. For now, using placeholder values.")
+            print("\nRequired for AWS:")
+            print("  - aws.profile_name (if using ~/.aws/credentials)")
+            print("  - OR aws.access_key_id + aws.secret_access_key")
+            print("\nOptional for Dynatrace:")
+            print("  - dynatrace.environment_url")
+            print("  - dynatrace.api_token")
+            print("="*60 + "\n")
+        elif not auto_create:
+            raise FileNotFoundError(
+                f"Credentials file not found: {credentials_path}\n"
+                f"Please copy {template_path} to {credentials_path} and fill in your credentials."
+            )
+        else:
+            # Template doesn't exist, create minimal credentials
+            minimal_creds = {
+                "aws": {
+                    "profile_name": "default",
+                    "region": "us-east-1"
+                },
+                "dynatrace": {
+                    "environment_url": "",
+                    "api_token": ""
+                }
+            }
+            credentials_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(credentials_path, "w", encoding="utf-8") as f:
+                yaml.dump(minimal_creds, f, default_flow_style=False)
+            print(f"Created minimal credentials file: {credentials_path}")
 
     with open(credentials_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        creds = yaml.safe_load(f) or {}
+
+    # Validate credentials structure
+    if "aws" not in creds:
+        creds["aws"] = {}
+    if "dynatrace" not in creds:
+        creds["dynatrace"] = {}
+
+    return creds
+
+
+def validate_credentials(credentials: Dict[str, Any]) -> Dict[str, bool]:
+    """Validate credentials and return status for each service.
+
+    Args:
+        credentials: Credentials dictionary
+
+    Returns:
+        Dictionary with validation status for each service
+    """
+    status = {
+        "aws_configured": False,
+        "dynatrace_configured": False,
+        "aws_method": None,
+    }
+
+    aws_creds = credentials.get("aws", {})
+
+    # Check AWS credentials
+    if aws_creds.get("profile_name"):
+        status["aws_configured"] = True
+        status["aws_method"] = "profile"
+    elif aws_creds.get("access_key_id") and aws_creds.get("secret_access_key"):
+        status["aws_configured"] = True
+        status["aws_method"] = "access_key"
+    elif os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"):
+        status["aws_configured"] = True
+        status["aws_method"] = "environment"
+
+    # Check Dynatrace credentials
+    dt_creds = credentials.get("dynatrace", {})
+    if dt_creds.get("environment_url") and dt_creds.get("api_token"):
+        status["dynatrace_configured"] = True
+
+    return status
 
 
 def load_instance_types(instance_types_path: Optional[str] = None) -> Dict[str, Any]:

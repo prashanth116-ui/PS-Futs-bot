@@ -150,6 +150,142 @@ class DynatraceClient:
         hosts = self.get_hosts(entity_selector=selector)
         return hosts[0] if hosts else None
 
+    def get_host_by_aws_instance_id(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        """Get a host by AWS EC2 instance ID.
+
+        This is the most reliable lookup method as Dynatrace stores
+        the AWS instance ID in host properties.
+
+        Args:
+            instance_id: AWS EC2 instance ID (e.g., "i-0123456789abcdef0")
+
+        Returns:
+            Host entity or None if not found
+        """
+        # Try using AWS instance ID tag/property
+        selector = f'type(HOST),awsInstanceId("{instance_id}")'
+        try:
+            hosts = self.get_hosts(entity_selector=selector)
+            if hosts:
+                logger.debug(f"Found host by AWS instance ID: {instance_id}")
+                return hosts[0]
+        except Exception as e:
+            logger.debug(f"AWS instance ID lookup failed: {e}")
+
+        # Fallback: search in host properties
+        try:
+            all_hosts = self.get_hosts()
+            for host in all_hosts:
+                properties = host.get("properties", {})
+                if properties.get("awsInstanceId") == instance_id:
+                    logger.debug(f"Found host by property match: {instance_id}")
+                    return host
+        except Exception as e:
+            logger.debug(f"Property search failed: {e}")
+
+        return None
+
+    def get_host_by_ip(self, ip_address: str) -> Optional[Dict[str, Any]]:
+        """Get a host by IP address.
+
+        Args:
+            ip_address: IP address (private or public)
+
+        Returns:
+            Host entity or None if not found
+        """
+        # Try IP-based entity selector
+        selector = f'type(HOST),ipAddress("{ip_address}")'
+        try:
+            hosts = self.get_hosts(entity_selector=selector)
+            if hosts:
+                logger.debug(f"Found host by IP: {ip_address}")
+                return hosts[0]
+        except Exception as e:
+            logger.debug(f"IP lookup failed: {e}")
+
+        return None
+
+    def find_host(
+        self,
+        instance_id: Optional[str] = None,
+        hostname: Optional[str] = None,
+        private_ip: Optional[str] = None,
+        public_ip: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find a host using multiple lookup strategies.
+
+        Tries multiple methods in order of reliability:
+        1. AWS instance ID (most reliable)
+        2. Private IP address
+        3. Public IP address
+        4. Exact hostname match
+        5. Hostname contains match
+
+        Args:
+            instance_id: AWS EC2 instance ID
+            hostname: Hostname or server name
+            private_ip: Private IP address
+            public_ip: Public IP address
+
+        Returns:
+            Host entity or None if not found
+        """
+        # Strategy 1: AWS Instance ID (most reliable)
+        if instance_id:
+            host = self.get_host_by_aws_instance_id(instance_id)
+            if host:
+                logger.info(f"Found host via AWS instance ID: {instance_id}")
+                return host
+
+        # Strategy 2: Private IP
+        if private_ip:
+            host = self.get_host_by_ip(private_ip)
+            if host:
+                logger.info(f"Found host via private IP: {private_ip}")
+                return host
+
+        # Strategy 3: Public IP
+        if public_ip:
+            host = self.get_host_by_ip(public_ip)
+            if host:
+                logger.info(f"Found host via public IP: {public_ip}")
+                return host
+
+        # Strategy 4: Exact hostname match
+        if hostname:
+            host = self.get_host_by_name(hostname)
+            if host:
+                logger.info(f"Found host via exact hostname: {hostname}")
+                return host
+
+            # Strategy 5: Try common hostname patterns
+            patterns = [
+                hostname.lower(),
+                hostname.upper(),
+                f"ip-{private_ip.replace('.', '-')}" if private_ip else None,
+                f"{hostname}.ec2.internal",
+                f"{hostname}.compute.internal",
+            ]
+
+            for pattern in patterns:
+                if pattern:
+                    try:
+                        selector = f'type(HOST),entityName.contains("{pattern}")'
+                        hosts = self.get_hosts(entity_selector=selector)
+                        if hosts:
+                            logger.info(f"Found host via pattern match: {pattern}")
+                            return hosts[0]
+                    except Exception:
+                        continue
+
+        logger.warning(
+            f"Could not find host in Dynatrace. "
+            f"instance_id={instance_id}, hostname={hostname}, "
+            f"private_ip={private_ip}"
+        )
+        return None
+
     def get_metrics(
         self,
         host_ids: List[str],

@@ -14,13 +14,42 @@ class TagQuery:
     Provides flexible tag-based filtering for instance discovery.
     """
 
-    def __init__(self, aws_client: AWSClient):
+    def __init__(
+        self,
+        aws_client: AWSClient,
+        access_key_id: Optional[str] = None,
+        secret_access_key: Optional[str] = None,
+        profile_name: Optional[str] = None
+    ):
         """Initialize the tag query.
 
         Args:
             aws_client: Configured AWS client
+            access_key_id: AWS access key ID for regional queries
+            secret_access_key: AWS secret access key for regional queries
+            profile_name: AWS CLI profile name for regional queries
         """
         self.aws_client = aws_client
+        # Store credentials for creating regional clients
+        self._access_key_id = access_key_id
+        self._secret_access_key = secret_access_key
+        self._profile_name = profile_name
+
+    def _create_regional_client(self, region: str) -> AWSClient:
+        """Create an AWS client for a specific region.
+
+        Args:
+            region: AWS region
+
+        Returns:
+            AWSClient configured for the region
+        """
+        return AWSClient(
+            access_key_id=self._access_key_id,
+            secret_access_key=self._secret_access_key,
+            region=region,
+            profile_name=self._profile_name
+        )
 
     def query(
         self,
@@ -42,11 +71,8 @@ class TagQuery:
         regions = regions or [self.aws_client.region]
 
         for region in regions:
-            # Create region-specific client
-            region_client = AWSClient(
-                region=region,
-                # Inherit credentials from original client
-            )
+            # Create region-specific client with proper credentials
+            region_client = self._create_regional_client(region)
 
             # Build filters
             filters = []

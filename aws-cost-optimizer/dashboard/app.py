@@ -167,16 +167,106 @@ st.markdown("""
 def init_session_state():
     """Initialize session state variables."""
     if "implementation_status" not in st.session_state:
-        st.session_state["implementation_status"] = {}
+        st.session_state["implementation_status"] = load_persisted_state("implementation_status", {})
     if "thresholds" not in st.session_state:
-        st.session_state["thresholds"] = {
+        st.session_state["thresholds"] = load_persisted_state("thresholds", {
             "cpu_oversized": 40,
             "cpu_undersized": 70,
             "mem_oversized": 50,
             "mem_undersized": 75,
-        }
+        })
     if "selected_service" not in st.session_state:
         st.session_state["selected_service"] = "EC2"
+    if "data_source" not in st.session_state:
+        st.session_state["data_source"] = "none"  # none, sample, uploaded, live
+
+
+def get_state_file_path():
+    """Get path for persisted state file."""
+    return Path(__file__).parent / ".dashboard_state.json"
+
+
+def load_persisted_state(key: str, default):
+    """Load persisted state from file."""
+    import json
+    state_file = get_state_file_path()
+    if state_file.exists():
+        try:
+            with open(state_file, "r") as f:
+                all_state = json.load(f)
+                return all_state.get(key, default)
+        except Exception:
+            pass
+    return default
+
+
+def save_persisted_state():
+    """Save session state to file for persistence."""
+    import json
+    state_file = get_state_file_path()
+    try:
+        # Load existing state
+        if state_file.exists():
+            with open(state_file, "r") as f:
+                all_state = json.load(f)
+        else:
+            all_state = {}
+
+        # Update with current session state
+        all_state["implementation_status"] = st.session_state.get("implementation_status", {})
+        all_state["thresholds"] = st.session_state.get("thresholds", {})
+
+        with open(state_file, "w") as f:
+            json.dump(all_state, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Failed to save state: {e}")
+        return False
+
+
+def is_sample_data(df) -> bool:
+    """Detect if data is sample/demo data based on patterns."""
+    if df is None or len(df) == 0:
+        return False
+
+    # Check for sample data patterns
+    sample_indicators = [
+        # Check for common sample hostnames
+        df.get("hostname", pd.Series()).str.contains("sample|demo|test|example", case=False, na=False).any() if "hostname" in df.columns else False,
+        # Check if all server_ids follow a pattern like "i-sample"
+        df.get("server_id", pd.Series()).str.contains("sample|demo", case=False, na=False).any() if "server_id" in df.columns else False,
+        # Check if exactly 25 servers (our sample size)
+        len(df) == 25,
+    ]
+
+    return any(sample_indicators)
+
+
+def render_data_source_indicator():
+    """Render a visual indicator for the data source."""
+    source = st.session_state.get("data_source", "none")
+
+    if source == "sample":
+        st.markdown("""
+            <div style="background: linear-gradient(90deg, #ffc107, #ff9800); color: #000; padding: 0.5rem 1rem;
+                        border-radius: 8px; margin-bottom: 1rem; text-align: center; font-weight: 600;">
+                ⚠️ SAMPLE DATA - This is demo/synthetic data for illustration purposes only
+            </div>
+        """, unsafe_allow_html=True)
+    elif source == "uploaded":
+        st.markdown("""
+            <div style="background: #28a745; color: white; padding: 0.5rem 1rem;
+                        border-radius: 8px; margin-bottom: 1rem; text-align: center;">
+                📤 Uploaded Report Data
+            </div>
+        """, unsafe_allow_html=True)
+    elif source == "live":
+        st.markdown("""
+            <div style="background: #007bff; color: white; padding: 0.5rem 1rem;
+                        border-radius: 8px; margin-bottom: 1rem; text-align: center;">
+                🔗 Live AWS Connection
+            </div>
+        """, unsafe_allow_html=True)
 
 
 def render_sidebar():
@@ -223,7 +313,19 @@ def render_sidebar():
             )
             if uploaded_file:
                 st.session_state["report_file"] = uploaded_file
-                st.success("✅ Report loaded!")
+                # Detect if sample data
+                try:
+                    temp_df = pd.read_excel(uploaded_file, sheet_name="Server Details")
+                    if is_sample_data(temp_df):
+                        st.session_state["data_source"] = "sample"
+                        st.warning("⚠️ Sample data detected")
+                    else:
+                        st.session_state["data_source"] = "uploaded"
+                        st.success("✅ Report loaded!")
+                    uploaded_file.seek(0)  # Reset file pointer
+                except Exception:
+                    st.session_state["data_source"] = "uploaded"
+                    st.success("✅ Report loaded!")
 
         else:
             st.markdown('<p class="sidebar-subheader">Connection Settings</p>', unsafe_allow_html=True)
@@ -234,14 +336,25 @@ def render_sidebar():
                  "eu-west-1", "eu-central-1", "ap-southeast-1", "ap-northeast-1"],
                 label_visibility="collapsed"
             )
+            st.session_state["aws_region"] = region
 
             months = st.slider(
                 "Analysis Period (months)",
                 min_value=1, max_value=12, value=3
             )
+            st.session_state["analysis_months"] = months
+
+            use_cloudwatch = st.checkbox("Use CloudWatch (instead of Dynatrace)", value=True)
+            st.session_state["use_cloudwatch"] = use_cloudwatch
 
             if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
                 st.session_state["run_analysis"] = True
+                st.session_state["data_source"] = "live"
+
+            st.markdown('<p class="sidebar-subheader">Quick Demo</p>', unsafe_allow_html=True)
+            if st.button("📊 Load Sample Data", use_container_width=True):
+                load_sample_data()
+                st.rerun()
 
         st.markdown("---")
 
@@ -290,6 +403,149 @@ def render_sidebar():
         """, unsafe_allow_html=True)
 
 
+def load_sample_data():
+    """Load sample data for demo purposes."""
+    sample_path = Path(__file__).parent.parent / "sample_report.xlsx"
+    if sample_path.exists():
+        st.session_state["report_file"] = sample_path
+        st.session_state["data_source"] = "sample"
+        st.success("📊 Sample data loaded!")
+    else:
+        # Generate sample data on the fly
+        st.session_state["sample_df"] = generate_sample_dataframe()
+        st.session_state["data_source"] = "sample"
+        st.success("📊 Sample data generated!")
+
+
+def generate_sample_dataframe():
+    """Generate sample DataFrame for demo."""
+    import random
+
+    instance_types = ["t3.micro", "t3.small", "t3.medium", "t3.large", "m5.large", "m5.xlarge", "m5.2xlarge", "r5.large", "c5.large", "c5.xlarge"]
+    environments = ["Production", "Staging", "Development"]
+
+    data = []
+    for i in range(25):
+        env = random.choice(environments)
+        instance_type = random.choice(instance_types)
+
+        # Generate realistic metrics based on classification
+        classification = random.choice(["oversized", "right_sized", "undersized"])
+        if classification == "oversized":
+            cpu_p95 = random.uniform(10, 35)
+            mem_p95 = random.uniform(15, 45)
+            monthly_savings = random.uniform(50, 500)
+        elif classification == "undersized":
+            cpu_p95 = random.uniform(75, 95)
+            mem_p95 = random.uniform(80, 95)
+            monthly_savings = 0
+        else:
+            cpu_p95 = random.uniform(40, 65)
+            mem_p95 = random.uniform(50, 70)
+            monthly_savings = 0
+
+        current_monthly = random.uniform(50, 1000)
+
+        data.append({
+            "server_id": f"i-sample{i:04d}",
+            "hostname": f"sample-server-{i:02d}",
+            "instance_type": instance_type,
+            "vcpu": {"t3.micro": 2, "t3.small": 2, "t3.medium": 2, "t3.large": 2, "m5.large": 2, "m5.xlarge": 4, "m5.2xlarge": 8, "r5.large": 2, "c5.large": 2, "c5.xlarge": 4}.get(instance_type, 2),
+            "memory_gb": {"t3.micro": 1, "t3.small": 2, "t3.medium": 4, "t3.large": 8, "m5.large": 8, "m5.xlarge": 16, "m5.2xlarge": 32, "r5.large": 16, "c5.large": 4, "c5.xlarge": 8}.get(instance_type, 4),
+            "Environment": env,
+            "GSI": random.choice(["WebPlatform", "Database", "Analytics", "API", "Backend"]),
+            "cpu_avg": cpu_p95 * 0.6,
+            "cpu_p95": cpu_p95,
+            "memory_avg": mem_p95 * 0.7,
+            "memory_p95": mem_p95,
+            "classification": classification,
+            "recommended_type": None if classification == "right_sized" else (instance_types[instance_types.index(instance_type) - 1] if classification == "oversized" and instance_types.index(instance_type) > 0 else instance_types[min(instance_types.index(instance_type) + 1, len(instance_types) - 1)]),
+            "current_monthly": current_monthly,
+            "recommended_monthly": current_monthly - monthly_savings,
+            "monthly_savings": monthly_savings,
+            "confidence": random.uniform(0.6, 0.95),
+            "risk_level": random.choice(["low", "medium", "high"]),
+            "has_contention": classification == "undersized" and random.random() > 0.5,
+            "contention_events": random.randint(0, 10) if classification == "undersized" else 0,
+        })
+
+    return pd.DataFrame(data)
+
+
+def run_live_analysis():
+    """Run live analysis against AWS."""
+    region = st.session_state.get("aws_region", "us-east-1")
+    months = st.session_state.get("analysis_months", 3)
+    use_cloudwatch = st.session_state.get("use_cloudwatch", True)
+
+    with st.spinner("Connecting to AWS..."):
+        try:
+            # Try to import and run analysis
+            from src.utils.helpers import load_credentials, validate_credentials
+            from src.clients.aws_client import AWSClient
+            from src.clients.cloudwatch_client import CloudWatchClient
+
+            creds = load_credentials()
+            cred_status = validate_credentials(creds)
+
+            if not cred_status["aws_configured"]:
+                st.error("""
+                    **AWS credentials not configured.**
+
+                    Please set up credentials in one of these ways:
+                    1. Edit `config/credentials.yaml` with your AWS access key
+                    2. Set AWS_PROFILE environment variable
+                    3. Configure `~/.aws/credentials`
+                """)
+                return None
+
+            aws_creds = creds.get("aws", {})
+            aws_client = AWSClient(
+                access_key_id=aws_creds.get("access_key_id"),
+                secret_access_key=aws_creds.get("secret_access_key"),
+                region=region,
+                profile_name=aws_creds.get("profile_name")
+            )
+
+            st.info("Fetching EC2 instances...")
+            instances = aws_client.get_instances()
+
+            if not instances:
+                st.warning("No EC2 instances found in the selected region.")
+                return None
+
+            st.info(f"Found {len(instances)} instances. Fetching metrics...")
+
+            # Build DataFrame from instances
+            data = []
+            for instance in instances:
+                # Get basic instance info
+                data.append({
+                    "server_id": instance.get("instance_id", ""),
+                    "hostname": instance.get("name", instance.get("private_ip", "")),
+                    "instance_type": instance.get("instance_type", ""),
+                    "Environment": instance.get("tags", {}).get("Environment", "Unknown"),
+                    "GSI": instance.get("tags", {}).get("GSI", "Unknown"),
+                    "cpu_p95": None,  # Would need CloudWatch integration
+                    "memory_p95": None,
+                    "classification": "unknown",
+                    "current_monthly": 0,
+                    "monthly_savings": 0,
+                })
+
+            df = pd.DataFrame(data)
+            st.success(f"Loaded {len(df)} instances from AWS!")
+
+            return df
+
+        except ImportError as e:
+            st.error(f"Missing dependency: {e}. Run `pip install boto3`")
+            return None
+        except Exception as e:
+            st.error(f"Failed to connect to AWS: {e}")
+            return None
+
+
 def main():
     init_session_state()
     render_sidebar()
@@ -298,8 +554,19 @@ def main():
     st.markdown('<div class="main-header">AWS Cost Optimizer</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sub-header">Analyzing: {st.session_state.get("selected_service", "EC2")} Resources</div>', unsafe_allow_html=True)
 
+    # Show data source indicator
+    render_data_source_indicator()
+
+    # Handle live analysis request
+    if st.session_state.get("run_analysis"):
+        df = run_live_analysis()
+        if df is not None:
+            st.session_state["live_df"] = df
+            st.session_state["data_source"] = "live"
+        st.session_state["run_analysis"] = False
+
     # Main content
-    if "report_file" in st.session_state or st.session_state.get("run_analysis"):
+    if "report_file" in st.session_state or "sample_df" in st.session_state or "live_df" in st.session_state:
         display_dashboard()
     else:
         display_welcome()
@@ -536,10 +803,36 @@ def reclassify_with_thresholds(df):
 
 def display_dashboard():
     """Display the main dashboard with analysis results."""
+    # Load data from appropriate source
+    df = None
+
     if "report_file" in st.session_state:
-        df = pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            report_file = st.session_state["report_file"]
+            if isinstance(report_file, (str, Path)):
+                df = pd.read_excel(report_file, sheet_name="Server Details")
+            else:
+                df = pd.read_excel(report_file, sheet_name="Server Details")
+        except Exception as e:
+            st.error(f"Failed to read report: {e}")
+            return
+    elif "sample_df" in st.session_state:
+        df = st.session_state["sample_df"]
+    elif "live_df" in st.session_state:
+        df = st.session_state["live_df"]
     else:
-        st.warning("Live analysis not yet implemented. Please upload a report.")
+        st.warning("No data loaded. Please upload a report or run live analysis.")
+        return
+
+    if df is None or len(df) == 0:
+        st.warning("No data available for analysis.")
+        return
+
+    # Check for minimum required data
+    required_cols = ["server_id"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"Report missing required columns: {missing}")
         return
 
     df = reclassify_with_thresholds(df)
@@ -765,7 +1058,11 @@ def display_recommendations(df, class_col="classification"):
         for idx, row in edited_df.iterrows():
             server_id = recs_df.iloc[idx]["server_id"]
             st.session_state["implementation_status"][server_id] = row["status"]
-        st.success("✅ Status saved!")
+        # Persist to file
+        if save_persisted_state():
+            st.success("✅ Status saved and persisted!")
+        else:
+            st.success("✅ Status saved (session only)")
         st.rerun()
 
 

@@ -220,21 +220,119 @@ class ContentionDetector:
             severity="critical" if is_critical else "warning",
         )
 
+    def detect_contention_from_summary(
+        self,
+        server_id: str,
+        cpu_p95: Optional[float] = None,
+        memory_p95: Optional[float] = None,
+        disk_p95: Optional[float] = None
+    ) -> ContentionSummary:
+        """Detect contention from summary metrics (P95 values).
+
+        This is a fallback when raw time-series data is not available.
+        It creates synthetic contention events based on P95 thresholds.
+
+        Args:
+            server_id: Server identifier
+            cpu_p95: 95th percentile CPU usage
+            memory_p95: 95th percentile memory usage
+            disk_p95: 95th percentile disk usage
+
+        Returns:
+            ContentionSummary object
+        """
+        all_events: List[ContentionEvent] = []
+
+        now = datetime.utcnow()
+
+        # Check each metric against thresholds
+        for resource_type, p95_value in [
+            ("cpu", cpu_p95),
+            ("memory", memory_p95),
+            ("disk", disk_p95)
+        ]:
+            if p95_value is None:
+                continue
+
+            thresholds = self.thresholds.get(resource_type, {})
+            warning_threshold = thresholds.get("warning", 80)
+            critical_threshold = thresholds.get("critical", 95)
+
+            if p95_value >= warning_threshold:
+                severity = "critical" if p95_value >= critical_threshold else "warning"
+
+                # Create a synthetic event
+                event = ContentionEvent(
+                    server_id=server_id,
+                    resource_type=resource_type,
+                    start_time=now - timedelta(hours=1),  # Synthetic
+                    end_time=now,
+                    duration_minutes=60,  # Assume 1 hour of contention
+                    peak_value=p95_value,
+                    avg_value=p95_value * 0.9,  # Estimate
+                    threshold=warning_threshold,
+                    severity=severity,
+                )
+                all_events.append(event)
+
+        # Calculate summary
+        cpu_events = [e for e in all_events if e.resource_type == "cpu"]
+        memory_events = [e for e in all_events if e.resource_type == "memory"]
+        disk_events = [e for e in all_events if e.resource_type == "disk"]
+
+        total_minutes = sum(e.duration_minutes for e in all_events)
+
+        critical_events = [e for e in all_events if e.severity == "critical"]
+        most_severe = "critical" if critical_events else ("warning" if all_events else None)
+
+        return ContentionSummary(
+            server_id=server_id,
+            has_contention=len(all_events) > 0,
+            total_events=len(all_events),
+            cpu_events=len(cpu_events),
+            memory_events=len(memory_events),
+            disk_events=len(disk_events),
+            total_contention_hours=total_minutes / 60,
+            most_severe=most_severe,
+            events=all_events,
+        )
+
     def analyze_server(
         self,
         server_id: str,
-        metrics_data: Dict[str, List[Dict[str, Any]]]
+        metrics_data: Dict[str, List[Dict[str, Any]]],
+        cpu_p95: Optional[float] = None,
+        memory_p95: Optional[float] = None,
+        disk_p95: Optional[float] = None
     ) -> ContentionSummary:
         """Analyze contention for a server.
 
         Args:
             server_id: Server identifier
             metrics_data: Dictionary with metric data by type
+            cpu_p95: Optional P95 CPU usage for fallback detection
+            memory_p95: Optional P95 memory usage for fallback detection
+            disk_p95: Optional P95 disk usage for fallback detection
 
         Returns:
             ContentionSummary object
         """
         all_events: List[ContentionEvent] = []
+
+        # Check if we have time-series data
+        has_time_series = any(
+            metrics_data.get(key) for key in ["cpu", "memory", "disk_used"]
+        )
+
+        if not has_time_series and (cpu_p95 is not None or memory_p95 is not None):
+            # Use fallback detection from P95 values
+            logger.debug(f"Using P95 fallback for contention detection: {server_id}")
+            return self.detect_contention_from_summary(
+                server_id=server_id,
+                cpu_p95=cpu_p95,
+                memory_p95=memory_p95,
+                disk_p95=disk_p95
+            )
 
         # Map Dynatrace metric names to our resource types
         metric_mapping = {
@@ -244,7 +342,7 @@ class ContentionDetector:
         }
 
         for metric_key, resource_type in metric_mapping.items():
-            if metric_key in metrics_data:
+            if metric_key in metrics_data and metrics_data[metric_key]:
                 events = self.detect_contention(
                     data_points=metrics_data[metric_key],
                     resource_type=resource_type,

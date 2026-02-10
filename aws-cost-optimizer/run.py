@@ -136,9 +136,22 @@ def get_instances(
         return servers
 
     elif args.tag:
-        # Query AWS by tags
+        # Query AWS by tags - pass credentials for multi-region support
         tags = {key: value for key, value in args.tag}
-        tag_query = TagQuery(aws_client)
+        # Get credentials from args or try to load them
+        try:
+            from src.utils.helpers import load_credentials
+            creds = load_credentials(args.credentials if hasattr(args, 'credentials') else None)
+            aws_creds = creds.get("aws", {})
+        except Exception:
+            aws_creds = {}
+
+        tag_query = TagQuery(
+            aws_client,
+            access_key_id=aws_creds.get("access_key_id"),
+            secret_access_key=aws_creds.get("secret_access_key"),
+            profile_name=aws_creds.get("profile_name")
+        )
         return tag_query.query(tags=tags)
 
     else:
@@ -177,18 +190,24 @@ def get_metrics(
                 months=args.months
             )
         elif dynatrace_client:
-            # Use Dynatrace - need to find host by IP or hostname
-            hostname = instance.get("name") or instance.get("private_ip")
-            if hostname:
-                host = dynatrace_client.get_host_by_name(hostname)
-                if host:
-                    metrics = dynatrace_client.get_host_metrics(
-                        host_id=host["entityId"],
-                        months=args.months
-                    )
-                else:
-                    metrics = {}
+            # Use Dynatrace - find host using multiple strategies
+            host = dynatrace_client.find_host(
+                instance_id=instance_id,
+                hostname=instance.get("name"),
+                private_ip=instance.get("private_ip"),
+                public_ip=instance.get("public_ip")
+            )
+            if host:
+                metrics = dynatrace_client.get_host_metrics(
+                    host_id=host["entityId"],
+                    months=args.months
+                )
             else:
+                # Log warning for missing host mapping
+                logging.warning(
+                    f"Could not find Dynatrace host for instance {instance_id}. "
+                    f"Falling back to empty metrics."
+                )
                 metrics = {}
         else:
             # Fallback to CloudWatch if available
@@ -305,17 +324,27 @@ def run_analysis(args):
         else:
             instance_specs = {}
 
-        # Analyze metrics
+        # Validate and analyze metrics
+        instance_metrics = metrics_data.get(instance_id, {})
+        validation = metrics_analyzer.validate_metrics(instance_metrics)
+
+        if not validation["valid"]:
+            logger.warning(f"Insufficient metrics for {instance_id}: {validation['warnings']}")
+        elif validation["warnings"]:
+            logger.debug(f"Metrics warnings for {instance_id}: {validation['warnings']}")
+
         server_metrics = metrics_analyzer.analyze_server(
             server_id=instance_id,
-            metrics_data=metrics_data.get(instance_id, {}),
+            metrics_data=instance_metrics,
             hostname=instance.get("name")
         )
 
-        # Detect contention
+        # Detect contention - pass P95 values as fallback
         contention = contention_detector.analyze_server(
             server_id=instance_id,
-            metrics_data=metrics_data.get(instance_id, {})
+            metrics_data=metrics_data.get(instance_id, {}),
+            cpu_p95=cpu_p95,
+            memory_p95=memory_p95
         )
 
         # Generate recommendation

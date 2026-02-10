@@ -79,6 +79,10 @@ class MetricsAnalyzer:
     for CPU, memory, and disk usage.
     """
 
+    # Minimum requirements for reliable analysis
+    MIN_DATA_POINTS = 10
+    MIN_DATA_DAYS = 7  # At least 1 week of data
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize the analyzer.
 
@@ -86,6 +90,72 @@ class MetricsAnalyzer:
             config: Optional configuration dictionary
         """
         self.config = config or {}
+        self.min_data_points = self.config.get("min_data_points", self.MIN_DATA_POINTS)
+        self.min_data_days = self.config.get("min_data_days", self.MIN_DATA_DAYS)
+
+    def validate_metrics(
+        self,
+        metrics_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """Validate metrics data quality.
+
+        Args:
+            metrics_data: Dictionary with metric data by type
+
+        Returns:
+            Validation report dictionary
+        """
+        report = {
+            "valid": True,
+            "warnings": [],
+            "metrics": {}
+        }
+
+        for metric_key in ["cpu", "memory", "disk_used"]:
+            data = metrics_data.get(metric_key, [])
+            metric_report = {
+                "has_data": len(data) > 0,
+                "data_points": len(data),
+                "sufficient_points": len(data) >= self.min_data_points,
+                "days_of_data": 0,
+                "sufficient_days": False,
+            }
+
+            if data:
+                values = [dp.get("value") for dp in data if dp.get("value") is not None]
+                timestamps = [dp.get("timestamp") for dp in data if dp.get("timestamp")]
+
+                if timestamps:
+                    days = (max(timestamps) - min(timestamps)).days
+                    metric_report["days_of_data"] = days
+                    metric_report["sufficient_days"] = days >= self.min_data_days
+
+                metric_report["valid_values"] = len(values)
+
+            if not metric_report["has_data"]:
+                report["warnings"].append(f"No {metric_key} data available")
+            elif not metric_report["sufficient_points"]:
+                report["warnings"].append(
+                    f"Insufficient {metric_key} data points: {metric_report['data_points']} "
+                    f"(need {self.min_data_points})"
+                )
+            elif not metric_report["sufficient_days"]:
+                report["warnings"].append(
+                    f"Short {metric_key} data period: {metric_report['days_of_data']} days "
+                    f"(recommend {self.min_data_days})"
+                )
+
+            report["metrics"][metric_key] = metric_report
+
+        # Overall validity
+        cpu_valid = report["metrics"].get("cpu", {}).get("sufficient_points", False)
+        memory_valid = report["metrics"].get("memory", {}).get("sufficient_points", False)
+
+        if not cpu_valid and not memory_valid:
+            report["valid"] = False
+            report["warnings"].append("Neither CPU nor memory data available for analysis")
+
+        return report
 
     def calculate_stats(
         self,
