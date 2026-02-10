@@ -1,14 +1,13 @@
 """
-V10.7 Live Trading Runner - Combined Futures + Equities
+V10.8 Live Trading Runner - Combined Futures + Equities
 
-Main entry point for live trading with the V10.7 strategy.
+Main entry point for live trading with the V10.8 strategy.
 Supports both futures (ES, NQ, MES, MNQ) and equities (SPY, QQQ).
 
-V10.7 Changes:
-- BOS LOSS_LIMIT strategy: Stop taking BOS entries after 1 loss per day
-- ES BOS disabled (20% win rate), NQ BOS enabled with loss limit
-- SPY BOS disabled, QQQ BOS enabled with loss limit
-- Result: +$1.2k P/L improvement, -$500 drawdown reduction
+V10.8 Changes:
+- Hybrid filter system (2 mandatory + 2/3 optional filters)
+- Paper mode now simulates trades and tracks P/L
+- Full trade lifecycle: entry -> stops/targets -> P/L tracking
 
 Usage:
     python -m runners.run_live --paper                    # Paper mode, default symbols
@@ -25,7 +24,6 @@ import argparse
 import time
 import signal
 from datetime import datetime, time as dt_time, timedelta, timezone
-from typing import Optional, Dict, List
 from zoneinfo import ZoneInfo
 
 # EST timezone for all trading operations
@@ -42,6 +40,10 @@ def log(msg: str):
     print(msg)
     sys.stdout.flush()
 
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional, Dict, List
+
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
 from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
@@ -51,13 +53,83 @@ from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_ma
 from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_error
 
 
+class PaperTradeStatus(Enum):
+    """Status of a paper trade."""
+    PENDING = "pending"       # Waiting for entry fill
+    OPEN = "open"             # Trade is active
+    CLOSED = "closed"         # Trade completed
+
+
+@dataclass
+class PaperTrade:
+    """Simulated paper trade with full lifecycle tracking."""
+    id: str
+    symbol: str
+    direction: str  # LONG or SHORT
+    entry_type: str
+    entry_price: float
+    stop_price: float
+    target_4r: float
+    target_8r: float
+
+    # Position details
+    contracts: int = 3
+    tick_size: float = 0.25
+    tick_value: float = 12.50
+    asset_type: str = "futures"  # futures or equity
+
+    # Trade state
+    status: PaperTradeStatus = PaperTradeStatus.OPEN
+    entry_time: datetime = None
+    exit_time: datetime = None
+    exit_price: float = 0.0
+    exit_reason: str = ""
+
+    # P/L tracking - 3 contract structure
+    t1_hit: bool = False  # 1 contract at 4R
+    t2_hit: bool = False  # 1 contract at trail
+    runner_exit: bool = False  # 1 contract at trail
+
+    t1_pnl: float = 0.0
+    t2_pnl: float = 0.0
+    runner_pnl: float = 0.0
+
+    # Trail stops (activated after 4R)
+    t2_trail_stop: float = 0.0
+    runner_trail_stop: float = 0.0
+    trail_active: bool = False
+
+    @property
+    def is_long(self) -> bool:
+        return self.direction == "LONG"
+
+    @property
+    def total_pnl(self) -> float:
+        return self.t1_pnl + self.t2_pnl + self.runner_pnl
+
+    @property
+    def risk_pts(self) -> float:
+        return abs(self.entry_price - self.stop_price)
+
+    def calculate_pnl(self, exit_price: float, contracts: int) -> float:
+        """Calculate P/L for given exit price and contracts."""
+        if self.asset_type == "futures":
+            pts_move = (exit_price - self.entry_price) if self.is_long else (self.entry_price - exit_price)
+            ticks = pts_move / self.tick_size
+            return ticks * self.tick_value * contracts
+        else:
+            # Equity: simple price difference
+            price_move = (exit_price - self.entry_price) if self.is_long else (self.entry_price - exit_price)
+            return price_move * contracts
+
+
 class LiveTrader:
     """
-    V10.7 Live Trading System - Combined Futures + Equities
+    V10.8 Live Trading System - Combined Futures + Equities
 
     Runs the strategy in real-time, generating signals and executing trades.
 
-    V10.7: BOS LOSS_LIMIT (stop after 1 BOS loss/day), ES/SPY BOS disabled
+    V10.8: BOS LOSS_LIMIT (stop after 1 BOS loss/day), ES/SPY BOS disabled
     """
 
     # Futures symbol configurations
@@ -156,6 +228,14 @@ class LiveTrader:
         self.last_scan_time: Dict[str, datetime] = {}
         self.processed_signals: Dict[str, set] = {s: set() for s in self.symbols}
 
+        # Paper trading simulation
+        self.paper_trades: Dict[str, PaperTrade] = {}  # trade_id -> PaperTrade
+        self.paper_trade_counter = 0
+        self.paper_daily_pnl = 0.0
+        self.paper_daily_trades = 0
+        self.paper_daily_wins = 0
+        self.paper_daily_losses = 0
+
         # Scan interval (3 minutes to match bar interval)
         self.scan_interval = 180  # seconds
 
@@ -172,7 +252,7 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.7 LIVE TRADER - Combined Futures + Equities")
+        print("V10.8 LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.futures_symbols:
@@ -199,7 +279,7 @@ class LiveTrader:
 
         # Send Telegram startup notification
         mode = "PAPER" if self.paper_mode else "LIVE"
-        notify_status(f"V10.7 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
+        notify_status(f"V10.8 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
 
         self._trading_loop()
 
@@ -267,6 +347,10 @@ class LiveTrader:
                 # Manage active trades
                 if self.order_manager:
                     self._manage_active_trades()
+
+                # Manage paper trades (in paper mode)
+                if self.paper_mode and self.paper_trades:
+                    self._manage_paper_trades()
 
                 # Print status
                 try:
@@ -355,10 +439,10 @@ class LiveTrader:
         current_price = session_bars[-1].close
         log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
 
-        # V10.7: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
+        # V10.8: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
 
-        # Run V10.7 strategy to get signals
+        # Run V10.8 strategy to get signals
         results = run_session_v10(
             session_bars,
             bars,
@@ -375,7 +459,7 @@ class LiveTrader:
             pm_cutoff_nq=True,
             max_bos_risk_pts=config['max_bos_risk'],
             symbol=symbol,
-            # V10.7 BOS controls
+            # V10.8 BOS controls
             disable_bos_retrace=disable_bos,  # ES/MES: off, NQ/MNQ: on
             bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
         )
@@ -412,10 +496,10 @@ class LiveTrader:
         current_price = session_bars[-1].close
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
 
-        # V10.7: SPY BOS disabled, QQQ BOS enabled with loss limit
+        # V10.8: SPY BOS disabled, QQQ BOS enabled with loss limit
         disable_bos = symbol == 'SPY'
 
-        # Run V10.7 equity strategy
+        # Run V10.8 equity strategy
         results = run_session_v10_equity(
             session_bars,
             bars,
@@ -427,7 +511,7 @@ class LiveTrader:
             midday_cutoff=True,
             pm_cutoff_qqq=True,
             disable_intraday_spy=True,
-            # V10.7 BOS controls
+            # V10.8 BOS controls
             disable_bos_retrace=disable_bos,  # SPY: off, QQQ: on
             bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
         )
@@ -488,7 +572,8 @@ class LiveTrader:
 
             # Execute trade
             if self.paper_mode:
-                print(f"    [PAPER] Would enter {result['direction']} {config['contracts']} {symbol}")
+                # Create simulated paper trade
+                self._create_paper_trade(symbol, result, config, asset_type='futures')
             else:
                 self._execute_futures_signal(symbol, result, config)
 
@@ -534,9 +619,10 @@ class LiveTrader:
                 risk_pts=result['risk'],
             )
 
-            # Execute trade (paper mode only for equities currently)
+            # Execute trade
             if self.paper_mode:
-                print(f"    [PAPER] Would enter {result['direction']} {result['total_shares']} shares {symbol}")
+                # Create simulated paper trade for equity
+                self._create_paper_trade(symbol, result, config, asset_type='equity')
             else:
                 print(f"    [EQUITY LIVE NOT IMPLEMENTED]")
 
@@ -572,6 +658,253 @@ class LiveTrader:
                     print(f"    ENTRY SENT: {trade.id}")
             else:
                 print(f"    Price moved past entry, skipping")
+
+    def _create_paper_trade(self, symbol: str, result: Dict, config: Dict, asset_type: str = 'futures'):
+        """Create a simulated paper trade."""
+        self.paper_trade_counter += 1
+        trade_id = f"PAPER_{symbol}_{self.paper_trade_counter}"
+
+        # Calculate risk and targets
+        entry_price = result['entry_price']
+        stop_price = result['stop_price']
+        risk = abs(entry_price - stop_price)
+        is_long = result['direction'] == 'LONG'
+
+        if is_long:
+            target_4r = entry_price + (4 * risk)
+            target_8r = entry_price + (8 * risk)
+        else:
+            target_4r = entry_price - (4 * risk)
+            target_8r = entry_price - (8 * risk)
+
+        # Get contracts/shares
+        if asset_type == 'futures':
+            contracts = config['contracts']
+            tick_size = config['tick_size']
+            tick_value = config['tick_value']
+        else:
+            contracts = result.get('total_shares', 100)
+            tick_size = 0.01
+            tick_value = 1.0
+
+        # Create paper trade
+        paper_trade = PaperTrade(
+            id=trade_id,
+            symbol=symbol,
+            direction=result['direction'],
+            entry_type=result['entry_type'],
+            entry_price=entry_price,
+            stop_price=stop_price,
+            target_4r=target_4r,
+            target_8r=target_8r,
+            contracts=contracts,
+            tick_size=tick_size,
+            tick_value=tick_value,
+            asset_type=asset_type,
+            entry_time=get_est_now(),
+        )
+
+        self.paper_trades[trade_id] = paper_trade
+
+        log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}")
+        log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | 4R: {target_4r:.2f}")
+        log(f"    Trade ID: {trade_id}")
+
+        # Send notification
+        notify_entry(
+            symbol=symbol,
+            direction=result['direction'],
+            entry_type=result['entry_type'],
+            entry_price=entry_price,
+            stop_price=stop_price,
+            contracts=contracts,
+            risk_pts=risk,
+        )
+
+    def _manage_paper_trades(self):
+        """Manage open paper trades - check stops and targets."""
+        closed_trades = []
+
+        for trade_id, trade in self.paper_trades.items():
+            if trade.status != PaperTradeStatus.OPEN:
+                continue
+
+            # Fetch current price
+            bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=10, timeout=15)
+            if not bars or len(bars) < 1:
+                continue
+
+            current_price = bars[-1].close
+            current_high = bars[-1].high
+            current_low = bars[-1].low
+
+            # Check stop loss (full position if not yet at 4R)
+            stop_hit = False
+            if trade.is_long:
+                stop_hit = current_low <= trade.stop_price
+            else:
+                stop_hit = current_high >= trade.stop_price
+
+            if stop_hit and not trade.t1_hit:
+                # Full stop - all 3 contracts
+                trade.exit_price = trade.stop_price
+                trade.exit_reason = "STOP"
+                trade.t1_pnl = trade.calculate_pnl(trade.stop_price, 1)
+                trade.t2_pnl = trade.calculate_pnl(trade.stop_price, 1)
+                trade.runner_pnl = trade.calculate_pnl(trade.stop_price, 1)
+                trade.status = PaperTradeStatus.CLOSED
+                trade.exit_time = get_est_now()
+
+                self.paper_daily_pnl += trade.total_pnl
+                self.paper_daily_trades += 1
+                self.paper_daily_losses += 1
+
+                log(f"\n  [PAPER] STOPPED: {trade.symbol} {trade.direction}")
+                log(f"    P/L: ${trade.total_pnl:+,.2f} (full stop)")
+
+                notify_exit(
+                    symbol=trade.symbol,
+                    direction=trade.direction,
+                    exit_price=trade.stop_price,
+                    pnl=trade.total_pnl,
+                    exit_reason="STOP",
+                )
+
+                closed_trades.append(trade_id)
+                continue
+
+            # Check 4R target (T1 - 1 contract)
+            if not trade.t1_hit:
+                t1_hit = False
+                if trade.is_long:
+                    t1_hit = current_high >= trade.target_4r
+                else:
+                    t1_hit = current_low <= trade.target_4r
+
+                if t1_hit:
+                    trade.t1_hit = True
+                    trade.t1_pnl = trade.calculate_pnl(trade.target_4r, 1)
+                    trade.trail_active = True
+
+                    # Set initial trail stops at entry (breakeven)
+                    trade.t2_trail_stop = trade.entry_price
+                    trade.runner_trail_stop = trade.entry_price
+
+                    log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (4R)")
+                    log(f"    Trail stops activated at breakeven")
+
+            # Update trail stops based on structure (if trail active)
+            if trade.trail_active and len(bars) >= 5:
+                # Look for swing points to update trails
+                for i in range(len(bars) - 4, len(bars) - 1):
+                    if trade.is_long:
+                        # For longs, trail below swing lows
+                        if is_swing_low(bars, i, 2):
+                            new_trail = bars[i].low - (4 * trade.tick_size)  # 4-tick buffer
+                            if new_trail > trade.t2_trail_stop:
+                                trade.t2_trail_stop = new_trail
+                            new_runner_trail = bars[i].low - (6 * trade.tick_size)  # 6-tick buffer
+                            if new_runner_trail > trade.runner_trail_stop:
+                                trade.runner_trail_stop = new_runner_trail
+                    else:
+                        # For shorts, trail above swing highs
+                        if is_swing_high(bars, i, 2):
+                            new_trail = bars[i].high + (4 * trade.tick_size)
+                            if new_trail < trade.t2_trail_stop or trade.t2_trail_stop == trade.entry_price:
+                                trade.t2_trail_stop = new_trail
+                            new_runner_trail = bars[i].high + (6 * trade.tick_size)
+                            if new_runner_trail < trade.runner_trail_stop or trade.runner_trail_stop == trade.entry_price:
+                                trade.runner_trail_stop = new_runner_trail
+
+            # Check T2 trail stop (after T1 hit)
+            if trade.t1_hit and not trade.t2_hit and trade.t2_trail_stop > 0:
+                t2_stopped = False
+                if trade.is_long:
+                    t2_stopped = current_low <= trade.t2_trail_stop
+                else:
+                    t2_stopped = current_high >= trade.t2_trail_stop
+
+                if t2_stopped:
+                    trade.t2_hit = True
+                    trade.t2_pnl = trade.calculate_pnl(trade.t2_trail_stop, 1)
+                    log(f"\n  [PAPER] T2 TRAIL: {trade.symbol} +${trade.t2_pnl:,.2f}")
+
+            # Check runner trail stop
+            if trade.t1_hit and trade.t2_hit and not trade.runner_exit and trade.runner_trail_stop > 0:
+                runner_stopped = False
+                if trade.is_long:
+                    runner_stopped = current_low <= trade.runner_trail_stop
+                else:
+                    runner_stopped = current_high >= trade.runner_trail_stop
+
+                if runner_stopped:
+                    trade.runner_exit = True
+                    trade.runner_pnl = trade.calculate_pnl(trade.runner_trail_stop, 1)
+                    trade.status = PaperTradeStatus.CLOSED
+                    trade.exit_time = get_est_now()
+                    trade.exit_price = trade.runner_trail_stop
+                    trade.exit_reason = "RUNNER_TRAIL"
+
+                    self.paper_daily_pnl += trade.total_pnl
+                    self.paper_daily_trades += 1
+                    self.paper_daily_wins += 1
+
+                    log(f"\n  [PAPER] CLOSED: {trade.symbol} {trade.direction}")
+                    log(f"    T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f} | Runner: ${trade.runner_pnl:+,.2f}")
+                    log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                    notify_exit(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        exit_price=trade.runner_trail_stop,
+                        pnl=trade.total_pnl,
+                        exit_reason="RUNNER_TRAIL",
+                    )
+
+                    closed_trades.append(trade_id)
+
+            # Check 8R target (close runner early for big win)
+            if trade.t1_hit and not trade.runner_exit:
+                t8r_hit = False
+                if trade.is_long:
+                    t8r_hit = current_high >= trade.target_8r
+                else:
+                    t8r_hit = current_low <= trade.target_8r
+
+                if t8r_hit:
+                    # Close T2 and runner at 8R
+                    if not trade.t2_hit:
+                        trade.t2_hit = True
+                        trade.t2_pnl = trade.calculate_pnl(trade.target_8r, 1)
+
+                    trade.runner_exit = True
+                    trade.runner_pnl = trade.calculate_pnl(trade.target_8r, 1)
+                    trade.status = PaperTradeStatus.CLOSED
+                    trade.exit_time = get_est_now()
+                    trade.exit_price = trade.target_8r
+                    trade.exit_reason = "8R_TARGET"
+
+                    self.paper_daily_pnl += trade.total_pnl
+                    self.paper_daily_trades += 1
+                    self.paper_daily_wins += 1
+
+                    log(f"\n  [PAPER] 8R TARGET: {trade.symbol} {trade.direction}")
+                    log(f"    T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f} | Runner: ${trade.runner_pnl:+,.2f}")
+                    log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                    notify_exit(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        exit_price=trade.target_8r,
+                        pnl=trade.total_pnl,
+                        exit_reason="8R_TARGET",
+                    )
+
+                    closed_trades.append(trade_id)
+
+        # Remove closed trades from active tracking
+        for trade_id in closed_trades:
+            del self.paper_trades[trade_id]
 
     def _manage_active_trades(self):
         """Manage active trades - check targets and stops."""
@@ -645,11 +978,25 @@ class LiveTrader:
 
     def _print_status(self):
         """Print current status."""
-        risk_summary = self.risk_manager.get_summary()
         log(f"\n--- Status [{get_est_now().strftime('%H:%M:%S')}] ---")
-        log(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
-        log(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
-        log(f"Status: {risk_summary['status'].upper()}")
+
+        if self.paper_mode:
+            # Paper mode: show simulated P/L
+            open_trades = len(self.paper_trades)
+            open_pnl = sum(t.t1_pnl for t in self.paper_trades.values())  # Partial P/L from T1 hits
+            log(f"Daily P/L: ${self.paper_daily_pnl:+,.2f} (realized)")
+            if open_pnl > 0:
+                log(f"Open P/L: ${open_pnl:+,.2f} (T1 partials)")
+            log(f"Trades: {self.paper_daily_trades} | Open: {open_trades}")
+            if self.paper_daily_trades > 0:
+                win_rate = (self.paper_daily_wins / self.paper_daily_trades) * 100
+                log(f"W/L: {self.paper_daily_wins}/{self.paper_daily_losses} ({win_rate:.0f}%)")
+        else:
+            # Live mode: use risk manager
+            risk_summary = self.risk_manager.get_summary()
+            log(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+            log(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
+            log(f"Status: {risk_summary['status'].upper()}")
 
     def _print_summary(self):
         """Print end-of-session summary."""
@@ -657,30 +1004,56 @@ class LiveTrader:
         print("SESSION SUMMARY")
         print("=" * 70)
 
-        risk_summary = self.risk_manager.get_summary()
-        print(f"Total Trades: {risk_summary['daily_trades']}")
-        print(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+        if self.paper_mode:
+            # Paper mode summary
+            print(f"Mode: PAPER TRADING")
+            print(f"Total Trades: {self.paper_daily_trades}")
+            print(f"Wins: {self.paper_daily_wins} | Losses: {self.paper_daily_losses}")
+            if self.paper_daily_trades > 0:
+                win_rate = (self.paper_daily_wins / self.paper_daily_trades) * 100
+                print(f"Win Rate: {win_rate:.1f}%")
+            print(f"Daily P/L: ${self.paper_daily_pnl:+,.2f}")
 
-        if self.order_manager:
-            trade_summary = self.order_manager.get_trade_summary()
-            print(f"Closed: {trade_summary['closed']}")
-            print(f"Stopped: {trade_summary['stopped']}")
+            # Show any still-open trades
+            if self.paper_trades:
+                print(f"\nOpen Trades ({len(self.paper_trades)}):")
+                for trade in self.paper_trades.values():
+                    partial = f" [T1: ${trade.t1_pnl:+,.2f}]" if trade.t1_hit else ""
+                    print(f"  {trade.symbol} {trade.direction} @ {trade.entry_price:.2f}{partial}")
+
+            # Send Telegram summary
+            notify_daily_summary(
+                trades=self.paper_daily_trades,
+                wins=self.paper_daily_wins,
+                losses=self.paper_daily_losses,
+                total_pnl=self.paper_daily_pnl,
+                symbols_traded=self.symbols,
+            )
+        else:
+            # Live mode summary
+            risk_summary = self.risk_manager.get_summary()
+            print(f"Total Trades: {risk_summary['daily_trades']}")
+            print(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
+
+            if self.order_manager:
+                trade_summary = self.order_manager.get_trade_summary()
+                print(f"Closed: {trade_summary['closed']}")
+                print(f"Stopped: {trade_summary['stopped']}")
+
+            notify_daily_summary(
+                trades=risk_summary['daily_trades'],
+                wins=risk_summary.get('daily_wins', 0),
+                losses=risk_summary.get('daily_losses', 0),
+                total_pnl=risk_summary['daily_pnl'],
+                symbols_traded=self.symbols,
+            )
 
         print("=" * 70)
-
-        # Send Telegram daily summary
-        notify_daily_summary(
-            trades=risk_summary['daily_trades'],
-            wins=risk_summary.get('daily_wins', 0),
-            losses=risk_summary.get('daily_losses', 0),
-            total_pnl=risk_summary['daily_pnl'],
-            symbols_traded=self.symbols,
-        )
 
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='V10.7 Live Trading - Futures + Equities')
+    parser = argparse.ArgumentParser(description='V10.8 Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
     parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
@@ -708,7 +1081,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print(f"Starting V10.7 Live Trader...")
+    print(f"Starting V10.8 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:
