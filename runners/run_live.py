@@ -35,6 +35,31 @@ def get_est_now() -> datetime:
     return datetime.now(EST)
 
 
+def to_est_aware(dt: datetime) -> datetime:
+    """Convert any datetime to EST-aware datetime.
+
+    Handles both naive (assumed EST) and aware datetimes.
+    """
+    if dt is None:
+        return get_est_now()
+    if dt.tzinfo is None:
+        # Naive datetime - assume it's already EST (TradingView convention)
+        return dt.replace(tzinfo=EST)
+    else:
+        # Aware datetime - convert to EST
+        return dt.astimezone(EST)
+
+
+def safe_datetime_diff_seconds(dt1: datetime, dt2: datetime) -> float:
+    """Safely calculate difference between two datetimes in seconds.
+
+    Handles mixed timezone-aware and naive datetimes.
+    """
+    dt1_aware = to_est_aware(dt1)
+    dt2_aware = to_est_aware(dt2)
+    return (dt1_aware - dt2_aware).total_seconds()
+
+
 def log(msg: str):
     """Print with explicit flush for reliable output."""
     print(msg)
@@ -530,9 +555,7 @@ class LiveTrader:
 
             # Check if signal is recent (within last scan interval)
             entry_time = result['entry_time']
-            if entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=EST)
-            signal_age = (get_est_now() - entry_time).total_seconds()
+            signal_age = safe_datetime_diff_seconds(get_est_now(), entry_time)
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
@@ -590,9 +613,7 @@ class LiveTrader:
 
             # Check if signal is recent (within last scan interval)
             entry_time = result['entry_time']
-            if entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=EST)
-            signal_age = (get_est_now() - entry_time).total_seconds()
+            signal_age = safe_datetime_diff_seconds(get_est_now(), entry_time)
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
