@@ -546,6 +546,11 @@ def run_session_v10(
                     adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
                     # V10.8 HYBRID FILTER SYSTEM
+                    # MANDATORY: FVG Size (must pass)
+                    fvg_size_ticks = (fvg.high - fvg.low) / tick_size
+                    if fvg_size_ticks < 5:
+                        continue
+
                     # MANDATORY: DI Direction (must pass)
                     di_ok = adx is None or (plus_di > minus_di if is_long else minus_di > plus_di)
                     if not di_ok:

@@ -258,6 +258,11 @@ def run_session_v10_equity(
                 avg_body = sum(abs(b.close - b.open) for b in session_bars[max(0,i-10):i]) / min(10, i) if i > 0 else body
 
             # V10.8 HYBRID FILTER SYSTEM
+            # MANDATORY: FVG Size (must pass)
+            fvg_size = fvg['high'] - fvg['low']
+            if fvg_size < min_fvg_size:
+                continue
+
             # MANDATORY: DI Direction (must pass)
             di_ok = True
             if plus_di and minus_di:
@@ -327,6 +332,11 @@ def run_session_v10_equity(
                 continue
 
             # V10.8 HYBRID FILTER SYSTEM
+            # MANDATORY: FVG Size (must pass)
+            fvg_size = fvg['high'] - fvg['low']
+            if fvg_size < min_fvg_size:
+                continue
+
             # MANDATORY: DI Direction (must pass)
             di_ok = True
             if plus_di and minus_di:
@@ -405,17 +415,33 @@ def run_session_v10_equity(
                     continue
 
                 direction = fvg['direction']
+                is_long = direction == 'LONG'
                 fvg_mid = (fvg['low'] + fvg['high']) / 2
 
-                # Trend filter (HTF bias)
-                if htf_bias and htf_bias != direction:
+                # V10.8 HYBRID FILTER SYSTEM
+                # MANDATORY: FVG Size (must pass)
+                fvg_size = fvg['high'] - fvg['low']
+                if fvg_size < min_fvg_size:
                     continue
 
-                # DI filter (was missing - caused QQQ losses)
+                # MANDATORY: DI Direction (must pass)
+                di_ok = True
                 if plus_di and minus_di:
-                    if direction == 'LONG' and plus_di < minus_di:
+                    di_ok = (plus_di > minus_di) if is_long else (minus_di > plus_di)
+                if not di_ok:
+                    continue
+
+                # OPTIONAL filters (2/3 must pass)
+                adx_ok = adx is None or adx >= 11
+                ema_ok = htf_bias is None or htf_bias == direction
+                disp_ok = True  # Rejection candle shows displacement
+
+                if use_hybrid_filters:
+                    optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                    if optional_passed < 2:
                         continue
-                    if direction == 'SHORT' and minus_di < plus_di:
+                else:
+                    if not adx_ok:
                         continue
 
                 # Check for retracement
@@ -480,6 +506,32 @@ def run_session_v10_equity(
                 if i - fvg['creation_bar_idx'] > 5:
                     continue
 
+                # V10.8 HYBRID FILTER SYSTEM
+                # MANDATORY: FVG Size (must pass)
+                fvg_size = fvg['high'] - fvg['low']
+                if fvg_size < min_fvg_size:
+                    continue
+
+                # MANDATORY: DI Direction (must pass)
+                di_ok = True
+                if plus_di and minus_di:
+                    di_ok = plus_di > minus_di  # LONG requires +DI > -DI
+                if not di_ok:
+                    continue
+
+                # OPTIONAL filters (2/3 must pass)
+                adx_ok = adx is None or adx >= 11
+                ema_ok = htf_bias is None or htf_bias == 'LONG'
+                disp_ok = True  # BOS already confirms momentum
+
+                if use_hybrid_filters:
+                    optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                    if optional_passed < 2:
+                        continue
+                else:
+                    if not adx_ok:
+                        continue
+
                 entry_price = (fvg['low'] + fvg['high']) / 2
                 stop_price = fvg['low'] - stop_buffer  # ATR-based buffer (V10.4)
                 risk = abs(entry_price - stop_price)
@@ -522,6 +574,32 @@ def run_session_v10_equity(
                     continue
                 if i - fvg['creation_bar_idx'] > 5:
                     continue
+
+                # V10.8 HYBRID FILTER SYSTEM
+                # MANDATORY: FVG Size (must pass)
+                fvg_size = fvg['high'] - fvg['low']
+                if fvg_size < min_fvg_size:
+                    continue
+
+                # MANDATORY: DI Direction (must pass)
+                di_ok = True
+                if plus_di and minus_di:
+                    di_ok = minus_di > plus_di  # SHORT requires -DI > +DI
+                if not di_ok:
+                    continue
+
+                # OPTIONAL filters (2/3 must pass)
+                adx_ok = adx is None or adx >= 11
+                ema_ok = htf_bias is None or htf_bias == 'SHORT'
+                disp_ok = True  # BOS already confirms momentum
+
+                if use_hybrid_filters:
+                    optional_passed = sum([disp_ok, adx_ok, ema_ok])
+                    if optional_passed < 2:
+                        continue
+                else:
+                    if not adx_ok:
+                        continue
 
                 entry_price = (fvg['low'] + fvg['high']) / 2
                 stop_price = fvg['high'] + stop_buffer  # ATR-based buffer (V10.4)
