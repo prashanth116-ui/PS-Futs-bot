@@ -76,6 +76,17 @@ Separates filters into mandatory (must pass) and optional (2/3 must pass):
 
 **Result**: +$90k P/L improvement over 30 days, +71% more trades, same win rate
 
+**Implementation (Feb 10, 2026 Audit):**
+All 8 entry types now have consistent hybrid filters:
+- **Futures (3 entries)**: Creation, Retrace, BOS in `run_v10_dual_entry.py`
+- **Equities (5 entries)**: Creation, Overnight, Intraday, BOS LONG, BOS SHORT in `run_v10_equity.py`
+
+Fixes applied:
+- Added explicit FVG size check to futures Retrace entry (L548-551)
+- Added full hybrid filter blocks to equity BOS LONG (L509-529) and BOS SHORT (L578-598)
+- Added full hybrid filter block to equity Intraday entry (L421-441)
+- Added FVG size checks to equity Creation (L261-263) and Overnight (L335-337)
+
 ### Strategy Features
 - **Hybrid Filter System (V10.8)**: 2 mandatory + 2/3 optional filters (+$90k/30d improvement)
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
@@ -237,6 +248,9 @@ python -m runners.run_replay
 | `config/strategies/ict_es.yaml` | ES configuration |
 | `config/strategies/ict_nq.yaml` | NQ configuration |
 | `config/tradovate_credentials.template.json` | API credentials template |
+| `run_paper_trading.py` | **Paper trading wrapper** - health check, auto-restart |
+| `deploy/setup_droplet.sh` | DigitalOcean droplet initial setup |
+| `deploy/deploy.sh` | Deploy code updates to droplet |
 
 ### Strategy Functions
 | Function | Description |
@@ -267,6 +281,44 @@ python -m runners.run_replay
 ## TradingView Connection
 - Session cached at `~/.tvdatafeed/`
 - If data shows "nologin method", run `python -m runners.tv_login`
+
+## Automated Paper Trading (DigitalOcean Droplet)
+
+### Deployment
+The bot runs automatically on a DigitalOcean droplet at **3:55 AM ET Mon-Fri**.
+
+**Droplet**: `107.170.74.154`
+
+**Files**:
+- `deploy/setup_droplet.sh` - Initial droplet setup script
+- `deploy/deploy.sh` - Deploy code updates to droplet
+- `run_paper_trading.py` - Wrapper with health check, auto-restart, market hours enforcement
+
+**Quick Commands**:
+```bash
+# Deploy updated code to droplet
+./deploy/deploy.sh
+
+# SSH into droplet
+ssh root@107.170.74.154
+
+# On droplet - check status
+sudo systemctl status paper-trading
+systemctl list-timers
+
+# On droplet - view logs
+tail -f /opt/tradovate-bot/logs/paper_trading/service.log
+
+# On droplet - manual start/stop
+sudo systemctl start paper-trading
+sudo systemctl stop paper-trading
+```
+
+**Features**:
+- Health check with TradingView Pro connectivity verification on startup
+- Auto-restarts on crash (up to 5 times per day)
+- Graceful shutdown at market close (4:30 PM ET)
+- Skips weekends automatically
 
 ## Strategy Evolution
 | Version | Key Feature |
