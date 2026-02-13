@@ -1,0 +1,1 @@
+# Filters for new strategy

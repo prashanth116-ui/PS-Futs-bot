@@ -19,3 +19,9 @@ config/tradingview.env
 *.pem
 *.key
 credentials.json
+tv_cookies.json
+deploy/tv_cookies.json
+
+# Reports and data
+reports/
+nul

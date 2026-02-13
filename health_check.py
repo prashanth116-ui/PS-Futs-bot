@@ -48,6 +48,29 @@ def main():
     else:
         print("  No CSV files found")
 
+    # Check TradingView Pro connection
+    print("\nTradingView Pro:")
+    try:
+        from runners.tradingview_loader import fetch_futures_bars
+        bars = fetch_futures_bars("ES", interval="1m", n_bars=1, timeout=15)
+        if bars:
+            latest = bars[-1]
+            print(f"  Connection: OK (Pro account verified)")
+            print(f"  Latest ES: {latest.timestamp.strftime('%Y-%m-%d %H:%M')} @ {latest.close:.2f}")
+        else:
+            print("  Connection: FAILED - No data returned")
+            print("  Run: python -m runners.tv_login")
+            errors.append("TradingView: No data - run tv_login")
+    except Exception as e:
+        err_msg = str(e)
+        if "nologin" in err_msg.lower() or "login" in err_msg.lower():
+            print("  Connection: FAILED - Session expired")
+            print("  Run: python -m runners.tv_login")
+            errors.append("TradingView: Session expired - run tv_login")
+        else:
+            print(f"  Connection: FAILED - {e}")
+            errors.append(f"TradingView: {e}")
+
     # Run tests
     print("\nTests:")
     try:
