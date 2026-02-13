@@ -125,6 +125,9 @@ def run_paper_trading():
     ]
 
     log_file = get_log_file()
+    start_time = datetime.now()
+    last_wrapper_heartbeat = datetime.now()
+    WRAPPER_HEARTBEAT_INTERVAL = 300  # 5 minutes
 
     with open(log_file, "a") as f:
         process = subprocess.Popen(
@@ -147,6 +150,18 @@ def run_paper_trading():
                 except subprocess.TimeoutExpired:
                     process.kill()
                 return 0
+
+            # Wrapper heartbeat every 5 minutes
+            now = datetime.now()
+            if (now - last_wrapper_heartbeat).total_seconds() >= WRAPPER_HEARTBEAT_INTERVAL:
+                uptime_secs = int((now - start_time).total_seconds())
+                uptime_min = uptime_secs // 60
+                if uptime_min >= 60:
+                    uptime_str = f"{uptime_min // 60}h{uptime_min % 60}m"
+                else:
+                    uptime_str = f"{uptime_min}m"
+                log(f"[WRAPPER] {now.strftime('%H:%M:%S')} | Bot running (PID: {process.pid}) | Uptime: {uptime_str}")
+                last_wrapper_heartbeat = now
 
             time.sleep(30)  # Check every 30 seconds
 

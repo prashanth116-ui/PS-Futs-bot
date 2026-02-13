@@ -261,6 +261,12 @@ class LiveTrader:
         self.paper_daily_wins = 0
         self.paper_daily_losses = 0
 
+        # Price tracking for heartbeat
+        self.last_prices: Dict[str, float] = {}
+
+        # Telegram heartbeat (every 30 min)
+        self.last_telegram_heartbeat: datetime = None
+
         # Scan interval (3 minutes to match bar interval)
         self.scan_interval = 180  # seconds
 
@@ -394,16 +400,12 @@ class LiveTrader:
                 self._interruptible_sleep(10)
 
     def _interruptible_sleep(self, seconds: int):
-        """Sleep in small increments with heartbeat, allowing for interrupt."""
-        heartbeat_interval = 30  # Show heartbeat every 30 seconds
+        """Sleep in small increments, allowing for interrupt."""
         elapsed = 0
         while elapsed < seconds and self.running:
-            sleep_chunk = min(heartbeat_interval, seconds - elapsed)
+            sleep_chunk = min(30, seconds - elapsed)
             time.sleep(sleep_chunk)
             elapsed += sleep_chunk
-            if elapsed < seconds and self.running:
-                remaining = seconds - elapsed
-                log(f"  ... waiting {remaining}s until next scan")
 
     def _is_trading_hours(self, dt: datetime) -> bool:
         """Check if within trading hours (EST).
@@ -462,6 +464,7 @@ class LiveTrader:
             return
 
         current_price = session_bars[-1].close
+        self.last_prices[symbol] = current_price
         log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
 
         # V10.8: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
@@ -519,6 +522,7 @@ class LiveTrader:
             return
 
         current_price = session_bars[-1].close
+        self.last_prices[symbol] = current_price
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
 
         # V10.8: SPY BOS disabled, QQQ BOS enabled with loss limit
@@ -998,26 +1002,50 @@ class LiveTrader:
                 )
 
     def _print_status(self):
-        """Print current status."""
-        log(f"\n--- Status [{get_est_now().strftime('%H:%M:%S')}] ---")
+        """Print heartbeat status line for log monitoring."""
+        now = get_est_now()
+        timestamp = now.strftime('%H:%M:%S')
+
+        # Build price string from last known prices
+        price_parts = []
+        for sym in self.symbols:
+            if sym in self.last_prices:
+                price = self.last_prices[sym]
+                if sym in self.EQUITY_SYMBOLS:
+                    price_parts.append(f"{sym}=${price:.2f}")
+                else:
+                    price_parts.append(f"{sym}={price:.2f}")
+        prices_str = " ".join(price_parts) if price_parts else "no data"
 
         if self.paper_mode:
-            # Paper mode: show simulated P/L
             open_trades = len(self.paper_trades)
-            open_pnl = sum(t.t1_pnl for t in self.paper_trades.values())  # Partial P/L from T1 hits
-            log(f"Daily P/L: ${self.paper_daily_pnl:+,.2f} (realized)")
-            if open_pnl > 0:
-                log(f"Open P/L: ${open_pnl:+,.2f} (T1 partials)")
-            log(f"Trades: {self.paper_daily_trades} | Open: {open_trades}")
-            if self.paper_daily_trades > 0:
-                win_rate = (self.paper_daily_wins / self.paper_daily_trades) * 100
-                log(f"W/L: {self.paper_daily_wins}/{self.paper_daily_losses} ({win_rate:.0f}%)")
+            log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}")
         else:
-            # Live mode: use risk manager
             risk_summary = self.risk_manager.get_summary()
-            log(f"Daily P/L: ${risk_summary['daily_pnl']:+,.2f}")
-            log(f"Trades: {risk_summary['daily_trades']} | Open: {risk_summary['open_trades']}")
-            log(f"Status: {risk_summary['status'].upper()}")
+            log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {risk_summary['daily_trades']} | P/L: ${risk_summary['daily_pnl']:+,.2f} | Open: {risk_summary['open_trades']}")
+
+        # Telegram heartbeat every 30 minutes
+        send_telegram = False
+        if self.last_telegram_heartbeat is None:
+            send_telegram = True
+        else:
+            elapsed = safe_datetime_diff_seconds(now, self.last_telegram_heartbeat)
+            if elapsed >= 1800:  # 30 minutes
+                send_telegram = True
+
+        if send_telegram:
+            self.last_telegram_heartbeat = now
+            mode = "PAPER" if self.paper_mode else "LIVE"
+            if self.paper_mode:
+                open_trades = len(self.paper_trades)
+                tg_msg = f"[{mode}] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}"
+            else:
+                risk_summary = self.risk_manager.get_summary()
+                tg_msg = f"[{mode}] {timestamp} | {prices_str} | Trades: {risk_summary['daily_trades']} | P/L: ${risk_summary['daily_pnl']:+,.2f} | Open: {risk_summary['open_trades']}"
+            try:
+                notify_status(tg_msg)
+            except Exception:
+                pass  # Don't let Telegram failures break the loop
 
     def _print_summary(self):
         """Print end-of-session summary."""
