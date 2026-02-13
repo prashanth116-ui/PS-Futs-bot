@@ -7,7 +7,7 @@ python-dotenv>=1.0
 pandas>=2.0
 numpy>=2.0
 yfinance>=1.0
-tvDatafeed>=3.0
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
 
 # Tradovate API
 requests>=2.31
