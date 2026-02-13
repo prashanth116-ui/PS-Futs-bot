@@ -9,7 +9,7 @@ from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
 
 
-def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
+def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
@@ -49,11 +49,12 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print('Strategy: V10.7 Quad Entry (Hybrid Exit - T1 at 4R)')
+    print(f'Strategy: V10.7 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: YES')
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
+    print(f'  - T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R')
     print('='*80)
     print()
 
@@ -102,6 +103,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3):
             pm_cutoff_nq=True,        # V10.2: No NQ entries after 14:00
             max_bos_risk_pts=max_bos_risk_pts,  # V10.4: Cap BOS risk
             symbol=symbol,
+            t1_r_target=t1_r,
+            trail_r_trigger=trail_r,
         )
 
         # Tally results
@@ -209,4 +212,13 @@ if __name__ == '__main__':
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
     contracts = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 
-    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts)
+    # Parse optional R-target flags
+    t1_r = 3
+    trail_r = 6
+    for arg in sys.argv[4:]:
+        if arg.startswith('--t1-r='):
+            t1_r = int(arg.split('=')[1])
+        elif arg.startswith('--trail-r='):
+            trail_r = int(arg.split('=')[1])
+
+    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r)

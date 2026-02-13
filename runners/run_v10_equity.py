@@ -119,6 +119,9 @@ def run_session_v10_equity(
     bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
     # V10.8 Hybrid filters
     use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
+    # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L in A/B test)
+    t1_r_target=3,      # R-multiple for T1 fixed exit (default: 3R)
+    trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
 ):
     """
     Run V10 strategy on equity bars.
@@ -826,8 +829,8 @@ def run_session_v10_equity(
             t2_shares = max(1, int(total_shares * t2_ratio))
             runner_shares = total_shares - t1_shares - t2_shares
 
-            target_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
-            target_8r = entry_price + (8 * risk) if is_long else entry_price - (8 * risk)
+            target_4r = entry_price + (t1_r_target * risk) if is_long else entry_price - (t1_r_target * risk)
+            target_8r = entry_price + (trail_r_trigger * risk) if is_long else entry_price - (trail_r_trigger * risk)
             plus_4r = target_4r
 
             new_trade = {
@@ -916,7 +919,7 @@ def run_session_v10_equity(
     return final_results
 
 
-def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000):
+def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, trail_r=6):
     """Run V10 strategy on equity for today."""
     print(f"Fetching {symbol} data...")
     bars = fetch_futures_bars(symbol, interval='3m', n_bars=n_bars)
@@ -953,6 +956,7 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000):
     print(f"Min FVG: ${config['min_fvg_points']:.2f}")
     print(f"Min Risk: ${config['min_risk_points']:.2f}")
     print(f"Stop Buffer: ATR x 0.5 (V10.4)")
+    print(f"T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R")
 
     results = run_session_v10_equity(
         session_bars,
@@ -962,6 +966,8 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000):
         max_open_trades=2,
         t1_fixed_4r=True,
         overnight_retrace_min_adx=22,
+        t1_r_target=t1_r,
+        trail_r_trigger=trail_r,
     )
 
     if not results:
@@ -1009,4 +1015,13 @@ if __name__ == "__main__":
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'SPY'
     risk = int(sys.argv[2]) if len(sys.argv) > 2 else 500
 
-    run_today_v10_equity(symbol, risk)
+    # Parse optional R-target flags
+    t1_r = 3
+    trail_r = 6
+    for arg in sys.argv[3:]:
+        if arg.startswith('--t1-r='):
+            t1_r = int(arg.split('=')[1])
+        elif arg.startswith('--trail-r='):
+            trail_r = int(arg.split('=')[1])
+
+    run_today_v10_equity(symbol, risk, t1_r=t1_r, trail_r=trail_r)

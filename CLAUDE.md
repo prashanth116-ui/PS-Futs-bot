@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.8 (Hybrid Filters) - Feb 10, 2026
+## Current Strategy: V10.9 (R-Target Tuning) - Feb 13, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
@@ -48,18 +48,27 @@ Per-symbol BOS optimization with daily loss limit:
 | B2 | Intraday Retrace | Enter when price retraces into session FVG **(2+ bars old)** + rejection **[Disabled for SPY]** |
 | C | BOS + Retrace | Enter when price retraces into FVG after BOS **[Per-symbol control with loss limit]** |
 
-### Hybrid Exit Structure (Dynamic Sizing)
+### Hybrid Exit Structure (Dynamic Sizing + R-Target Tuning)
 ```
 Entry: Dynamic contracts at FVG midpoint
   - 1st trade of direction: 3 contracts (1 T1 + 1 T2 + 1 Runner)
   - 2nd/3rd trade: 2 contracts (1 T1 + 1 T2, no runner)
-    ↓ Price hits 4R target
-T1 (1 ct): FIXED profit at 4R - guaranteed, isolated from trail
-    ↓ Price hits 8R target
-T2 (1 ct): Structure trail with 4-tick buffer
-Runner (1 ct): Structure trail with 6-tick buffer (1st trade only)
+    ↓ Price hits 3R target (V10.9: lowered from 4R)
+T1 (1 ct): FIXED profit at 3R - guaranteed, isolated from trail
+    ↓ Price hits 6R target (V10.9: lowered from 8R)
+T2 (1 ct): Structure trail with 4-tick buffer (floor at 3R)
+Runner (1 ct): Structure trail with 6-tick buffer (1st trade only, floor at 3R)
     ↓ Swing pullback
 T2/Runner exit on respective trail stops or EOD
+```
+
+**R-Target CLI flags** (all runners support `--t1-r=N --trail-r=N`):
+```bash
+# Default (V10.9): T1=3R, Trail=6R
+python -m runners.backtest_v10_multiday ES 11
+
+# Override to old baseline
+python -m runners.backtest_v10_multiday ES 11 --t1-r=4 --trail-r=8
 ```
 
 ### V10.8 Hybrid Filter System
@@ -87,10 +96,32 @@ Fixes applied:
 - Added full hybrid filter block to equity Intraday entry (L421-441)
 - Added FVG size checks to equity Creation (L261-263) and Overnight (L335-337)
 
+### V10.9 R-Target Tuning (A/B Test Results)
+Lowered T1 exit from 4R to 3R and trail activation from 8R to 6R.
+
+**A/B Test (11 days, ES + NQ):**
+| Config | T1/Trail | Total P/L | Win Rate | Max DD | Win Days |
+|--------|----------|-----------|----------|--------|----------|
+| 4R/8R (old) | 4R/8R | $142,034 | 74.5% | $1,319 | 9/11 |
+| **3R/6R (new)** | **3R/6R** | **$179,358** | **90.6%** | **$0** | **11/11** |
+| 4R/6R | 4R/6R | $138,024 | 74.5% | $975 | 10/11 |
+| 5R/10R | 5R/10R | $146,940 | 70.0% | $975 | 9/11 |
+
+**15-Day Validation (ES + NQ):**
+| Config | Total P/L | Win Rate | Max DD | Day Win Rate |
+|--------|-----------|----------|--------|-------------|
+| **3R/6R (new)** | **$200,533** | **87.7%** | **$0** | **100% (15/15)** |
+| 4R/8R (old) | $153,275 | 69.2% | $1,319 | 73.3% (11/15) |
+
+**Result**: +$47k P/L improvement (+31%), +18.5% win rate, zero drawdown
+
+**Why it works**: Lower 3R T1 locks profit before most pullbacks. Narrower gap between T1 (3R) and trail activation (6R) means fewer trades get caught in the dead zone where they gave back gains.
+
 ### Strategy Features
+- **R-Target Tuning (V10.9)**: T1 at 3R, trail at 6R (+31% P/L, 87.7% WR, zero DD)
 - **Hybrid Filter System (V10.8)**: 2 mandatory + 2/3 optional filters (+$90k/30d improvement)
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
-- **Hybrid Exit**: T1 fixed at 4R, T2/Runner structure trail
+- **Hybrid Exit**: T1 fixed at 3R, T2/Runner structure trail after 6R
 - **Dynamic Position Sizing (V10.7)**: 1st trade: 3 cts, 2nd+ trades: 2 cts (max 6 cts exposure)
 - **Position Limit (V10.7)**: Max 3 open trades total per direction
 - **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit
@@ -124,14 +155,14 @@ Fixes applied:
 | **Max Open Trades** | **3 per direction** | **V10.7: Increased from 2** |
 | **Position Sizing** | **Dynamic** | **V10.7: 1st trade: 3 cts, 2nd+: 2 cts (max 6 cts)** |
 
-### 11-Day Backtest Results (V10.7 - Dynamic Sizing)
+### 15-Day Backtest Results (V10.9 - R-Target Tuning)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L | Avg Daily |
 |--------|--------|------|--------|----------|-----|-----------|-----------|
-| ES | 44 | 33 | 10 | 75.0% | 39.57 | +$71,844 | +$6,531 |
-| NQ | 32 | 25 | 7 | 78.1% | 83.02 | +$114,412 | +$10,401 |
-| **Mini Total** | **76** | **58** | **17** | **76.3%** | **-** | **+$186,256** | **+$16,932** |
+| ES | 78 | 70 | 7 | 89.7% | inf | +$87,113 | +$5,808 |
+| NQ | 60 | 51 | 9 | 85.0% | inf | +$113,420 | +$7,561 |
+| **Mini Total** | **138** | **121** | **16** | **87.7%** | **-** | **+$200,533** | **+$13,369** |
 
-*V10.7 vs V10.6: +18% higher P/L, +11% higher win rate, lower max drawdown ($1,395 vs $1,862)*
+*V10.9 vs V10.8: +$47k P/L (+31%), +18.5% win rate, zero drawdown, 100% day win rate (15/15)*
 
 ### 30-Day Equity Results (V10.4 - ATR Buffer)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
@@ -150,13 +181,13 @@ Fixes applied:
 | Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights (V10.7)
-- Strategy is "home run" dependent - big trending days drive profits
-- Creation entries dominate (72% of trades) - lower ADX catches more setups
-- Dynamic sizing caps exposure at 6 contracts vs 9 with fixed sizing
-- NQ leads with 90.9% day win rate and 78.1% trade win rate
-- FVG mitigation fix prevents entries on invalidated gaps
-- 3 trades per direction allows capturing extended moves
+### Key Insights (V10.9)
+- Lower R-targets (3R/6R) lock profit before most pullbacks — 87.7% win rate
+- Zero drawdown over 15 trading days — every day profitable for both ES and NQ
+- Creation entries dominate (91-93% of trades)
+- Strategy is still "home run" dependent — big trending days drive profits
+- Narrower dead zone between T1 exit (3R) and trail activation (6R) prevents give-back
+- R-targets are parameterized via `--t1-r=N --trail-r=N` CLI flags for future A/B tests
 
 ## Key Commands
 
@@ -179,6 +210,11 @@ python -m runners.backtest_v10_multiday ES 30
 python -m runners.backtest_v10_multiday NQ 30
 python -m runners.backtest_v10_multiday MES 30
 python -m runners.backtest_v10_multiday MNQ 30
+
+# R-target A/B testing (override defaults)
+python -m runners.backtest_v10_multiday ES 11 --t1-r=4 --trail-r=8
+python -m runners.run_v10_dual_entry ES 3 --t1-r=5 --trail-r=10
+python -m runners.run_v10_equity SPY 500 --t1-r=3 --trail-r=6
 
 # Analyze winning vs losing days
 python -m runners.analyze_win_loss ES
@@ -323,6 +359,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
 | V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |
 | V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix |
 | V10.6 | BOS LOSS_LIMIT - per-symbol control + 1 loss/day limit |

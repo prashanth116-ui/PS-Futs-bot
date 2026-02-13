@@ -338,6 +338,9 @@ def run_session_v10(
     t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
     # V10.8 Hybrid filters
     use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
+    # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L, 90.6% WR in 11-day A/B test)
+    t1_r_target=3,      # R-multiple for T1 fixed exit (default: 3R)
+    trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -987,9 +990,9 @@ def run_session_v10(
             # This keeps max exposure at 6 contracts (vs 9 with fixed 3)
             trade_contracts = contracts if current_open == 0 else max(2, contracts - 1)
 
-            target_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
-            target_8r = entry_price + (8 * risk) if is_long else entry_price - (8 * risk)
-            plus_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
+            target_4r = entry_price + (t1_r_target * risk) if is_long else entry_price - (t1_r_target * risk)
+            target_8r = entry_price + (trail_r_trigger * risk) if is_long else entry_price - (trail_r_trigger * risk)
+            plus_4r = entry_price + (t1_r_target * risk) if is_long else entry_price - (t1_r_target * risk)
 
             new_trade = {
                 'direction': direction,
@@ -1075,7 +1078,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
                   enable_creation=True, enable_retracement=True, enable_bos=True,
                   interval='3m', retracement_morning_only=False, retracement_trend_aligned=False,
                   overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
-                  t1_fixed_4r=True):  # HYBRID default: T1 takes profit at 4R
+                  t1_fixed_4r=True,  # HYBRID default: T1 takes profit at 4R
+                  t1_r=3, trail_r=6):  # R-target tuning (V10.9)
     """Run V10 backtest for today.
 
     Args:
@@ -1143,7 +1147,9 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
-    print(f'  - T1 Exit: {"4R FIXED (Hybrid)" if t1_fixed_4r else "Structure Trail"}')
+    print(f'  - T1 Exit: {t1_r}R FIXED (Hybrid)' if t1_fixed_4r else f'  - T1 Exit: Structure Trail')
+    print(f'  - Trail Activation: {trail_r}R')
+    print(f'  - Trail Floor: {t1_r}R')
     print(f'  - Midday cutoff (12-14): YES')
     print(f'  - PM cutoff (NQ/MNQ): {"YES" if symbol in ["NQ", "MNQ"] else "NO"}')
     print('='*70)
@@ -1167,6 +1173,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         pm_cutoff_nq=True,
         max_bos_risk_pts=max_bos_risk_pts,
         symbol=symbol,
+        t1_r_target=t1_r,
+        trail_r_trigger=trail_r,
     )
 
     total_pnl = 0
@@ -1224,6 +1232,9 @@ if __name__ == '__main__':
     morning_only = False
     trend_aligned = False
 
+    t1_r = 3
+    trail_r = 6
+
     for arg in sys.argv[3:]:
         if arg == '--creation-only':
             enable_retracement = False
@@ -1240,6 +1251,10 @@ if __name__ == '__main__':
             morning_only = True
         elif arg == '--trend-aligned':
             trend_aligned = True
+        elif arg.startswith('--t1-r='):
+            t1_r = int(arg.split('=')[1])
+        elif arg.startswith('--trail-r='):
+            trail_r = int(arg.split('=')[1])
 
     run_today_v10(
         symbol=symbol,
@@ -1249,4 +1264,6 @@ if __name__ == '__main__':
         enable_bos=enable_bos,
         retracement_morning_only=morning_only,
         retracement_trend_aligned=trend_aligned,
+        t1_r=t1_r,
+        trail_r=trail_r,
     )
