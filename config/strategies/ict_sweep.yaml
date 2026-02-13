@@ -1,0 +1,93 @@
+# ICT Liquidity Sweep Strategy Configuration
+#
+# Entry Logic:
+# 1. Liquidity Sweep - Price sweeps swing high/low (stop hunt)
+# 2. Displacement - Strong rejection candle (2x+ avg body)
+# 3. FVG Forms - Fair Value Gap created during displacement
+# 4. FVG Mitigation - Price retraces into FVG zone
+# 5. LTF MSS Confirms - Market Structure Shift on 1m
+
+# ===== INSTRUMENT SETTINGS =====
+symbol: "ES"
+tick_size: 0.25
+tick_value: 12.50  # ES=$12.50, NQ=$5.00, MES=$1.25, MNQ=$0.50
+contracts: 3
+
+# ===== TIMEFRAME SETTINGS =====
+timeframes:
+  htf: "5m"   # Higher timeframe for setup detection
+  ltf: "1m"   # Lower timeframe for MSS confirmation
+
+# ===== LIQUIDITY DETECTION =====
+liquidity:
+  # Swing point detection
+  swing_lookback: 20        # Bars to search for swing points
+  swing_strength: 3         # Bars on each side to confirm swing
+  max_levels: 5             # Max liquidity levels to track
+
+# ===== SWEEP DETECTION =====
+sweep:
+  min_sweep_ticks: 2        # Minimum ticks beyond swing level
+  max_sweep_ticks: 20       # Maximum sweep depth (too deep = not a sweep)
+  check_bars: 3             # Recent bars to check for sweep
+
+# ===== DISPLACEMENT =====
+displacement:
+  multiplier: 2.0           # Body must be >= 2x average body
+  avg_body_lookback: 20     # Bars to calculate average body
+
+# ===== FVG (Fair Value Gap) =====
+fvg:
+  min_size_ticks:
+    ES: 5                   # Minimum FVG size for ES
+    NQ: 15                  # Minimum FVG size for NQ
+    MES: 5
+    MNQ: 15
+  max_age_bars: 50          # Remove FVGs older than this
+
+# ===== MSS (Market Structure Shift) =====
+mss:
+  lookback: 10              # Bars to find swing for MSS
+  swing_strength: 2         # Bars on each side for LTF swing
+
+# ===== STOP LOSS =====
+stop:
+  buffer_ticks: 2           # Ticks beyond sweep point
+  max_risk_ticks: 40        # Maximum allowed risk in ticks
+
+# ===== TARGETS =====
+targets:
+  t1_multiplier: 2.0        # T1 at 2R (50% exit)
+  t2_multiplier: 4.0        # T2 at 4R (remaining)
+  use_opposing_liquidity: true  # Runner to opposing swing
+
+# ===== SESSION FILTER =====
+session:
+  start: "09:30"            # NY session start (ET)
+  end: "16:00"              # NY session end (ET)
+  allow_lunch: false        # Skip 12:00-13:00 lunch lull
+  require_killzone: false   # Only trade NY Open/PM killzones
+
+  # Killzones (for reference)
+  killzones:
+    NY_OPEN:
+      start: "09:30"
+      end: "11:00"
+    NY_PM:
+      start: "13:30"
+      end: "16:00"
+    LONDON:
+      start: "02:00"
+      end: "05:00"
+
+# ===== RISK MANAGEMENT =====
+risk:
+  max_daily_trades: 5       # Maximum trades per day
+  max_daily_losses: 2       # Stop after N losses
+  max_position_size: 3      # Max contracts per trade
+
+# ===== BACKTEST SETTINGS =====
+backtest:
+  days: 14
+  initial_capital: 50000
+  commission_per_contract: 2.50
