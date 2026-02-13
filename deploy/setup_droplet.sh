@@ -46,6 +46,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$APP_DIR
 Environment=PATH=$APP_DIR/venv/bin:/usr/bin
+ExecStartPre=/bin/mkdir -p $APP_DIR/logs/paper_trading
 ExecStart=$APP_DIR/venv/bin/python run_paper_trading.py
 Restart=on-failure
 RestartSec=30
