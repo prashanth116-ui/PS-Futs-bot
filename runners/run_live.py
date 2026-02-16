@@ -572,17 +572,6 @@ class LiveTrader:
             print(f"    Risk: {result['risk']:.2f} pts")
             print(f"    4R Target: {result['target_4r']:.2f}")
 
-            # Send Telegram notification
-            notify_entry(
-                symbol=symbol,
-                direction=result['direction'],
-                entry_type=result['entry_type'],
-                entry_price=result['entry_price'],
-                stop_price=result['stop_price'],
-                contracts=config['contracts'],
-                risk_pts=result['risk'],
-            )
-
             # Check risk manager
             allowed, reason = self.risk_manager.can_enter_trade(
                 symbol=symbol,
@@ -596,6 +585,17 @@ class LiveTrader:
                 print(f"    BLOCKED: {reason}")
                 self.processed_signals[symbol].add(signal_id)
                 continue
+
+            # Send Telegram notification (only for trades that pass risk check)
+            notify_entry(
+                symbol=symbol,
+                direction=result['direction'],
+                entry_type=result['entry_type'],
+                entry_price=result['entry_price'],
+                stop_price=result['stop_price'],
+                contracts=config['contracts'],
+                risk_pts=result['risk'],
+            )
 
             # Execute trade
             if self.paper_mode:
@@ -633,7 +633,7 @@ class LiveTrader:
             print(f"    Shares: {result['total_shares']}")
             print(f"    P/L: ${result['total_dollars']:+,.2f}")
 
-            # Send Telegram notification
+            # Send Telegram notification (only for trades that pass filters)
             notify_entry(
                 symbol=symbol,
                 direction=result['direction'],
@@ -735,17 +735,6 @@ class LiveTrader:
         log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | 4R: {target_4r:.2f}")
         log(f"    Trade ID: {trade_id}")
 
-        # Send notification
-        notify_entry(
-            symbol=symbol,
-            direction=result['direction'],
-            entry_type=result['entry_type'],
-            entry_price=entry_price,
-            stop_price=stop_price,
-            contracts=contracts,
-            risk_pts=risk,
-        )
-
     def _manage_paper_trades(self):
         """Manage open paper trades - check stops and targets."""
         closed_trades = []
@@ -790,9 +779,10 @@ class LiveTrader:
                 notify_exit(
                     symbol=trade.symbol,
                     direction=trade.direction,
+                    exit_type="STOP",
                     exit_price=trade.stop_price,
                     pnl=trade.total_pnl,
-                    exit_reason="STOP",
+                    contracts=trade.contracts,
                 )
 
                 closed_trades.append(trade_id)
@@ -881,9 +871,10 @@ class LiveTrader:
                     notify_exit(
                         symbol=trade.symbol,
                         direction=trade.direction,
+                        exit_type="RUNNER_TRAIL",
                         exit_price=trade.runner_trail_stop,
                         pnl=trade.total_pnl,
-                        exit_reason="RUNNER_TRAIL",
+                        contracts=trade.contracts,
                     )
 
                     closed_trades.append(trade_id)
@@ -920,9 +911,10 @@ class LiveTrader:
                     notify_exit(
                         symbol=trade.symbol,
                         direction=trade.direction,
+                        exit_type="8R_TARGET",
                         exit_price=trade.target_8r,
                         pnl=trade.total_pnl,
-                        exit_reason="8R_TARGET",
+                        contracts=trade.contracts,
                     )
 
                     closed_trades.append(trade_id)

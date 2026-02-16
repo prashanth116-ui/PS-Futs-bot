@@ -54,7 +54,7 @@ class TelegramNotifier:
         """Send trade entry notification."""
         emoji = "🟢" if direction == "LONG" else "🔴"
         msg = f"""
-{emoji} <b>NEW TRADE - {symbol}</b>
+{emoji} <b>ICT V10.9 | NEW TRADE - {symbol}</b>
 
 <b>Direction:</b> {direction}
 <b>Type:</b> {entry_type}
@@ -73,7 +73,7 @@ class TelegramNotifier:
         emoji = "✅" if pnl > 0 else "❌"
         pnl_emoji = "💰" if pnl > 0 else "📉"
         msg = f"""
-{emoji} <b>TRADE EXIT - {symbol}</b>
+{emoji} <b>ICT V10.9 | TRADE EXIT - {symbol}</b>
 
 <b>Direction:</b> {direction}
 <b>Exit Type:</b> {exit_type}
@@ -91,7 +91,7 @@ class TelegramNotifier:
         win_rate = (wins / trades * 100) if trades > 0 else 0
         emoji = "🎉" if total_pnl > 0 else "😔"
         msg = f"""
-{emoji} <b>DAILY SUMMARY</b>
+{emoji} <b>ICT V10.9 | DAILY SUMMARY</b>
 
 <b>Trades:</b> {trades}
 <b>Wins:</b> {wins} | <b>Losses:</b> {losses}
@@ -107,7 +107,7 @@ class TelegramNotifier:
     def notify_error(self, error_msg: str) -> bool:
         """Send error notification."""
         msg = f"""
-⚠️ <b>TRADING BOT ERROR</b>
+⚠️ <b>ICT V10.9 | ERROR</b>
 
 {error_msg}
 
@@ -118,7 +118,7 @@ class TelegramNotifier:
     def notify_status(self, status: str) -> bool:
         """Send status update."""
         msg = f"""
-ℹ️ <b>BOT STATUS</b>
+ℹ️ <b>ICT V10.9 | STATUS</b>
 
 {status}
 
@@ -204,7 +204,7 @@ if __name__ == "__main__":
 
     if notifier.enabled:
         print("Testing Telegram notifications...")
-        notifier.notify_status("V10.7 Paper Trading bot started!")
+        notifier.notify_status("Paper Trading bot started!")
         notifier.notify_entry("ES", "LONG", "CREATION", 6950.25, 6945.00, 3, 5.25)
         notifier.notify_exit("ES", "LONG", "T1_4R", 6971.25, 787.50, 1)
         notifier.notify_daily_summary(5, 4, 1, 2150.00, ["ES", "NQ"])

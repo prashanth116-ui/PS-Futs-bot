@@ -121,7 +121,7 @@ def run_paper_trading():
     cmd = [
         sys.executable, "-m", "runners.run_live",
         "--paper",
-        "--symbols", "ES", "NQ", "MES", "MNQ", "SPY", "QQQ"
+        "--symbols", "ES"
     ]
 
     log_file = get_log_file()
