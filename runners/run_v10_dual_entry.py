@@ -308,7 +308,7 @@ def run_session_v10(
     tick_value=12.50,
     contracts=3,
     max_open_trades=3,  # V10.7: Increased from 2 to allow 3rd entry
-    max_losses_per_day=2,
+    max_losses_per_day=3,
     displacement_threshold=1.0,
     min_adx=11,  # V10.7: Lowered from 17 to catch earlier setups
     min_risk_pts=0,
@@ -777,7 +777,7 @@ def run_session_v10(
     active_trades = []
     completed_results = []
     entries_taken = {'LONG': 0, 'SHORT': 0}
-    loss_count = 0
+    loss_count = {'LONG': 0, 'SHORT': 0}
     bos_loss_count = 0  # V10.6: Track BOS losses for daily limit
 
     # V10.7: T1/T2/runner splits are now calculated per-trade based on trade's contract count
@@ -894,7 +894,7 @@ def run_session_v10(
                     pnl = (trade['stop_price'] - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - trade['stop_price']) * remaining
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'cts': remaining})
                     trade['remaining'] = 0
-                    loss_count += 1
+                    loss_count[trade['direction']] += 1
                     # V10.6: Track BOS losses for daily limit
                     if 'BOS' in trade.get('entry_type', ''):
                         bos_loss_count += 1
@@ -958,9 +958,6 @@ def run_session_v10(
                 completed_results.append(trade)
 
         # Check for new entries
-        if loss_count >= max_losses_per_day:
-            continue
-
         current_open = len(active_trades)
 
         for entry in all_valid_entries:
@@ -970,14 +967,15 @@ def run_session_v10(
             direction = entry['direction']
             entry_type = entry.get('entry_type', '')
 
+            # Direction-aware circuit breaker: skip if this direction hit max losses
+            if loss_count[direction] >= max_losses_per_day:
+                continue
+
             # V10.6: Skip BOS entries if daily loss limit reached
             if 'BOS' in entry_type and bos_daily_loss_limit > 0 and bos_loss_count >= bos_daily_loss_limit:
                 continue
 
             if current_open >= max_open_trades:
-                continue
-
-            if entries_taken[direction] >= max_open_trades:  # V10.7: Use max_open_trades instead of hardcoded 2
                 continue
 
             is_long = direction == 'LONG'
@@ -1074,7 +1072,7 @@ def run_session_v10(
     return final_results
 
 
-def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None,
+def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None,
                   enable_creation=True, enable_retracement=True, enable_bos=True,
                   interval='3m', retracement_morning_only=False, retracement_trend_aligned=False,
                   overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
@@ -1145,8 +1143,11 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
     print(f'  - Max open trades: {max_open_trades}')
     # Max BOS risk in points (same for micro and mini contracts)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
+    # V10.6: Per-symbol BOS control - ES/MES disabled, NQ/MNQ enabled with loss limit
+    disable_bos = symbol in ['ES', 'MES']
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
+    print(f'  - BOS: {"OFF" if disable_bos else "ON (1 loss limit)"}')
     print(f'  - T1 Exit: {t1_r}R FIXED (Hybrid)' if t1_fixed_4r else f'  - T1 Exit: Structure Trail')
     print(f'  - Trail Activation: {trail_r}R')
     print(f'  - Trail Floor: {t1_r}R')
@@ -1175,6 +1176,9 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None
         symbol=symbol,
         t1_r_target=t1_r,
         trail_r_trigger=trail_r,
+        disable_bos_retrace=disable_bos,
+        bos_daily_loss_limit=1,
+        high_displacement_override=3.0,
     )
 
     total_pnl = 0

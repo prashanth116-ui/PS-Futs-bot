@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from datetime import date, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
+from runners.run_v10_equity import run_session_v10_equity
 from strategies.ict.signals.fvg import detect_fvgs
 
 
@@ -35,18 +36,24 @@ def calculate_ema(closes, period):
     return ema
 
 
-def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m'):
-    """Plot today's trades with V10.7 Quad Entry strategy."""
+def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50):
+    """Plot today's trades with V10.7 Quad Entry strategy. Supports futures and equities."""
 
-    tick_size = 0.25
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
+    is_equity = symbol.upper() in ['SPY', 'QQQ']
+
+    if is_equity:
+        tick_size = 0.01
+        tick_value = 1.0
+    else:
+        tick_size = 0.25
+        tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
     max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
     # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
 
     print(f'Fetching {symbol} {interval} data...')
-    all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=1000)
+    all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=3000 if is_equity else 1000)
 
     if not all_bars:
         print('No data available')
@@ -75,28 +82,37 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
         print('Not enough bars')
         return
 
-    # Run V10.7 strategy with all entry types (Hybrid exit: T1 at 4R)
-    all_results = run_session_v10(
-        session_bars,
-        all_bars,
-        tick_size=tick_size,
-        tick_value=tick_value,
-        contracts=contracts,
-        min_risk_pts=min_risk_pts,
-        enable_creation_entry=True,
-        enable_retracement_entry=True,
-        enable_bos_entry=True,
-        retracement_morning_only=retracement_morning_only,
-        t1_fixed_4r=True,  # Hybrid: T1 takes profit at 4R
-        overnight_retrace_min_adx=22,  # V10.1: ADX filter for overnight
-        midday_cutoff=True,  # V10.2: No entries 12-14
-        pm_cutoff_nq=True,  # V10.2: No NQ after 14:00
-        symbol=symbol,
-        max_bos_risk_pts=max_bos_risk,  # V10.4: Cap BOS risk
-        high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
-        disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
-        bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
-    )
+    if is_equity:
+        all_results = run_session_v10_equity(
+            session_bars,
+            all_bars,
+            symbol=symbol,
+            risk_per_trade=risk_per_trade,
+            t1_fixed_4r=True,
+            overnight_retrace_min_adx=22,
+        )
+    else:
+        all_results = run_session_v10(
+            session_bars,
+            all_bars,
+            tick_size=tick_size,
+            tick_value=tick_value,
+            contracts=contracts,
+            min_risk_pts=min_risk_pts,
+            enable_creation_entry=True,
+            enable_retracement_entry=True,
+            enable_bos_entry=True,
+            retracement_morning_only=retracement_morning_only,
+            t1_fixed_4r=True,
+            overnight_retrace_min_adx=22,
+            midday_cutoff=True,
+            pm_cutoff_nq=True,
+            symbol=symbol,
+            max_bos_risk_pts=max_bos_risk,
+            high_displacement_override=3.0,
+            disable_bos_retrace=disable_bos,
+            bos_daily_loss_limit=1,
+        )
 
     if not all_results:
         print('No trades found')
@@ -107,8 +123,9 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
     ema_20 = calculate_ema(closes, 20)
     ema_50 = calculate_ema(closes, 50)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(22, 14))
+    # Create figure with space for trade table below chart
+    fig = plt.figure(figsize=(22, 16))
+    ax = fig.add_axes([0.05, 0.28, 0.90, 0.65])  # left, bottom, width, height
 
     # Plot candlesticks
     for i, bar in enumerate(session_bars):
@@ -159,13 +176,14 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
         is_long = direction == 'LONG'
 
         trade_label = f"{direction} [{entry_type}]"
-        if result.get('is_reentry'):
+        if result.get('is_reentry') or result.get('is_2nd_entry'):
             trade_label += ' [2nd]'
 
         entry_price = result['entry_price']
         stop_price = result['stop_price']
-        target_4r = result['target_4r']
-        target_8r = result['target_8r']
+        risk = result.get('risk', abs(entry_price - stop_price))
+        target_4r = result.get('target_4r', entry_price + 3 * risk if is_long else entry_price - 3 * risk)
+        target_8r = result.get('target_8r', entry_price + 6 * risk if is_long else entry_price - 6 * risk)
 
         # Find entry bar index
         entry_time = result['entry_time']
@@ -195,7 +213,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
                         'bar_idx': i,
                         'price': exit['price'],
                         'type': exit['type'],
-                        'cts': exit['cts'],
+                        'qty': exit.get('cts') or exit.get('shares', 0),
                         'pnl': exit['pnl'],
                     })
                     last_exit_bar_idx = max(last_exit_bar_idx, i)
@@ -234,7 +252,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
                    marker=entry_marker, edgecolors='black', linewidths=2)
 
         # Entry annotation
-        y_offset = 8 if is_long else -8
+        y_offset = (1 if is_equity else 8) if is_long else (-1 if is_equity else -8)
         ax.annotate(f'{trade_label}\n{entry_time.strftime("%H:%M")}\n{entry_price:.2f}',
                     xy=(entry_bar_idx, entry_price),
                     xytext=(entry_bar_idx - 5, entry_price + y_offset),
@@ -245,12 +263,13 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
         exit_marker = 'v' if is_long else '^'
         for e_idx, ed in enumerate(exit_data):
             ec = exit_colors.get(ed['type'], '#4CAF50')
-            dollars = (ed['pnl'] / tick_size) * tick_value
+            dollars = ed['pnl'] if is_equity else (ed['pnl'] / tick_size) * tick_value
             ax.scatter([ed['bar_idx']], [ed['price']], color=ec, s=150, zorder=5,
                        marker=exit_marker, edgecolors='black', linewidths=1.5)
 
+            unit = 'sh' if is_equity else 'ct'
             x_offset = 2 + (e_idx * 3)
-            ax.annotate(f"{ed['type']}\n{ed['cts']}ct @ {ed['price']:.2f}\n${dollars:+,.0f}",
+            ax.annotate(f"{ed['type']}\n{ed['qty']}{unit} @ {ed['price']:.2f}\n${dollars:+,.0f}",
                         xy=(ed['bar_idx'], ed['price']),
                         xytext=(ed['bar_idx'] + x_offset, ed['price']),
                         fontsize=8, fontweight='bold', color=ec,
@@ -272,8 +291,9 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
 
     # Y-axis range
     if all_prices:
-        y_min = min(all_prices) - 15
-        y_max = max(all_prices) + 15
+        y_pad = 2 if is_equity else 15
+        y_min = min(all_prices) - y_pad
+        y_max = max(all_prices) + y_pad
         ax.set_ylim(y_min, y_max)
 
     ax.set_xlabel('Time', fontsize=12)
@@ -294,44 +314,66 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
     ax.legend(loc='upper left', fontsize=10)
     ax.grid(True, alpha=0.3)
 
-    # Add summary box
-    summary_lines = [
-        'V10 QUAD ENTRY',
-        f'Symbol: {symbol}',
-        f'Trades: {len(all_results)}',
-        f'  Creation: {creation_count}',
-        f'  Overnight: {overnight_count}',
-        f'  Intraday: {intraday_count}',
-        f'  BOS: {bos_count}',
-        '-' * 20,
-    ]
+    # Add trade summary table below chart
+    table_ax = fig.add_axes([0.05, 0.02, 0.90, 0.22])  # left, bottom, width, height
+    table_ax.axis('off')
 
+    col_labels = ['#', 'Dir', 'Type', 'Entry', 'Time', 'Risk', 'Exits', 'Result', 'P/L']
+    table_data = []
     for t_idx, result in enumerate(all_results):
-        entry_type = result['entry_type']
         direction = result['direction']
+        entry_type = result['entry_type'].replace('_RETRACE', '').replace('RETRACEMENT', 'OVERNIGHT')
         entry_time = result['entry_time'].strftime('%H:%M')
         res_str = 'WIN' if result['total_dollars'] > 0 else 'LOSS' if result['total_dollars'] < 0 else 'BE'
+        reentry = ' (2nd)' if (result.get('is_reentry') or result.get('is_2nd_entry')) else ''
 
-        summary_lines.append(f'{direction} [{entry_type}]')
-        summary_lines.append(f'  Entry: {result["entry_price"]:.2f} @ {entry_time}')
-        summary_lines.append(f'  Risk: {result["risk"]:.2f} pts')
-        for exit in result['exits']:
-            dollars = (exit['pnl'] / tick_size) * tick_value
-            summary_lines.append(f'  {exit["type"]}: {exit["cts"]}ct ${dollars:+,.0f}')
-        summary_lines.append(f'  {res_str}: ${result["total_dollars"]:+,.2f}')
-        summary_lines.append('')
+        exit_parts = []
+        for ex in result['exits']:
+            dollars = ex['pnl'] if is_equity else (ex['pnl'] / tick_size) * tick_value
+            unit = 'sh' if is_equity else 'ct'
+            qty = ex.get('cts') or ex.get('shares', 0)
+            exit_parts.append(f"{ex['type'].replace('_PARTIAL','').replace('_STRUCT','').replace('_STOP','')}: {qty}{unit} ${dollars:+,.0f}")
+        exits_str = ' | '.join(exit_parts)
 
-    summary_lines.append('-' * 20)
-    summary_lines.append(f'TOTAL: ${total_pnl:+,.2f}')
+        table_data.append([
+            str(t_idx + 1),
+            direction,
+            entry_type + reentry,
+            f"{result['entry_price']:.2f}",
+            entry_time,
+            f"{result['risk']:.2f}",
+            exits_str,
+            res_str,
+            f"${result['total_dollars']:+,.2f}",
+        ])
 
-    summary = '\n'.join(summary_lines)
+    # Add total row
+    table_data.append(['', '', '', '', '', '', '', 'TOTAL', f'${total_pnl:+,.2f}'])
 
-    box_color = '#FFCDD2' if total_pnl < 0 else '#C8E6C9'
-    edge_color = '#F44336' if total_pnl < 0 else '#4CAF50'
-    props = dict(boxstyle='round', facecolor=box_color, alpha=0.9, edgecolor=edge_color, linewidth=2)
-    ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=9,
-            verticalalignment='top', horizontalalignment='right',
-            fontweight='bold', bbox=props, family='monospace')
+    table = table_ax.table(cellText=table_data, colLabels=col_labels,
+                           loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.3)
+
+    # Style header
+    for j, label in enumerate(col_labels):
+        table[0, j].set_facecolor('#1976D2')
+        table[0, j].set_text_props(color='white', fontweight='bold')
+
+    # Style rows
+    for i, result in enumerate(all_results):
+        row = i + 1
+        bg = '#C8E6C9' if result['total_dollars'] > 0 else '#FFCDD2' if result['total_dollars'] < 0 else '#FFF9C4'
+        for j in range(len(col_labels)):
+            table[row, j].set_facecolor(bg)
+
+    # Style total row
+    total_row = len(table_data)
+    total_bg = '#C8E6C9' if total_pnl > 0 else '#FFCDD2' if total_pnl < 0 else '#FFF9C4'
+    for j in range(len(col_labels)):
+        table[total_row, j].set_facecolor(total_bg)
+        table[total_row, j].set_text_props(fontweight='bold')
 
     # Add RTH key levels box (bottom left) - prevents misreading chart
     rth_bars = [b for b in session_bars if b.timestamp.time() >= dt_time(9, 30)]
@@ -348,7 +390,6 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
                 verticalalignment='bottom', horizontalalignment='left',
                 fontweight='bold', bbox=rth_props, family='monospace')
 
-    plt.tight_layout()
     filename = f'backtest_{symbol}_V10.7_{today}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
@@ -361,4 +402,5 @@ if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     interval = sys.argv[3] if len(sys.argv) > 3 else '3m'
-    plot_v10(symbol=symbol, contracts=contracts, interval=interval)
+    risk = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+    plot_v10(symbol=symbol, contracts=contracts, interval=interval, risk_per_trade=risk)

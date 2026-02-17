@@ -100,7 +100,7 @@ def run_session_v10_equity(
     all_bars,
     symbol='SPY',
     risk_per_trade=500,         # Risk $ per trade
-    max_open_trades=2,
+    max_open_trades=3,
     min_fvg_pts=None,           # Override config
     min_risk_pts=None,          # Override config
     t1_fixed_4r=True,           # HYBRID: T1 fixed at 4R
@@ -167,8 +167,12 @@ def run_session_v10_equity(
     session_fvgs = []
     all_valid_entries = []
 
+    session_date = session_bars[0].timestamp.date()
     for fvg in all_fvgs:
-        fvg_time = fvg.created_at.time() if hasattr(fvg, 'created_at') else None
+        # Skip FVGs not created on the current session date
+        if not hasattr(fvg, 'created_at') or fvg.created_at.date() != session_date:
+            continue
+        fvg_time = fvg.created_at.time()
         # Map direction: BULLISH -> LONG, BEARISH -> SHORT
         direction = 'LONG' if fvg.direction == 'BULLISH' else 'SHORT'
         # Convert FVG object to dict for compatibility
@@ -177,7 +181,7 @@ def run_session_v10_equity(
             'low': fvg.low,
             'high': fvg.high,
             'created_at': fvg.created_at,
-            'is_overnight': fvg_time and fvg_time < rth_start if fvg_time else False,
+            'is_overnight': fvg_time < rth_start,
             'used_for_entry': False,
             'creation_bar_idx': next((i for i, b in enumerate(session_bars) if b.timestamp >= fvg.created_at), 0),
         }
@@ -639,8 +643,8 @@ def run_session_v10_equity(
     active_trades = []
     completed_results = []
     entries_taken = {'LONG': 0, 'SHORT': 0}
-    loss_count = 0
-    max_losses = 2
+    loss_count = {'LONG': 0, 'SHORT': 0}
+    max_losses_per_direction = 3
 
     # Contract allocation (same ratios as futures)
     # For equities, we use position ratios: 33% T1, 33% T2, 33% Runner
@@ -746,7 +750,7 @@ def run_session_v10_equity(
                     pnl = (trade['stop_price'] - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - trade['stop_price']) * remaining
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'shares': remaining})
                     trade['remaining_shares'] = 0
-                    loss_count += 1
+                    loss_count[trade['direction']] += 1
                     # V10.7: Track BOS losses for daily limit
                     if 'BOS' in trade.get('entry_type', ''):
                         bos_loss_count += 1
@@ -793,9 +797,6 @@ def run_session_v10_equity(
                 completed_results.append(trade)
 
         # Check for new entries
-        if loss_count >= max_losses:
-            continue
-
         current_open = len(active_trades)
 
         for entry in all_valid_entries:
@@ -803,6 +804,10 @@ def run_session_v10_equity(
                 continue
 
             direction = entry['direction']
+
+            # Direction-aware circuit breaker: skip if this direction hit max losses
+            if loss_count[direction] >= max_losses_per_direction:
+                continue
             entry_type = entry.get('entry_type', '')
 
             # V10.7: Skip BOS entries if daily loss limit reached
@@ -810,9 +815,6 @@ def run_session_v10_equity(
                 continue
 
             if current_open >= max_open_trades:
-                continue
-
-            if entries_taken[direction] >= 2:
                 continue
 
             is_long = direction == 'LONG'
@@ -963,7 +965,7 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, 
         bars,
         symbol=symbol,
         risk_per_trade=risk_per_trade,
-        max_open_trades=2,
+        max_open_trades=3,
         t1_fixed_4r=True,
         overnight_retrace_min_adx=22,
         t1_r_target=t1_r,

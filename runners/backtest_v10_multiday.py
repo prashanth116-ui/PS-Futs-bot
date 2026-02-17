@@ -86,7 +86,10 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
         if len(session_bars) < 50:
             continue
 
-        # Run V10.4 strategy with time filters and BOS risk cap
+        # V10.6: Per-symbol BOS control
+        disable_bos = symbol in ['ES', 'MES']
+
+        # Run V10 strategy with all filters
         results = run_session_v10(
             session_bars,
             all_bars,
@@ -105,6 +108,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
             symbol=symbol,
             t1_r_target=t1_r,
             trail_r_trigger=trail_r,
+            disable_bos_retrace=disable_bos,      # V10.6: ES/MES BOS off
+            bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
+            high_displacement_override=3.0,        # V10.5: 3x skip ADX
         )
 
         # Tally results
