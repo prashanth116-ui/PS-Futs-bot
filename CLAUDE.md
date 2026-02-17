@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.9 (R-Target Tuning) - Feb 13, 2026
+## Current Strategy: V10.10 (Entry & Circuit Breaker Fixes) - Feb 17, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
@@ -39,6 +39,37 @@ Per-symbol BOS optimization with daily loss limit:
   - If it wins → continue taking BOS entries
 
 **Result**: +$1.2k P/L improvement, -$500 drawdown, 64% BOS win rate (up from 47.5%)
+
+**12-Day A/B Validation (Feb 17, 2026):**
+| Config | Trades | Wins | Losses | Win Rate | Total P/L |
+|--------|--------|------|--------|----------|-----------|
+| **ES BOS OFF** | **126** | **113** | **13** | **89.7%** | **+$124,881** |
+| ES BOS ON | 135 | 111 | 24 | 82.2% | +$118,406 |
+
+BOS ON added 15 BOS trades — net -$6,475 drag. BOS OFF confirmed superior for ES.
+
+### V10.10 Bug Fixes (Feb 17, 2026)
+
+**Direction-Aware Circuit Breaker:**
+- Old: Global loss counter — 2 short losses would block ALL entries (including longs)
+- New: Per-direction loss tracking — short losses only disable shorts, long losses only disable longs
+- Limit: 3 losses per direction per day (futures and equity)
+
+**Entry Cap Fix:**
+- Removed `entries_taken` lifetime counter that conflated concurrent open trade limit with total daily entries per direction
+- Previously, after 2-3 entries in one direction, no more entries could fire even if positions had closed
+- Now entries are only limited by concurrent open positions (`max_open_trades=3`)
+
+**Equity FVG Date Filter:**
+- Fixed stale FVG bug in `run_v10_equity.py` — old FVGs from previous sessions (weeks ago) were triggering entries at wrong prices
+- Added `session_date` filter to skip FVGs not created on the current trading day
+
+**Runner/Plot BOS Parity:**
+- Added `disable_bos_retrace`, `bos_daily_loss_limit`, `high_displacement_override` to runner and multiday backtest
+- Previously only the plot had V10.6 BOS per-symbol settings — runner was running BOS ON for all symbols
+
+**Telegram Heartbeat:**
+- Changed from every 30 minutes to every 1 hour
 
 ### V10.7 Entry Types
 | Type | Name | Description |
@@ -118,6 +149,9 @@ Lowered T1 exit from 4R to 3R and trail activation from 8R to 6R.
 **Why it works**: Lower 3R T1 locks profit before most pullbacks. Narrower gap between T1 (3R) and trail activation (6R) means fewer trades get caught in the dead zone where they gave back gains.
 
 ### Strategy Features
+- **Direction-Aware Circuit Breaker (V10.10)**: 3 losses/direction/day (short losses don't block longs)
+- **Entry Cap Fix (V10.10)**: Removed lifetime entries_taken counter; only concurrent open positions limited
+- **Equity FVG Date Filter (V10.10)**: Skip stale FVGs from previous sessions
 - **R-Target Tuning (V10.9)**: T1 at 3R, trail at 6R (+31% P/L, 87.7% WR, zero DD)
 - **Hybrid Filter System (V10.8)**: 2 mandatory + 2/3 optional filters (+$90k/30d improvement)
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
@@ -151,18 +185,18 @@ Lowered T1 exit from 4R to 3R and trail activation from 8R to 6R.
 | **ATR Buffer** | **SPY/QQQ only** | **Adaptive stop: ATR(14) × 0.5 vs fixed $0.02** |
 | **BOS Disable** | **ES/MES/SPY** | **BOS off for low win-rate symbols (V10.6)** |
 | **BOS Loss Limit** | **NQ/MNQ/QQQ: 1/day** | **Stop BOS after 1 loss per day (V10.6)** |
-| Max Losses | 2/day | Circuit breaker |
+| **Max Losses** | **3/direction/day** | **V10.10: Direction-aware circuit breaker** |
 | **Max Open Trades** | **3 per direction** | **V10.7: Increased from 2** |
 | **Position Sizing** | **Dynamic** | **V10.7: 1st trade: 3 cts, 2nd+: 2 cts (max 6 cts)** |
 
-### 15-Day Backtest Results (V10.9 - R-Target Tuning)
-| Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L | Avg Daily |
-|--------|--------|------|--------|----------|-----|-----------|-----------|
-| ES | 78 | 70 | 7 | 89.7% | inf | +$87,113 | +$5,808 |
-| NQ | 60 | 51 | 9 | 85.0% | inf | +$113,420 | +$7,561 |
-| **Mini Total** | **138** | **121** | **16** | **87.7%** | **-** | **+$200,533** | **+$13,369** |
+### 12-Day Backtest Results (V10.10 - Entry & Circuit Breaker Fixes)
+| Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L | Avg Daily | Day WR |
+|--------|--------|------|--------|----------|-----|-----------|-----------|--------|
+| ES | 126 | 113 | 13 | 89.7% | inf | +$124,881 | +$10,407 | 100% (12/12) |
+| NQ | 102 | 82 | 20 | 80.4% | 290.8 | +$225,295 | +$18,775 | 91.7% (11/12) |
+| **Mini Total** | **228** | **195** | **33** | **85.5%** | **-** | **+$350,176** | **+$29,181** | - |
 
-*V10.9 vs V10.8: +$47k P/L (+31%), +18.5% win rate, zero drawdown, 100% day win rate (15/15)*
+*V10.10 vs V10.9: +$150k P/L (+75%), more trades firing due to entry cap fix and direction-aware breaker*
 
 ### 30-Day Equity Results (V10.4 - ATR Buffer)
 | Symbol | Trades | Wins | Losses | Win Rate | PF | Total P/L |
@@ -181,12 +215,14 @@ Lowered T1 exit from 4R to 3R and trail activation from 8R to 6R.
 | Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights (V10.9)
-- Lower R-targets (3R/6R) lock profit before most pullbacks — 87.7% win rate
-- Zero drawdown over 15 trading days — every day profitable for both ES and NQ
-- Creation entries dominate (91-93% of trades)
-- Strategy is still "home run" dependent — big trending days drive profits
-- Narrower dead zone between T1 exit (3R) and trail activation (6R) prevents give-back
+### Key Insights (V10.10)
+- Direction-aware circuit breaker prevents short losses from blocking long entries (and vice versa)
+- Removing entries_taken lifetime cap allows more trades to fire after early positions close
+- ES BOS OFF validated: 15 BOS trades over 12 days were net -$6,475 drag
+- ES: 100% winning days (12/12), zero drawdown, $10.4k avg daily
+- NQ: 91.7% winning days (11/12), $778 max drawdown, $18.8k avg daily
+- Creation entries dominate: ES 100%, NQ 85.3%
+- Lower R-targets (3R/6R) lock profit before most pullbacks
 - R-targets are parameterized via `--t1-r=N --trail-r=N` CLI flags for future A/B tests
 
 ## Key Commands
@@ -222,8 +258,13 @@ python -m runners.analyze_win_loss ES
 
 ### Plotting
 ```bash
-# Plot V10 today
+# Plot V10 today (futures)
 python -m runners.plot_v10 ES 3
+python -m runners.plot_v10 NQ 3
+
+# Plot V10 today (equities - 4th arg is risk per trade)
+python -m runners.plot_v10 SPY 0 3m 50
+python -m runners.plot_v10 QQQ 0 3m 50
 
 # Plot V10 specific date
 python -m runners.plot_v10_date 2026 2 3
@@ -355,10 +396,12 @@ sudo systemctl stop paper-trading
 - Auto-restarts on crash (up to 5 times per day)
 - Graceful shutdown at market close (4:30 PM ET)
 - Skips weekends automatically
+- Telegram alerts: entry/exit events + hourly heartbeat + daily summary
 
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity - **+$350k/12d** |
 | V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
 | V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |
 | V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix |
