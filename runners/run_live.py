@@ -1016,13 +1016,13 @@ class LiveTrader:
             risk_summary = self.risk_manager.get_summary()
             log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {risk_summary['daily_trades']} | P/L: ${risk_summary['daily_pnl']:+,.2f} | Open: {risk_summary['open_trades']}")
 
-        # Telegram heartbeat every 30 minutes
+        # Telegram heartbeat every 1 hour
         send_telegram = False
         if self.last_telegram_heartbeat is None:
             send_telegram = True
         else:
             elapsed = safe_datetime_diff_seconds(now, self.last_telegram_heartbeat)
-            if elapsed >= 1800:  # 30 minutes
+            if elapsed >= 3600:  # 1 hour
                 send_telegram = True
 
         if send_telegram:
