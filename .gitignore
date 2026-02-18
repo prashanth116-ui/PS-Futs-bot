@@ -24,4 +24,10 @@ deploy/tv_cookies.json
 
 # Reports and data
 reports/
+
+# Generated files
+*.png
+*.pdf
+.cache/
+plot_log.txt
 nul

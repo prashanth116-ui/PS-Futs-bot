@@ -1,0 +1,847 @@
+// ICT Sweep -> Displacement -> FVG -> MSS Short Model
+// @version=5
+// Detects: Topping near highs -> buy-side liquidity sweep -> bearish displacement ->
+//          bearish FVG creation -> FVG mitigation (tap) -> 1m MSS confirmation -> short entry
+//
+// HTF: 5m (liquidity, sweep, displacement, FVG detection)
+// LTF: 1m (MSS confirmation and precise entry trigger)
+//
+// State machine: IDLE -> ARMED -> WAIT_TAP -> WAIT_MSS -> ENTRY_FIRED -> LOCKED_OUT
+//
+// IMPORTANT: Apply this indicator to a 1-minute chart for best precision.
+// It pulls 5m data via request.security() for HTF analysis and uses native
+// 1m bars for LTF MSS confirmation.
+indicator("ICT Sweep Short Model", overlay=true, max_boxes_count=200, max_labels_count=200, max_lines_count=100)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// --- Instrument ---
+i_tickSize        = input.float(0.25, "Tick Size", minval=0.01, step=0.01, group="Instrument")
+i_instrumentMode  = input.string("ES", "Instrument Mode", options=["ES", "NQ", "Custom"], group="Instrument")
+i_minFvgTicksES   = input.int(5,  "Min FVG Ticks (ES)",  minval=1, group="Instrument")
+i_minFvgTicksNQ   = input.int(15, "Min FVG Ticks (NQ)",  minval=1, group="Instrument")
+
+// --- HTF Liquidity / Sweep ---
+i_swingLookbackHTF = input.int(20, "Swing Lookback HTF (bars)",   minval=5,  group="HTF Liquidity")
+i_pivotLenHTF      = input.int(3,  "Pivot Length HTF",            minval=1,  group="HTF Liquidity")
+i_sweepDepthTicks  = input.int(2,  "Sweep Depth (ticks)",         minval=1,  group="HTF Liquidity")
+i_nearHighTicks    = input.int(10, "Near High Threshold (ticks)", minval=1,  group="HTF Liquidity")
+
+// --- Displacement ---
+i_dispBodyMult  = input.float(2.0, "Displacement Body Multiplier", minval=1.0, step=0.1, group="Displacement")
+i_avgBodyLen    = input.int(20,    "Average Body Length",           minval=5,   group="Displacement")
+
+// --- LTF MSS ---
+i_mssLookbackLTF = input.int(10, "MSS Lookback LTF (bars)", minval=3,  group="LTF MSS")
+i_pivotLenLTF    = input.int(2,  "Pivot Length LTF",         minval=1,  group="LTF MSS")
+
+// --- Entry ---
+i_entryMode      = input.string("market_on_mss", "Entry Mode", options=["limit_midpoint", "market_on_mss"], group="Entry")
+i_maxWaitBarsLTF = input.int(20, "Max Wait Bars LTF (1m bars)", minval=5, group="Entry")
+
+// --- Stop / Targets ---
+i_slBufferTicks = input.int(2,     "SL Buffer (ticks)",  minval=0,   group="Stop / Targets")
+i_tp1R          = input.float(2.0, "TP1 R-Multiple",     minval=0.5, step=0.5, group="Stop / Targets")
+i_tp2R          = input.float(4.0, "TP2 R-Multiple",     minval=1.0, step=0.5, group="Stop / Targets")
+i_tp1Pct        = input.int(50,    "TP1 % of position",  minval=1,   maxval=100, group="Stop / Targets")
+i_tp2Pct        = input.int(25,    "TP2 % of position",  minval=0,   maxval=100, group="Stop / Targets")
+i_runnerPct     = input.int(25,    "Runner % of position",minval=0,   maxval=100, group="Stop / Targets")
+
+// --- Session ---
+i_sessionFilter = input.bool(true, "Enable Session Filter", group="Session")
+i_sessionStr    = input.session("0930-1600", "NY Session", group="Session")
+i_lunchFilter   = input.bool(true,  "Enable Lunch Filter",  group="Session")
+i_lunchStr      = input.session("1200-1300", "Lunch Window", group="Session")
+
+// --- Risk ---
+i_maxLossesPerDay    = input.int(2,    "Max Losses Per Day",      minval=1, group="Risk")
+i_onePositionAtATime = input.bool(true, "One Position At A Time", group="Risk")
+
+// --- FVG Management ---
+i_maxFvgAge = input.int(200, "Max FVG Age (HTF bars)", minval=10, group="FVG Management")
+
+// --- Visuals ---
+i_showFvgBoxes     = input.bool(true, "Show FVG Boxes",         group="Visuals")
+i_showSelectedFvg  = input.bool(true, "Highlight Selected FVG", group="Visuals")
+i_showLabels       = input.bool(true, "Show Event Labels",      group="Visuals")
+i_fvgColor         = input.color(color.new(color.red, 75),    "Bearish FVG Color",  group="Visuals")
+i_selectedFvgColor = input.color(color.new(color.orange, 60), "Selected FVG Color", group="Visuals")
+
+// ============================================================================
+// DERIVED CONSTANTS
+// ============================================================================
+
+minFvgTicks  = i_instrumentMode == "NQ" ? i_minFvgTicksNQ : i_minFvgTicksES
+minFvgSize   = minFvgTicks * i_tickSize
+sweepDepth   = i_sweepDepthTicks * i_tickSize
+nearHighDist = i_nearHighTicks * i_tickSize
+slBuffer     = i_slBufferTicks * i_tickSize
+
+// ============================================================================
+// SESSION HELPERS
+// ============================================================================
+
+inNYSession() =>
+    not i_sessionFilter or not na(time(timeframe.period, i_sessionStr, "America/New_York"))
+
+inLunchWindow() =>
+    i_lunchFilter and not na(time(timeframe.period, i_lunchStr, "America/New_York"))
+
+sessionOK() =>
+    inNYSession() and not inLunchWindow()
+
+// New-day detection for daily loss reset
+var int _prevDay = na
+_curDay  = dayofweek
+isNewDay = na(_prevDay) or _curDay != _prevDay
+_prevDay := _curDay
+
+// ============================================================================
+// HTF DATA VIA request.security() (5-minute timeframe)
+// ============================================================================
+// All HTF values are confirmed (lookahead_off) to prevent repaint.
+
+htfOpen  = request.security(syminfo.tickerid, "5", open,  barmerge.gaps_off, barmerge.lookahead_off)
+htfHigh  = request.security(syminfo.tickerid, "5", high,  barmerge.gaps_off, barmerge.lookahead_off)
+htfLow   = request.security(syminfo.tickerid, "5", low,   barmerge.gaps_off, barmerge.lookahead_off)
+htfClose = request.security(syminfo.tickerid, "5", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+htfBody    = math.abs(htfClose - htfOpen)
+htfAvgBody = request.security(syminfo.tickerid, "5",
+             ta.sma(math.abs(close - open), i_avgBodyLen),
+             barmerge.gaps_off, barmerge.lookahead_off)
+
+// Detect when a new 5m bar completes (HTF bar boundary)
+htfTime     = request.security(syminfo.tickerid, "5", time, barmerge.gaps_off, barmerge.lookahead_off)
+var int _prevHtfTime = na
+htfBarChanged = not na(htfTime) and (na(_prevHtfTime) or htfTime != _prevHtfTime)
+_prevHtfTime := htfTime
+
+// HTF pivot highs for buy-side liquidity detection
+htfPivotHigh = request.security(syminfo.tickerid, "5",
+               ta.pivothigh(high, i_pivotLenHTF, i_pivotLenHTF),
+               barmerge.gaps_off, barmerge.lookahead_off)
+
+// HTF pivot lows (for opposing liquidity / runner target)
+htfPivotLow = request.security(syminfo.tickerid, "5",
+              ta.pivotlow(low, i_pivotLenHTF, i_pivotLenHTF),
+              barmerge.gaps_off, barmerge.lookahead_off)
+
+// HTF highest high over lookback window
+htfHH = request.security(syminfo.tickerid, "5",
+        ta.highest(high, i_swingLookbackHTF),
+        barmerge.gaps_off, barmerge.lookahead_off)
+
+// HTF historical OHLC for FVG 3-candle pattern (bar[1] and bar[2] on HTF)
+htfOpen1  = request.security(syminfo.tickerid, "5", open[1],  barmerge.gaps_off, barmerge.lookahead_off)
+htfHigh1  = request.security(syminfo.tickerid, "5", high[1],  barmerge.gaps_off, barmerge.lookahead_off)
+htfLow1   = request.security(syminfo.tickerid, "5", low[1],   barmerge.gaps_off, barmerge.lookahead_off)
+htfClose1 = request.security(syminfo.tickerid, "5", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+htfOpen2  = request.security(syminfo.tickerid, "5", open[2],  barmerge.gaps_off, barmerge.lookahead_off)
+htfHigh2  = request.security(syminfo.tickerid, "5", high[2],  barmerge.gaps_off, barmerge.lookahead_off)
+htfLow2   = request.security(syminfo.tickerid, "5", low[2],   barmerge.gaps_off, barmerge.lookahead_off)
+htfClose2 = request.security(syminfo.tickerid, "5", close[2], barmerge.gaps_off, barmerge.lookahead_off)
+
+// ============================================================================
+// LTF DATA (1-minute)
+// ============================================================================
+// If chart is already 1m, native bars are used. Otherwise request.security
+// fetches the last confirmed 1m values.
+
+isChart1m = timeframe.period == "1"
+
+ltfHigh_raw  = isChart1m ? high  : request.security(syminfo.tickerid, "1", high,  barmerge.gaps_off, barmerge.lookahead_off)
+ltfLow_raw   = isChart1m ? low   : request.security(syminfo.tickerid, "1", low,   barmerge.gaps_off, barmerge.lookahead_off)
+ltfClose_raw = isChart1m ? close : request.security(syminfo.tickerid, "1", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+// 1m pivot low for MSS detection
+ltfPivotLow_raw = isChart1m ?
+     ta.pivotlow(low, i_pivotLenLTF, i_pivotLenLTF) :
+     request.security(syminfo.tickerid, "1",
+     ta.pivotlow(low, i_pivotLenLTF, i_pivotLenLTF),
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+// ============================================================================
+// STATE MACHINE VARIABLES
+// ============================================================================
+// States: 0=IDLE, 1=ARMED, 2=WAIT_TAP, 3=WAIT_MSS, 4=ENTRY_FIRED, 5=LOCKED_OUT
+
+var int  smState      = 0
+var int  dailyLosses  = 0
+var bool posOpen      = false
+
+// Sweep
+var float sweepHigh         = na
+var float sweptLevel        = na
+var int   sweepBarIdx       = na
+
+// Displacement
+var bool  dispDown          = false
+var int   dispBarIdx        = na
+
+// FVG arrays (up to 5 active bearish FVGs, post-displacement only)
+var float[] fvgTopArr       = array.new_float(0)
+var float[] fvgBotArr       = array.new_float(0)
+var float[] fvgMidArr       = array.new_float(0)
+var int[]   fvgHtfBarArr    = array.new_int(0)    // HTF bar count at creation
+var bool[]  fvgActiveArr    = array.new_bool(0)
+var box[]   fvgBoxArr       = array.new_box(0)
+
+// Selected FVG
+var float selTop            = na
+var float selBot            = na
+var float selMid            = na
+var box   selBox            = na
+
+// Tap / MSS wait
+var int   waitCount         = 0
+
+// LTF swing low for MSS
+var float ltfSwingLow       = na
+var int   ltfSwingLowBar    = na
+
+// Entry / trade management
+var float entryPx           = na
+var float slPx              = na
+var float tp1Px             = na
+var float tp2Px             = na
+var float riskR             = na
+var int   entryBar          = na
+var bool  tp1Done           = false
+
+// Buy-side liquidity level (from HTF pivot highs)
+var float buySideLevel      = na
+var int   buySideBar        = na
+
+// Nearest opposing liquidity (HTF swing low below price, for runner)
+var float oppLiqLevel       = na
+
+// HTF bar counter
+var int   htfBarCnt         = 0
+
+// Invalidation
+var float invalLevel        = na
+
+// ============================================================================
+// DAILY RESET
+// ============================================================================
+
+if isNewDay
+    dailyLosses := 0
+    posOpen     := false
+    tp1Done     := false
+    if smState == 5
+        smState := 0
+
+// ============================================================================
+// UPDATE LIQUIDITY LEVELS
+// ============================================================================
+
+// Buy-side: most recent HTF pivot high
+if not na(htfPivotHigh)
+    buySideLevel := htfPivotHigh
+    buySideBar   := bar_index
+
+// Opposing (sell-side for runner target): most recent HTF pivot low below price
+if not na(htfPivotLow) and htfPivotLow < close
+    oppLiqLevel := htfPivotLow
+
+// HTF bar counter
+if htfBarChanged
+    htfBarCnt += 1
+
+// LTF swing low tracking (for MSS)
+if not na(ltfPivotLow_raw)
+    ltfSwingLow    := ltfPivotLow_raw
+    ltfSwingLowBar := bar_index - i_pivotLenLTF
+
+// ============================================================================
+// PRECONDITION: NEAR HIGHS
+// ============================================================================
+// Price must be near the recent HTF highest high for the short model to arm.
+
+nearHighs = not na(htfHH) and (htfHH - htfClose) <= nearHighDist
+
+// ============================================================================
+// SWEEP DETECTION (HTF)
+// ============================================================================
+// Buy-side liquidity sweep: HTF high >= buySideLevel + depth AND
+// rejection (close < buySideLevel) on same or next bar.
+
+f_detectSweep() =>
+    _found  = false
+    _swpH   = float(na)
+    _lvl    = float(na)
+    if not na(buySideLevel)
+        thresh = buySideLevel + sweepDepth
+        // Current HTF bar sweeps and rejects
+        if htfHigh >= thresh and htfClose < buySideLevel
+            _found := true
+            _swpH  := htfHigh
+            _lvl   := buySideLevel
+        // Previous HTF bar swept, current bar rejects
+        else if not na(htfHigh1) and htfHigh1 >= thresh and htfClose < buySideLevel
+            _found := true
+            _swpH  := math.max(htfHigh, htfHigh1)
+            _lvl   := buySideLevel
+    [_found, _swpH, _lvl]
+
+// ============================================================================
+// DISPLACEMENT DETECTION (HTF)
+// ============================================================================
+// Bearish displacement: large bearish candle (body >= mult * avgBody, close < open).
+// Checked on current and previous HTF bar (sweep bar or next 1-2 bars).
+
+f_detectDisplacement() =>
+    _found = false
+    if not na(htfAvgBody) and htfAvgBody > 0
+        // Current HTF bar
+        if htfClose < htfOpen and htfBody >= i_dispBodyMult * htfAvgBody
+            _found := true
+        // Previous HTF bar
+        else if not na(htfClose1) and not na(htfOpen1)
+            prevBody = math.abs(htfClose1 - htfOpen1)
+            if htfClose1 < htfOpen1 and prevBody >= i_dispBodyMult * htfAvgBody
+                _found := true
+    _found
+
+// ============================================================================
+// BEARISH FVG DETECTION (HTF)
+// ============================================================================
+// 3-candle imbalance on HTF:
+//   bar[2].low > bar[0].high  =>  gap between bar[2] low (top) and bar[0] high (bottom)
+// bar[1] is the displacement candle in the middle.
+
+bearFvgTop  = htfLow2            // bar[2] low = top of gap
+bearFvgBot  = htfHigh            // bar[0] high = bottom of gap
+bearFvgSize = bearFvgTop - bearFvgBot
+bearFvgMid  = (bearFvgTop + bearFvgBot) / 2.0
+bearFvgOK   = not na(htfLow2) and not na(htfHigh) and bearFvgTop > bearFvgBot and bearFvgSize >= minFvgSize
+
+// ============================================================================
+// FVG ARRAY MANAGEMENT
+// ============================================================================
+
+// Add new valid FVG to arrays only when a new HTF bar completes,
+// and only when we are in ARMED state or have active displacement.
+if bearFvgOK and htfBarChanged
+    addFvg = (smState == 1) or (smState == 2) or (dispDown and not na(dispBarIdx) and bar_index - dispBarIdx <= 50)
+    if addFvg
+        array.unshift(fvgTopArr, bearFvgTop)
+        array.unshift(fvgBotArr, bearFvgBot)
+        array.unshift(fvgMidArr, bearFvgMid)
+        array.unshift(fvgHtfBarArr, htfBarCnt)
+        array.unshift(fvgActiveArr, true)
+
+        if i_showFvgBoxes
+            bx = box.new(bar_index - 2, bearFvgTop, bar_index + 30, bearFvgBot,
+                         border_color=color.red, bgcolor=i_fvgColor, border_width=1)
+            array.unshift(fvgBoxArr, bx)
+
+        // Cap at 5 entries
+        if array.size(fvgTopArr) > 5
+            array.pop(fvgTopArr)
+            array.pop(fvgBotArr)
+            array.pop(fvgMidArr)
+            array.pop(fvgHtfBarArr)
+            array.pop(fvgActiveArr)
+            if array.size(fvgBoxArr) > 5
+                ob = array.pop(fvgBoxArr)
+                box.delete(ob)
+
+// Deactivate filled (midpoint touched by close) or stale FVGs
+if array.size(fvgTopArr) > 0
+    for i = array.size(fvgTopArr) - 1 to 0
+        if i < array.size(fvgActiveArr) and array.get(fvgActiveArr, i)
+            ft = array.get(fvgTopArr, i)
+            fm = array.get(fvgMidArr, i)
+            fi = array.get(fvgHtfBarArr, i)
+            // Filled: close has reached at least the midpoint from below
+            if close >= fm
+                array.set(fvgActiveArr, i, false)
+            // Stale: older than max age
+            if htfBarCnt - fi > i_maxFvgAge
+                array.set(fvgActiveArr, i, false)
+
+// ============================================================================
+// SELECT NEAREST OVERHEAD BEARISH FVG
+// ============================================================================
+// Choose the active FVG above current price with smallest distance
+// from its bottom to current close.
+
+f_selectFvg() =>
+    _idx  = -1
+    _dist = 999999.0
+    _top  = float(na)
+    _bot  = float(na)
+    _mid  = float(na)
+    sz = array.size(fvgTopArr)
+    if sz > 0
+        for i = 0 to sz - 1
+            if i < array.size(fvgActiveArr) and array.get(fvgActiveArr, i)
+                ft = array.get(fvgTopArr, i)
+                fb = array.get(fvgBotArr, i)
+                fm = array.get(fvgMidArr, i)
+                // Must be overhead (at least bottom above close, or top above close)
+                if fb >= close or ft > close
+                    d = math.abs(fb - close)
+                    if d < _dist
+                        _dist := d
+                        _idx  := i
+                        _top  := ft
+                        _bot  := fb
+                        _mid  := fm
+    [_idx, _top, _bot, _mid]
+
+// ============================================================================
+// ALERT FLAGS (reset each bar, set by state machine)
+// ============================================================================
+
+var bool alertArmed        = false
+var bool alertTap          = false
+var bool alertEntry        = false
+var bool alertInvalidation = false
+var bool alertTP1          = false
+var bool alertTP2          = false
+var bool alertMaxLosses    = false
+
+alertArmed        := false
+alertTap          := false
+alertEntry        := false
+alertInvalidation := false
+alertTP1          := false
+alertTP2          := false
+alertMaxLosses    := false
+
+// ============================================================================
+// STATE MACHINE
+// ============================================================================
+
+// --- LOCKED_OUT (state 5) ---
+// Remains until new-day reset (handled above). No action needed.
+
+// --- ENTRY_FIRED (state 4): monitor SL / TP ---
+if smState == 4
+    // SL hit: price wicks above SL (for short)
+    if not na(slPx) and high >= slPx
+        dailyLosses += 1
+        posOpen     := false
+        tp1Done     := false
+        if i_showLabels
+            label.new(bar_index, high, "SL HIT\n" + str.tostring(slPx, "#.##"),
+                      color=color.red, textcolor=color.white,
+                      style=label.style_label_down, size=size.tiny)
+        if dailyLosses >= i_maxLossesPerDay
+            smState       := 5
+            alertMaxLosses := true
+        else
+            smState := 0
+
+    // TP1 hit (first time)
+    else if not tp1Done and not na(tp1Px) and low <= tp1Px
+        tp1Done  := true
+        alertTP1 := true
+        if i_showLabels
+            label.new(bar_index, low, "TP1\n" + str.tostring(tp1Px, "#.##"),
+                      color=color.green, textcolor=color.white,
+                      style=label.style_label_up, size=size.tiny)
+
+    // TP2 hit (after TP1)
+    if smState == 4 and tp1Done and not na(tp2Px) and low <= tp2Px
+        alertTP2 := true
+        posOpen  := false
+        tp1Done  := false
+        smState  := 0
+        if i_showLabels
+            label.new(bar_index, low, "TP2\n" + str.tostring(tp2Px, "#.##"),
+                      color=color.teal, textcolor=color.white,
+                      style=label.style_label_up, size=size.tiny)
+
+// --- IDLE (state 0): look for sweep + displacement to arm ---
+if smState == 0 and dailyLosses < i_maxLossesPerDay
+    if nearHighs and not na(buySideLevel) and htfBarChanged
+        [swept, sH, sLvl] = f_detectSweep()
+        if swept
+            dispOK = f_detectDisplacement()
+            if dispOK
+                sweepHigh  := sH
+                sweptLevel := sLvl
+                sweepBarIdx := bar_index
+                dispDown   := true
+                dispBarIdx := bar_index
+                invalLevel := sH
+
+                smState    := 1
+                alertArmed := true
+
+                if i_showLabels
+                    label.new(bar_index, sH + 2 * i_tickSize,
+                              "SWEEP + DISP\n" + str.tostring(sH, "#.##"),
+                              color=color.orange, textcolor=color.white,
+                              style=label.style_label_down, size=size.small)
+
+// --- ARMED (state 1): look for FVG overhead ---
+if smState == 1
+    // Invalidation: price closes above sweep high
+    if close > invalLevel
+        smState          := 0
+        alertInvalidation := true
+        dispDown         := false
+        if i_showLabels
+            label.new(bar_index, high, "INVALID\nAbove sweep",
+                      color=color.gray, textcolor=color.white,
+                      style=label.style_label_down, size=size.tiny)
+    else
+        [sIdx, sTop, sBot, sMid] = f_selectFvg()
+        if sIdx >= 0
+            selTop := sTop
+            selBot := sBot
+            selMid := sMid
+            waitCount := 0
+            smState := 2
+
+            // Draw selected FVG highlight
+            if i_showSelectedFvg
+                if not na(selBox)
+                    box.delete(selBox)
+                selBox := box.new(bar_index, selTop, bar_index + 40, selBot,
+                                  border_color=color.orange, bgcolor=i_selectedFvgColor,
+                                  border_width=2, border_style=line.style_dashed)
+
+            if i_showLabels
+                label.new(bar_index, selTop + i_tickSize,
+                          "SEL FVG\n" + str.tostring(selTop, "#.##") + " - " + str.tostring(selBot, "#.##"),
+                          color=color.red, textcolor=color.white,
+                          style=label.style_label_down, size=size.tiny)
+
+// --- WAIT_TAP (state 2): wait for LTF price to enter selected FVG ---
+if smState == 2
+    // Invalidation
+    if close > invalLevel
+        smState          := 0
+        alertInvalidation := true
+        if not na(selBox)
+            box.delete(selBox)
+            selBox := na
+    else
+        waitCount += 1
+        // Expire after max_wait * 5 (we are on 1m bars, FVG is on 5m, so scale)
+        if waitCount > i_maxWaitBarsLTF * 5
+            smState := 0
+            if not na(selBox)
+                box.delete(selBox)
+                selBox := na
+        else
+            // Tap: LTF bar intersects FVG zone
+            ltfH = nz(ltfHigh_raw, high)
+            ltfL = nz(ltfLow_raw, low)
+            tapped = ltfH >= selBot and ltfL <= selTop
+            if tapped
+                waitCount := 0
+                smState   := 3
+                alertTap  := true
+
+                if i_showLabels
+                    label.new(bar_index, ltfH + i_tickSize, "TAP",
+                              color=color.purple, textcolor=color.white,
+                              style=label.style_label_down, size=size.tiny)
+
+// --- WAIT_MSS (state 3): wait for 1m bearish MSS while price in/near FVG ---
+if smState == 3
+    // Invalidation
+    if close > invalLevel
+        smState          := 0
+        alertInvalidation := true
+        if not na(selBox)
+            box.delete(selBox)
+            selBox := na
+    else
+        waitCount += 1
+        if waitCount > i_maxWaitBarsLTF
+            smState := 0
+            if not na(selBox)
+                box.delete(selBox)
+                selBox := na
+        else
+            ltfH = nz(ltfHigh_raw, high)
+            ltfL = nz(ltfLow_raw, low)
+            ltfC = nz(ltfClose_raw, close)
+
+            // Price must still be interacting with FVG zone
+            inZone = ltfH >= selBot and ltfL <= selTop
+
+            // Bearish MSS: 1m close breaks below the last confirmed 1m swing low
+            mssOK = false
+            if inZone and not na(ltfSwingLow)
+                if ltfC < ltfSwingLow
+                    mssOK := true
+
+            if mssOK and sessionOK()
+                canEnter = not i_onePositionAtATime or not posOpen
+                if canEnter
+                    // Entry price
+                    if i_entryMode == "market_on_mss"
+                        entryPx := ltfC
+                    else
+                        entryPx := selMid
+
+                    // Stop loss = sweep high + buffer
+                    slPx    := sweepHigh + slBuffer
+                    riskR   := math.abs(entryPx - slPx)
+
+                    // Targets (short direction: subtract from entry)
+                    tp1Px   := entryPx - i_tp1R * riskR
+                    tp2Px   := entryPx - i_tp2R * riskR
+
+                    entryBar := bar_index
+                    tp1Done  := false
+                    posOpen  := true
+                    smState  := 4
+                    alertEntry := true
+
+                    // Clean up selected FVG box
+                    if not na(selBox)
+                        box.delete(selBox)
+                        selBox := na
+
+                    if i_showLabels
+                        label.new(bar_index, ltfL - 2 * i_tickSize,
+                                  "SHORT ENTRY\n" +
+                                  str.tostring(entryPx, "#.##") +
+                                  "\nSL: " + str.tostring(slPx, "#.##") +
+                                  "\nTP1(" + str.tostring(i_tp1R, "#.#") + "R): " + str.tostring(tp1Px, "#.##") +
+                                  "\nTP2(" + str.tostring(i_tp2R, "#.#") + "R): " + str.tostring(tp2Px, "#.##"),
+                                  color=color.red, textcolor=color.white,
+                                  style=label.style_label_up, size=size.small)
+
+                        label.new(bar_index, ltfC, "MSS",
+                                  color=color.fuchsia, textcolor=color.white,
+                                  style=label.style_label_down, size=size.tiny)
+
+                    // Draw trade levels
+                    line.new(bar_index, entryPx, bar_index + 30, entryPx,
+                             color=color.white, style=line.style_solid, width=1)
+                    line.new(bar_index, slPx, bar_index + 30, slPx,
+                             color=color.red, style=line.style_dotted, width=2)
+                    line.new(bar_index, tp1Px, bar_index + 30, tp1Px,
+                             color=color.green, style=line.style_dotted, width=1)
+                    line.new(bar_index, tp2Px, bar_index + 30, tp2Px,
+                             color=color.teal, style=line.style_dotted, width=1)
+
+// ============================================================================
+// PLOTS
+// ============================================================================
+
+plot(buySideLevel, "Buy-Side Liquidity", color=color.new(color.aqua, 40),
+     linewidth=1, style=plot.style_stepline_diamond)
+
+plot(smState == 4 ? slPx  : na, "Active SL",  color=color.new(color.red, 20),
+     linewidth=1, style=plot.style_circles)
+plot(smState == 4 ? tp1Px : na, "Active TP1", color=color.new(color.green, 20),
+     linewidth=1, style=plot.style_circles)
+plot(smState == 4 ? tp2Px : na, "Active TP2", color=color.new(color.teal, 20),
+     linewidth=1, style=plot.style_circles)
+
+// Background tint by state
+bgcolor(smState == 1 ? color.new(color.orange, 95) : na, title="Armed")
+bgcolor(smState == 2 ? color.new(color.yellow, 96) : na, title="Wait Tap")
+bgcolor(smState == 3 ? color.new(color.purple, 95) : na, title="Wait MSS")
+bgcolor(smState == 4 ? color.new(color.red,    97) : na, title="In Trade")
+bgcolor(smState == 5 ? color.new(color.gray,   95) : na, title="Locked Out")
+
+// ============================================================================
+// INFO TABLE
+// ============================================================================
+
+stateStr = switch smState
+    0 => "IDLE"
+    1 => "ARMED"
+    2 => "WAIT_TAP"
+    3 => "WAIT_MSS"
+    4 => "ENTRY_FIRED"
+    5 => "LOCKED_OUT"
+    => "UNKNOWN"
+
+var table tbl = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 80))
+if barstate.islast
+    table.cell(tbl, 0, 0, "ICT Sweep Short", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 0, syminfo.ticker,    text_color=color.yellow, text_size=size.small)
+
+    stClr = switch smState
+        4 => color.red
+        5 => color.gray
+        3 => color.purple
+        2 => color.yellow
+        1 => color.orange
+        => color.green
+    table.cell(tbl, 0, 1, "State",       text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 1, stateStr,      text_color=stClr,       text_size=size.tiny)
+
+    table.cell(tbl, 0, 2, "Losses",      text_color=color.white, text_size=size.tiny)
+    lossClr = dailyLosses >= i_maxLossesPerDay ? color.red : color.green
+    table.cell(tbl, 1, 2, str.tostring(dailyLosses) + "/" + str.tostring(i_maxLossesPerDay),
+               text_color=lossClr, text_size=size.tiny)
+
+    table.cell(tbl, 0, 3, "Buy-Side",    text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 3, na(buySideLevel) ? "---" : str.tostring(buySideLevel, "#.##"),
+               text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(tbl, 0, 4, "Sweep High",  text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 4, na(sweepHigh) ? "---" : str.tostring(sweepHigh, "#.##"),
+               text_color=color.orange, text_size=size.tiny)
+
+    table.cell(tbl, 0, 5, "Sel FVG",     text_color=color.white, text_size=size.tiny)
+    fStr = na(selTop) ? "---" : str.tostring(selTop, "#.##") + " - " + str.tostring(selBot, "#.##")
+    table.cell(tbl, 1, 5, fStr,          text_color=color.red, text_size=size.tiny)
+
+    table.cell(tbl, 0, 6, "Entry",       text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 6, na(entryPx) ? "---" : str.tostring(entryPx, "#.##"),
+               text_color=color.white, text_size=size.tiny)
+
+    table.cell(tbl, 0, 7, "SL",          text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 7, na(slPx) ? "---" : str.tostring(slPx, "#.##"),
+               text_color=color.red, text_size=size.tiny)
+
+    table.cell(tbl, 0, 8, "TP1 / TP2",   text_color=color.white, text_size=size.tiny)
+    tpStr = (na(tp1Px) ? "---" : str.tostring(tp1Px, "#.##")) + " / " +
+            (na(tp2Px) ? "---" : str.tostring(tp2Px, "#.##"))
+    table.cell(tbl, 1, 8, tpStr,         text_color=color.green, text_size=size.tiny)
+
+    table.cell(tbl, 0, 9, "Session",     text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 9, sessionOK() ? "OK" : "BLOCKED",
+               text_color=sessionOK() ? color.green : color.red, text_size=size.tiny)
+
+    table.cell(tbl, 0, 10, "Near Highs", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 10, nearHighs ? "YES" : "NO",
+               text_color=nearHighs ? color.green : color.gray, text_size=size.tiny)
+
+// ============================================================================
+// ALERTS: alertcondition() (for TradingView alert dialog)
+// ============================================================================
+// alertcondition messages are STATIC strings evaluated at alert creation time.
+// Use {{ticker}}, {{interval}}, {{close}} placeholders for dynamic values.
+// For fully dynamic JSON payloads, use the alert() calls below instead.
+
+alertcondition(alertArmed, title="1. SHORT_SETUP_ARMED",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_SETUP_ARMED","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"ARMED","reason":"Buy-side sweep + bearish displacement near highs"}')
+
+alertcondition(alertTap, title="2. SHORT_FVG_TAP",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_FVG_TAP","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"WAIT_MSS","reason":"Price tapped bearish FVG zone"}')
+
+alertcondition(alertEntry, title="3. SHORT_ENTRY",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_ENTRY","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"ENTRY_FIRED","reason":"1m MSS confirmed inside FVG - short entry triggered"}')
+
+alertcondition(alertInvalidation, title="4. SHORT_INVALIDATION",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_INVALIDATION","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"IDLE","reason":"Price closed above sweep high - setup invalidated"}')
+
+alertcondition(alertTP1, title="5. SHORT_TP1",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_TP1","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"ENTRY_FIRED","reason":"TP1 target reached"}')
+
+alertcondition(alertTP2, title="6. SHORT_TP2",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_TP2","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"IDLE","reason":"TP2 target reached - position closed"}')
+
+alertcondition(alertMaxLosses, title="7. DAILY_MAX_LOSSES_HIT",
+     message='{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"DAILY_MAX_LOSSES_HIT","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}","state":"LOCKED_OUT","reason":"Max daily losses reached"}')
+
+// ============================================================================
+// ALERTS: alert() with FULL DYNAMIC JSON (for webhook automation)
+// ============================================================================
+// These fire as "Any alert() function call" in the TradingView alert dialog.
+// They contain all computed values (entry, sl, tp1, tp2, fvg levels, etc).
+
+if alertArmed
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_SETUP_ARMED",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"sweepHigh":' + str.tostring(nz(sweepHigh), "#.####") + ',' +
+          '"sweptLevel":' + str.tostring(nz(sweptLevel), "#.####") + ',' +
+          '"state":"ARMED",' +
+          '"reason":"Buy-side sweep + bearish displacement near highs"}',
+          alert.freq_once_per_bar)
+
+if alertTap
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_FVG_TAP",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"fvgTop":' + str.tostring(nz(selTop), "#.####") + ',' +
+          '"fvgBottom":' + str.tostring(nz(selBot), "#.####") + ',' +
+          '"fvgMid":' + str.tostring(nz(selMid), "#.####") + ',' +
+          '"sweepHigh":' + str.tostring(nz(sweepHigh), "#.####") + ',' +
+          '"sweptLevel":' + str.tostring(nz(sweptLevel), "#.####") + ',' +
+          '"state":"WAIT_MSS",' +
+          '"reason":"Price tapped bearish FVG zone"}',
+          alert.freq_once_per_bar)
+
+if alertEntry
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_ENTRY",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"entry":' + str.tostring(nz(entryPx), "#.####") + ',' +
+          '"sl":' + str.tostring(nz(slPx), "#.####") + ',' +
+          '"tp1":' + str.tostring(nz(tp1Px), "#.####") + ',' +
+          '"tp2":' + str.tostring(nz(tp2Px), "#.####") + ',' +
+          '"risk":' + str.tostring(nz(riskR), "#.####") + ',' +
+          '"fvgTop":' + str.tostring(nz(selTop), "#.####") + ',' +
+          '"fvgBottom":' + str.tostring(nz(selBot), "#.####") + ',' +
+          '"fvgMid":' + str.tostring(nz(selMid), "#.####") + ',' +
+          '"sweepHigh":' + str.tostring(nz(sweepHigh), "#.####") + ',' +
+          '"sweptLevel":' + str.tostring(nz(sweptLevel), "#.####") + ',' +
+          '"entryMode":"' + i_entryMode + '",' +
+          '"tp1Pct":' + str.tostring(i_tp1Pct) + ',' +
+          '"tp2Pct":' + str.tostring(i_tp2Pct) + ',' +
+          '"runnerPct":' + str.tostring(i_runnerPct) + ',' +
+          '"runner_exit":"EOD",' +
+          '"state":"ENTRY_FIRED",' +
+          '"reason":"1m MSS confirmed inside FVG - short entry triggered"}',
+          alert.freq_once_per_bar)
+
+if alertInvalidation
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_INVALIDATION",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"sweepHigh":' + str.tostring(nz(sweepHigh), "#.####") + ',' +
+          '"invalidationLevel":' + str.tostring(nz(invalLevel), "#.####") + ',' +
+          '"state":"IDLE",' +
+          '"reason":"Price closed above sweep high - setup invalidated"}',
+          alert.freq_once_per_bar)
+
+if alertTP1
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_TP1",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"entry":' + str.tostring(nz(entryPx), "#.####") + ',' +
+          '"tp1":' + str.tostring(nz(tp1Px), "#.####") + ',' +
+          '"tp1Pct":' + str.tostring(i_tp1Pct) + ',' +
+          '"state":"ENTRY_FIRED",' +
+          '"reason":"TP1 target reached"}',
+          alert.freq_once_per_bar)
+
+if alertTP2
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"SHORT_TP2",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"entry":' + str.tostring(nz(entryPx), "#.####") + ',' +
+          '"tp2":' + str.tostring(nz(tp2Px), "#.####") + ',' +
+          '"tp2Pct":' + str.tostring(i_tp2Pct) + ',' +
+          '"runnerPct":' + str.tostring(i_runnerPct) + ',' +
+          '"runner_exit":"EOD",' +
+          '"state":"IDLE",' +
+          '"reason":"TP2 target reached - position closed"}',
+          alert.freq_once_per_bar)
+
+if alertMaxLosses
+    alert('{"model":"ICT_SWEEP_DISPLACE_FVG_MSS_SHORT","event":"DAILY_MAX_LOSSES_HIT",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"dailyLosses":' + str.tostring(dailyLosses) + ',' +
+          '"maxLosses":' + str.tostring(i_maxLossesPerDay) + ',' +
+          '"state":"LOCKED_OUT",' +
+          '"reason":"Max daily losses reached - locked out"}',
+          alert.freq_once_per_bar)
+
+// ============================================================================
+// END
+// ============================================================================

@@ -57,14 +57,16 @@ stop:
 
 # ===== TARGETS =====
 targets:
-  t1_multiplier: 2.0        # T1 at 2R (50% exit)
-  t2_multiplier: 4.0        # T2 at 4R (remaining)
-  use_opposing_liquidity: true  # Runner to opposing swing
+  t1_r: 3                      # T1 fixed exit at 3R (1 contract)
+  trail_r: 6                   # Structure trail activation at 6R
+  t2_buffer_ticks: 4           # T2 trail buffer from swing
+  runner_buffer_ticks: 6       # Runner trail buffer (wider)
+  use_opposing_liquidity: true
 
 # ===== SESSION FILTER =====
 session:
-  start: "09:30"            # NY session start (ET)
-  end: "16:00"              # NY session end (ET)
+  start: "08:00"            # Start at 08:00 UTC to include premarket swing highs
+  end: "16:00"              # Session end (UTC)
   allow_lunch: false        # Skip 12:00-13:00 lunch lull
   require_killzone: false   # Only trade NY Open/PM killzones
 

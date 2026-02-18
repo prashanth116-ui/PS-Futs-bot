@@ -9,10 +9,10 @@ Entry Logic:
 5. LTF MSS Confirms - Market Structure Shift on lower timeframe
 
 Exit Logic:
-- Stop: Beyond sweep point + buffer
-- T1: 2R (partial)
-- T2: 4R (partial)
-- Runner: Opposing liquidity or EOD
+- Stop: FVG-close stop (candle close past FVG boundary) with safety cap
+- T1: Fixed exit at configurable R (default 3R, 1 contract)
+- T2: Structure trail after configurable R (default 6R, 4-tick buffer)
+- Runner: Structure trail (6-tick buffer, 1st trade only)
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -55,8 +55,8 @@ class TradeSetup:
     direction: str  # 'LONG' or 'SHORT'
     entry_price: float
     stop_price: float
-    t1_price: float  # 2R target
-    t2_price: float  # 4R target
+    t1_price: float  # T1 target (configurable R-multiple)
+    t2_price: float  # Trail activation target (configurable R-multiple)
     runner_target: Optional[float]  # Opposing liquidity
     risk_ticks: float
     sweep: Sweep
@@ -109,7 +109,11 @@ class ICTSweepStrategy:
 
         # Risk management
         self.stop_buffer_ticks = config.get('stop_buffer_ticks', 2)
+        self.min_risk_ticks = config.get('min_risk_ticks', 0)
         self.max_risk_ticks = config.get('max_risk_ticks', 40)
+
+        # Loss cooldown
+        self.loss_cooldown_minutes = config.get('loss_cooldown_minutes', 0)
 
         # Session filters
         self.allow_lunch = config.get('allow_lunch', False)
@@ -125,6 +129,7 @@ class ICTSweepStrategy:
         self.pending_setups: list[SetupState] = []    # Setups awaiting mitigation
         self.daily_trades = 0
         self.daily_losses = 0
+        self.last_loss_time: Optional[datetime] = None
         self.max_daily_trades = config.get('max_daily_trades', 5)
         self.max_daily_losses = config.get('max_daily_losses', 2)
         self.use_mtf_for_fvg = config.get('use_mtf_for_fvg', False)  # Use 3m for FVG
@@ -135,6 +140,12 @@ class ICTSweepStrategy:
         self.use_trend_filter = config.get('use_trend_filter', False)
         self.ema_fast_period = config.get('ema_fast_period', 20)
         self.ema_slow_period = config.get('ema_slow_period', 50)
+
+        # Separate trend bars (e.g., 2m for faster EMA)
+        self.trend_bars = []
+
+        # Debug mode
+        self._debug = config.get('debug', False)
 
     def reset_daily(self):
         """Reset state for a new trading day."""
@@ -147,6 +158,7 @@ class ICTSweepStrategy:
         self.pending_setups = []
         self.daily_trades = 0
         self.daily_losses = 0
+        self.last_loss_time = None
 
     def update_mtf(self, bar):
         """
@@ -156,6 +168,10 @@ class ICTSweepStrategy:
             bar: New 3m price bar
         """
         self.mtf_bars.append(bar)
+
+    def update_trend(self, bar):
+        """Process a new trend timeframe bar (e.g., 2m) for EMA calculation."""
+        self.trend_bars.append(bar)
 
     def update_htf(self, bar) -> Optional[SetupState]:
         """
@@ -206,35 +222,59 @@ class ICTSweepStrategy:
         )
 
         if not sweep:
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | No sweep detected')
             return None
+
+        if self._debug:
+            print(f'  DBG {bar.timestamp.strftime("%H:%M")} | SWEEP {sweep.sweep_type} @ {sweep.sweep_price:.2f} (depth={sweep.sweep_depth_ticks:.1f} ticks, level={sweep.liquidity_level:.2f})')
 
         # Validate sweep depth
         if sweep.sweep_depth_ticks > self.max_sweep_ticks:
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: sweep too deep ({sweep.sweep_depth_ticks:.1f} > {self.max_sweep_ticks})')
             return None
 
-        # Check for displacement on sweep bar or recent bars
+        # Check for displacement on sweep bar and nearby bars (before + after)
         sweep_bar = self.htf_bars[sweep.bar_index]
         disp_ratio = get_displacement_ratio(sweep_bar, self.avg_body)
 
         if disp_ratio < self.displacement_multiplier:
-            # Check previous bar too
+            # Check previous bar
             if sweep.bar_index > 0:
                 prev_bar = self.htf_bars[sweep.bar_index - 1]
-                disp_ratio = get_displacement_ratio(prev_bar, self.avg_body)
+                disp_ratio = max(disp_ratio, get_displacement_ratio(prev_bar, self.avg_body))
+
+            # Check up to 2 bars after the sweep (displacement often follows the sweep)
+            for offset in range(1, 3):
+                check_idx = sweep.bar_index + offset
+                if check_idx < len(self.htf_bars):
+                    after_bar = self.htf_bars[check_idx]
+                    disp_ratio = max(disp_ratio, get_displacement_ratio(after_bar, self.avg_body))
 
             if disp_ratio < self.displacement_multiplier:
+                if self._debug:
+                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: displacement {disp_ratio:.2f}x < {self.displacement_multiplier}x (avg_body={self.avg_body:.2f})')
                 return None
+
+        if self._debug:
+            print(f'  DBG {bar.timestamp.strftime("%H:%M")} | Displacement OK: {disp_ratio:.2f}x')
 
         # Check if we already have a pending sweep for this direction
         existing = [ps for ps in self.pending_sweeps if ps.sweep.sweep_type == sweep.sweep_type]
         if existing:
-            return None  # Already tracking a sweep for this direction
-
-        # DEBUG
-        # print(f'DEBUG: Sweep {sweep.sweep_type} found, checking FVG...')
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: already tracking {sweep.sweep_type} sweep')
+            return None
 
         # Check for FVG immediately
         fvg = self._find_fvg_for_sweep(sweep)
+
+        if self._debug:
+            if fvg:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | FVG found: {fvg.fvg_type} {fvg.bottom:.2f}-{fvg.top:.2f} ({(fvg.top-fvg.bottom)/self.tick_size:.0f} ticks)')
+            else:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | No FVG found for sweep, queuing as pending')
 
         if fvg:
             # Create setup state - awaiting mitigation
@@ -309,18 +349,22 @@ class ICTSweepStrategy:
 
         # If MTF enabled, check 3m bars for FVG
         if self.use_mtf_for_fvg and len(self.mtf_bars) >= 3:
-            # Find MTF bars after sweep time
+            # Find first MTF bar at or after sweep time
             mtf_after_sweep = [i for i, b in enumerate(self.mtf_bars)
                               if b.timestamp >= sweep_time]
 
             if mtf_after_sweep:
-                start_idx = mtf_after_sweep[0]
-                # Check windows starting from sweep time
-                for offset in range(0, 15):  # Check more bars on 3m
+                first_idx = mtf_after_sweep[0]
+                # Start 2 bars earlier to catch FVGs that form immediately after sweep
+                # (FVG needs 3 bars, and the sweep bar could be bar[0] of the FVG)
+                start_idx = max(0, first_idx - 2)
+                # Check windows - must include at least one bar at or after sweep
+                for offset in range(0, 17):  # Check more bars on 3m
                     window_start = start_idx + offset
                     if window_start + 2 < len(self.mtf_bars):
                         window = self.mtf_bars[window_start:window_start + 3]
-                        if len(window) >= 3:
+                        # Ensure window includes at least one bar at or after sweep time
+                        if len(window) >= 3 and window[2].timestamp >= sweep_time:
                             fvg = detect_fvg(window, self.tick_size, self.min_fvg_ticks, expected_dir)
                             if fvg:
                                 fvg.bar_index = window_start + 1
@@ -344,21 +388,31 @@ class ICTSweepStrategy:
         ready_for_mss = []
         bar_index = len(self.htf_bars) - 1
 
+        # Enforce daily limits (same as update_htf)
+        if self.daily_trades >= self.max_daily_trades:
+            return None if self.entry_on_mitigation else ready_for_mss
+        if self.daily_losses >= self.max_daily_losses:
+            return None if self.entry_on_mitigation else ready_for_mss
+
         for setup in self.pending_setups[:]:
             if not setup.awaiting_mitigation:
                 continue
 
             # Check if FVG is mitigated (price enters FVG zone)
             if check_fvg_mitigation(setup.fvg, bar, bar_index):
-                setup.awaiting_mitigation = False
+                if self._debug:
+                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | FVG MITIGATED: {setup.fvg.fvg_type} {setup.fvg.bottom:.2f}-{setup.fvg.top:.2f} (close={bar.close:.2f})')
 
                 # If entry_on_mitigation, create trade immediately
                 if self.entry_on_mitigation:
                     trade = self._create_trade_on_mitigation(setup, bar)
                     if trade:
+                        setup.awaiting_mitigation = False
                         self.pending_setups.remove(setup)
                         self.daily_trades += 1
                         return trade
+                    # If filters block entry, keep setup alive for next bar
+                    continue
                 else:
                     # Wait for MSS confirmation
                     setup.awaiting_mss = True
@@ -382,19 +436,35 @@ class ICTSweepStrategy:
 
         return ready_for_mss if not self.entry_on_mitigation else None
 
+    def _is_in_cooldown(self, current_time: datetime) -> bool:
+        """Check if we're in post-loss cooldown period."""
+        if self.loss_cooldown_minutes <= 0 or self.last_loss_time is None:
+            return False
+        from datetime import timedelta
+        elapsed = (current_time - self.last_loss_time).total_seconds() / 60
+        return elapsed < self.loss_cooldown_minutes
+
     def _create_trade_on_mitigation(self, setup: SetupState, bar) -> Optional[TradeSetup]:
         """Create trade on FVG mitigation (tap entry)."""
         direction = setup.sweep.sweep_type
         fvg = setup.fvg
 
-        # Check trend filter - skip counter-trend trades
-        if not self._check_trend_filter(direction):
+        # Check loss cooldown
+        if self._is_in_cooldown(bar.timestamp):
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED ENTRY: loss cooldown active')
             return None
 
-        # Entry at FVG midpoint or current close
+        # Check trend filter - skip counter-trend trades
+        if not self._check_trend_filter(direction):
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED ENTRY: trend filter ({direction} vs EMA)')
+            return None
+
+        # Entry at current close
         entry_price = bar.close
 
-        # Stop above/below FVG + buffer
+        # Stop above/below FVG boundary + buffer (points)
         if direction == 'BEARISH':
             stop_price = fvg.top + self.stop_buffer_pts
             risk = stop_price - entry_price
@@ -405,16 +475,23 @@ class ICTSweepStrategy:
         risk_ticks = risk / self.tick_size
 
         # Validate risk
-        if risk_ticks <= 0 or risk_ticks > self.max_risk_ticks:
+        if risk_ticks < self.min_risk_ticks or risk_ticks > self.max_risk_ticks:
+            if self._debug:
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED ENTRY: risk {risk_ticks:.1f} ticks (min={self.min_risk_ticks}, max={self.max_risk_ticks})')
             return None
 
-        # Calculate targets (4R)
+        if self._debug:
+            print(f'  DBG {bar.timestamp.strftime("%H:%M")} | ENTRY ACCEPTED: {direction} @ {entry_price:.2f}, stop={stop_price:.2f}, risk={risk_ticks:.1f} ticks')
+
+        # Calculate targets (configurable R-multiples)
+        t1_r = self.config.get('t1_r', 3)
+        trail_r = self.config.get('trail_r', 6)
         if direction == 'BEARISH':
-            t1_price = entry_price - (risk * 2)
-            t2_price = entry_price - (risk * 4)
+            t1_price = entry_price - (risk * t1_r)
+            t2_price = entry_price - (risk * trail_r)
         else:
-            t1_price = entry_price + (risk * 2)
-            t2_price = entry_price + (risk * 4)
+            t1_price = entry_price + (risk * t1_r)
+            t2_price = entry_price + (risk * trail_r)
 
         # Create MSS placeholder (not used for mitigation entry)
         mss = MSS(
@@ -528,35 +605,40 @@ class ICTSweepStrategy:
         """
         direction = setup.sweep.sweep_type
 
+        # Check loss cooldown
+        if self._is_in_cooldown(bar.timestamp):
+            return None
+
         # Check trend filter - skip counter-trend trades
         if not self._check_trend_filter(direction):
             return None
 
         entry_price = bar.close
 
-        # Calculate stop - use FVG boundary (more reasonable risk) with buffer
-        # For BEARISH: stop above FVG top
-        # For BULLISH: stop below FVG bottom
+        # Stop above/below FVG boundary + buffer
+        buffer = self.stop_buffer_ticks * self.tick_size
         if direction == 'BULLISH':
-            stop_price = setup.fvg.bottom - (self.stop_buffer_ticks * self.tick_size)
+            stop_price = setup.fvg.bottom - buffer
             risk = entry_price - stop_price
         else:
-            stop_price = setup.fvg.top + (self.stop_buffer_ticks * self.tick_size)
+            stop_price = setup.fvg.top + buffer
             risk = stop_price - entry_price
 
         risk_ticks = risk / self.tick_size
 
         # Validate risk
-        if risk_ticks <= 0 or risk_ticks > self.max_risk_ticks:
+        if risk_ticks < self.min_risk_ticks or risk_ticks > self.max_risk_ticks:
             return None
 
-        # Calculate targets
+        # Calculate targets (configurable R-multiples)
+        t1_r = self.config.get('t1_r', 3)
+        trail_r = self.config.get('trail_r', 6)
         if direction == 'BULLISH':
-            t1_price = entry_price + (risk * 2)  # 2R
-            t2_price = entry_price + (risk * 4)  # 4R
+            t1_price = entry_price + (risk * t1_r)
+            t2_price = entry_price + (risk * trail_r)
         else:
-            t1_price = entry_price - (risk * 2)  # 2R
-            t2_price = entry_price - (risk * 4)  # 4R
+            t1_price = entry_price - (risk * t1_r)
+            t2_price = entry_price - (risk * trail_r)
 
         # Find opposing liquidity for runner target
         runner_target = self._find_opposing_liquidity(direction)
@@ -592,18 +674,25 @@ class ICTSweepStrategy:
 
     def _check_trend_filter(self, direction: str) -> bool:
         """
-        Check if trade direction aligns with trend using MTF (3m) bars.
+        Check if trade direction aligns with trend using EMA crossover.
+
+        Uses trend_bars (2m) if available, otherwise falls back to MTF/HTF bars.
 
         Returns True if:
         - Trend filter disabled, OR
-        - LONG and EMA20 > EMA50, OR
-        - SHORT and EMA20 < EMA50
+        - LONG and EMA_fast > EMA_slow, OR
+        - SHORT and EMA_fast < EMA_slow
         """
         if not self.use_trend_filter:
             return True
 
-        # Use MTF (3m) bars for trend filter if available, otherwise HTF
-        bars = self.mtf_bars if len(self.mtf_bars) >= self.ema_slow_period else self.htf_bars
+        # Prefer trend_bars (2m) if available, then MTF (3m), then HTF (5m)
+        if len(self.trend_bars) >= self.ema_slow_period:
+            bars = self.trend_bars
+        elif len(self.mtf_bars) >= self.ema_slow_period:
+            bars = self.mtf_bars
+        else:
+            bars = self.htf_bars
 
         ema_fast = self._calculate_ema(bars, self.ema_fast_period)
         ema_slow = self._calculate_ema(bars, self.ema_slow_period)
@@ -638,15 +727,18 @@ class ICTSweepStrategy:
 
         return None
 
-    def on_trade_result(self, pnl: float):
+    def on_trade_result(self, pnl: float, exit_time: Optional[datetime] = None):
         """
         Record trade result.
 
         Args:
             pnl: Trade P/L in dollars
+            exit_time: Timestamp of trade exit (for cooldown tracking)
         """
         if pnl < 0:
             self.daily_losses += 1
+            if exit_time:
+                self.last_loss_time = exit_time
 
     def get_pending_count(self) -> int:
         """Get count of pending setups."""

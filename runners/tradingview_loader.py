@@ -68,6 +68,9 @@ STOCK_EXCHANGES = {
     "SPY": "AMEX",
     "QQQ": "NASDAQ",
     "IWM": "AMEX",
+    "UNH": "NYSE",
+    "PLTR": "NASDAQ",
+    "COIN": "NASDAQ",
 }
 
 def get_exchange(symbol: str) -> str:
