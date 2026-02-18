@@ -1,0 +1,401 @@
+"""
+Plot ICT OTE Strategy trades with MMXM enhancements.
+
+Reads cached results from runner to ensure identical P/L.
+Run backtest first: python -m runners.run_ict_ote ES 14
+
+Usage:
+    python -m runners.plot_ict_ote ES 2026 2 17
+    python -m runners.plot_ict_ote ES  # Today
+"""
+import sys
+sys.path.insert(0, '.')
+
+import pickle
+from pathlib import Path
+import matplotlib.pyplot as plt
+from datetime import date
+from matplotlib.lines import Line2D
+import matplotlib.patches as mpatches
+
+CACHE_DIR = Path('.cache')
+
+# MMXM phase background colors
+MMXM_PHASE_COLORS = {
+    'ACCUMULATION': ('#FFF9C4', 0.25),   # Light yellow
+    'MANIPULATION': ('#FFCDD2', 0.25),   # Light red
+    'DISTRIBUTION': ('#E1BEE7', 0.25),   # Light purple
+    'EXPANSION': ('#C8E6C9', 0.25),      # Light green
+}
+
+
+def plot_ict_ote(symbol='ES', year=None, month=None, day=None, contracts=3):
+    """Plot ICT OTE strategy for a specific date using cached runner results."""
+
+    # Instrument config
+    if symbol in ['ES', 'MES']:
+        tick_value = 12.50 if symbol == 'ES' else 1.25
+    elif symbol in ['NQ', 'MNQ']:
+        tick_value = 5.00 if symbol == 'NQ' else 0.50
+    else:
+        tick_value = 12.50
+
+    # Determine target date
+    if year and month and day:
+        target_date = date(year, month, day)
+    else:
+        target_date = date.today()
+
+    # Load cached day results
+    day_cache = CACHE_DIR / f'ict_ote_{symbol}_{target_date}.pkl'
+    if not day_cache.exists():
+        print(f'No cached results for {target_date}.')
+        print(f'Run backtest first: python -m runners.run_ict_ote {symbol} 14')
+        return
+
+    print(f'Loading cached results from {day_cache}...')
+    with open(day_cache, 'rb') as f:
+        cached = pickle.load(f)
+
+    day_trades = cached['trades']
+    day_ltf = cached['day_ltf']
+
+    print(f'Plotting date: {target_date} (ET)')
+    print(f'LTF bars: {len(day_ltf)}, Trades: {len(day_trades)}')
+
+    if not day_ltf:
+        print('No bar data for this day')
+        return
+
+    # Create plot
+    fig, ax = plt.subplots(figsize=(20, 12))
+
+    # Get price range for dealing range/premium-discount visualization
+    all_highs = [b.high for b in day_ltf]
+    all_lows = [b.low for b in day_ltf]
+    price_high = max(all_highs)
+    price_low = min(all_lows)
+
+    # Plot candlesticks
+    for i, bar in enumerate(day_ltf):
+        color = '#4CAF50' if bar.close >= bar.open else '#F44336'
+        ax.plot([i, i], [bar.low, bar.high], color=color, linewidth=0.8)
+        body_bottom = min(bar.open, bar.close)
+        body_height = abs(bar.close - bar.open)
+        rect = plt.Rectangle((i - 0.3, body_bottom), 0.6, body_height,
+                             facecolor=color, edgecolor=color)
+        ax.add_patch(rect)
+
+    # --- MMXM: Draw dealing range and premium/discount from first trade ---
+    dr_drawn = False
+    for t in day_trades:
+        trade = t.get('trade')
+        if not trade:
+            continue
+
+        # Draw dealing range lines (once)
+        if not dr_drawn and hasattr(trade, 'dealing_range') and trade.dealing_range:
+            dr = trade.dealing_range
+            n_bars = len(day_ltf)
+            # Dealing range high/low: blue dashed lines
+            ax.hlines(dr.high, 0, n_bars - 1, colors='#1565C0',
+                     linestyles='--', linewidth=1.5, alpha=0.5, label='DR High')
+            ax.hlines(dr.low, 0, n_bars - 1, colors='#1565C0',
+                     linestyles='--', linewidth=1.5, alpha=0.5, label='DR Low')
+            # Equilibrium: gray dotted line
+            ax.hlines(dr.equilibrium, 0, n_bars - 1, colors='#757575',
+                     linestyles=':', linewidth=1.2, alpha=0.5)
+            ax.annotate('EQ', xy=(n_bars - 1, dr.equilibrium),
+                        fontsize=8, color='#757575', fontweight='bold',
+                        va='bottom', ha='right')
+
+            # Premium/Discount zone shading
+            # Premium zone (above EQ) - light red tint
+            premium_rect = plt.Rectangle((0, dr.equilibrium),
+                                          n_bars - 1, dr.high - dr.equilibrium,
+                                          facecolor='#FFCDD2', alpha=0.08)
+            ax.add_patch(premium_rect)
+            ax.annotate('PREMIUM', xy=(2, dr.high - (dr.high - dr.equilibrium) * 0.1),
+                        fontsize=7, color='#C62828', alpha=0.6, fontweight='bold')
+
+            # Discount zone (below EQ) - light green tint
+            discount_rect = plt.Rectangle((0, dr.low),
+                                           n_bars - 1, dr.equilibrium - dr.low,
+                                           facecolor='#C8E6C9', alpha=0.08)
+            ax.add_patch(discount_rect)
+            ax.annotate('DISCOUNT', xy=(2, dr.low + (dr.equilibrium - dr.low) * 0.1),
+                        fontsize=7, color='#2E7D32', alpha=0.6, fontweight='bold')
+
+            # Liquidity dots
+            if hasattr(trade, 'liquidity_targets') and trade.liquidity_targets:
+                targets = trade.liquidity_targets
+                for sp in targets.buy_side[:3]:
+                    ax.scatter([n_bars - 5], [sp.price], color='#4CAF50', s=60,
+                              marker='D', zorder=4, alpha=0.7)
+                for sp in targets.sell_side[:3]:
+                    ax.scatter([n_bars - 5], [sp.price], color='#F44336', s=60,
+                              marker='D', zorder=4, alpha=0.7)
+
+            dr_drawn = True
+            break
+
+    # Plot trades
+    total_pnl = 0
+    for t in day_trades:
+        trade = t.get('trade')
+        if not trade:
+            continue
+
+        pnl = t.get('pnl_dollars', 0)
+        total_pnl += pnl
+        entry_price = t.get('entry', trade.entry_price)
+        exit_price = t.get('exit', entry_price)
+        bars_held = t.get('bars_held', 1)
+
+        # Find entry bar index
+        entry_idx = None
+        for i, bar in enumerate(day_ltf):
+            if bar.timestamp >= trade.timestamp:
+                entry_idx = i
+                break
+        if entry_idx is None:
+            continue
+
+        exit_idx = min(entry_idx + bars_held, len(day_ltf) - 1)
+
+        is_long = trade.direction == 'BULLISH'
+        color = '#2196F3' if is_long else '#FF5722'
+        result_color = '#4CAF50' if pnl > 0 else '#F44336'
+
+        # --- OTE Zone ---
+        ote = trade.ote_zone
+        ote_color = '#9C27B0'  # Purple for OTE zones
+        ote_alpha = 0.15
+        zone_start = max(0, entry_idx - 20)
+        zone_end = min(len(day_ltf) - 1, exit_idx + 10)
+        ote_rect = plt.Rectangle((zone_start, ote.bottom),
+                                  zone_end - zone_start, ote.top - ote.bottom,
+                                  facecolor=ote_color, alpha=ote_alpha,
+                                  edgecolor=ote_color, linewidth=1.5, linestyle='--')
+        ax.add_patch(ote_rect)
+
+        # OTE zone label
+        ax.annotate(f'OTE {ote.bottom:.2f}-{ote.top:.2f}\n(70.5%: {ote.midpoint:.2f})',
+                    xy=(zone_start + 1, ote.top),
+                    fontsize=7, color=ote_color, fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=ote_color))
+
+        # OTE midpoint line (70.5%)
+        ax.hlines(ote.midpoint, zone_start, zone_end,
+                 colors=ote_color, linestyles=':', linewidth=1.0, alpha=0.6)
+
+        # --- Impulse Leg ---
+        impulse = trade.impulse
+        imp_color = '#FF9800'  # Orange for impulse
+        # Find impulse start/end in day_ltf
+        imp_start_idx = None
+        imp_end_idx = None
+        for i, bar in enumerate(day_ltf):
+            if imp_start_idx is None and bar.timestamp >= impulse.start_timestamp:
+                imp_start_idx = i
+            if bar.timestamp >= impulse.end_timestamp:
+                imp_end_idx = i
+                break
+
+        if imp_start_idx is not None and imp_end_idx is not None:
+            # Draw impulse leg arrow
+            ax.annotate('',
+                        xy=(imp_end_idx, impulse.end_price),
+                        xytext=(imp_start_idx, impulse.start_price),
+                        arrowprops=dict(arrowstyle='->', color=imp_color, lw=2.5, alpha=0.7))
+            ax.annotate(f'IMPULSE\n{impulse.size_ticks:.0f} ticks',
+                        xy=(imp_start_idx, impulse.start_price),
+                        xytext=(imp_start_idx - 5, impulse.start_price),
+                        fontsize=8, fontweight='bold', color=imp_color,
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=imp_color))
+
+        # --- FVG Confluence ---
+        if trade.fvg:
+            fvg = trade.fvg
+            fvg_color = '#2196F3' if is_long else '#FF5722'
+            fvg_rect = plt.Rectangle((max(0, entry_idx - 10), fvg.bottom),
+                                      30, fvg.top - fvg.bottom,
+                                      facecolor=fvg_color, alpha=0.12,
+                                      edgecolor=fvg_color, linewidth=0.8, linestyle=':')
+            ax.add_patch(fvg_rect)
+            ax.annotate(f'FVG', xy=(entry_idx - 8, fvg.midpoint),
+                        fontsize=7, color=fvg_color, fontweight='bold')
+
+        # --- Entry marker ---
+        marker = '^' if is_long else 'v'
+        ax.scatter([entry_idx], [trade.entry_price], color=color, s=200, zorder=5,
+                   marker=marker, edgecolors='black', linewidths=2)
+
+        # Entry annotation with MMXM info
+        mmxm_label_parts = []
+        if hasattr(trade, 'pd_zone') and trade.pd_zone:
+            mmxm_label_parts.append(trade.pd_zone[:4])
+        if hasattr(trade, 'mmxm_phase') and trade.mmxm_phase and trade.mmxm_phase != 'NONE':
+            mmxm_label_parts.append(f'MMXM:{trade.mmxm_phase[:5]}')
+        if hasattr(trade, 'smt_divergence') and trade.smt_divergence:
+            mmxm_label_parts.append(f'SMT')
+        mmxm_label = f'\n[{" ".join(mmxm_label_parts)}]' if mmxm_label_parts else ''
+
+        y_offset = 5 if is_long else -5
+        et_time = trade.timestamp.strftime('%H:%M')
+        ax.annotate(f'{trade.direction}\n{et_time} ET\n{trade.entry_price:.2f}{mmxm_label}',
+                    xy=(entry_idx, trade.entry_price),
+                    xytext=(entry_idx + 10, trade.entry_price + y_offset),
+                    fontsize=8, fontweight='bold', color=color,
+                    arrowprops=dict(arrowstyle='->', color=color, lw=1),
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=color))
+
+        # --- SMT Divergence label ---
+        if hasattr(trade, 'smt_divergence') and trade.smt_divergence:
+            smt = trade.smt_divergence
+            smt_color = '#00BCD4'
+            smt_y = trade.entry_price + (y_offset * 2)
+            ax.annotate(f'SMT {smt.divergence_type}\n{smt.primary_symbol}/{smt.correlated_symbol}',
+                        xy=(entry_idx - 3, smt_y),
+                        fontsize=7, color=smt_color, fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=smt_color))
+
+        # Trade lines
+        line_end = min(len(day_ltf) - 1, exit_idx + 10)
+        ax.hlines(trade.entry_price, entry_idx, line_end, colors=color,
+                 linestyles='-', linewidth=2, alpha=0.8)
+        ax.hlines(trade.stop_price, entry_idx, line_end, colors='#F44336',
+                 linestyles='--', linewidth=1.5, alpha=0.6)
+        ax.hlines(trade.t2_price, entry_idx, line_end, colors='#4CAF50',
+                 linestyles=':', linewidth=1.5, alpha=0.6)
+
+        # Exit markers
+        leg_exits = t.get('exits', [])
+        if leg_exits:
+            leg_markers = {'T1': 'D', 'T2': 's', 'Runner': 'p', 'STOP': 'x', 'FLOOR': 's', 'EOD': 'o'}
+            for leg in leg_exits:
+                leg_idx = min(entry_idx + leg['bar_idx'], len(day_ltf) - 1)
+                leg_color = '#4CAF50' if leg['pnl'] > 0 else '#F44336'
+                mkr = leg_markers.get(leg['leg'], 'o')
+                ax.scatter([leg_idx], [leg['price']], color=leg_color, s=120, zorder=6,
+                           marker=mkr, edgecolors='black', linewidths=1.5)
+                ax.annotate(f"{leg['leg']}\n${leg['pnl']:+,.0f}",
+                            xy=(leg_idx, leg['price']),
+                            xytext=(leg_idx + 5, leg['price'] + (2 if leg['pnl'] > 0 else -2)),
+                            fontsize=7, color=leg_color,
+                            arrowprops=dict(arrowstyle='->', color=leg_color, lw=0.8),
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            exit_marker = 'v' if is_long else '^'
+            ax.scatter([exit_idx], [exit_price], color=result_color, s=150, zorder=5,
+                       marker=exit_marker, edgecolors='black', linewidths=1.5)
+
+        result_str = 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'BE')
+        result_text = f"{result_str}\n${pnl:+,.0f}"
+        exit_y_offset = 3 if pnl > 0 else -3
+        ax.annotate(result_text,
+                    xy=(exit_idx, exit_price),
+                    xytext=(exit_idx + 8, exit_price + exit_y_offset),
+                    fontsize=8, fontweight='bold', color=result_color,
+                    arrowprops=dict(arrowstyle='->', color=result_color, lw=1),
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+    # X-axis labels in ET
+    tick_positions = list(range(0, len(day_ltf), 20))
+    tick_labels = [day_ltf[i].timestamp.strftime('%H:%M') for i in tick_positions if i < len(day_ltf)]
+    ax.set_xticks(tick_positions[:len(tick_labels)])
+    ax.set_xticklabels(tick_labels, rotation=45)
+
+    # Title and labels
+    win_count = sum(1 for t in day_trades if t.get('pnl_dollars', 0) > 0)
+    loss_count = sum(1 for t in day_trades if t.get('pnl_dollars', 0) < 0)
+    win_rate = (win_count / len(day_trades) * 100) if day_trades else 0
+
+    ax.set_title(f'{symbol} ICT OTE + MMXM - {target_date} (ET)\n'
+                 f'Trades: {len(day_trades)} | Wins: {win_count} | Losses: {loss_count} | '
+                 f'Win Rate: {win_rate:.0f}% | Total P/L: ${total_pnl:+,.2f}',
+                 fontsize=14, fontweight='bold')
+    ax.set_xlabel('Time (ET)')
+    ax.set_ylabel('Price')
+    ax.grid(True, alpha=0.3)
+
+    # Legend
+    legend_elements = [
+        Line2D([0], [0], marker='^', color='w', markerfacecolor='#2196F3', markersize=12, label='BULLISH Entry'),
+        Line2D([0], [0], marker='v', color='w', markerfacecolor='#FF5722', markersize=12, label='BEARISH Entry'),
+        Line2D([0], [0], color='#F44336', linestyle='--', label='Stop Loss'),
+        Line2D([0], [0], color='#4CAF50', linestyle=':', label='Trail Activate'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='#4CAF50', markersize=8, label='T1 Exit'),
+        Line2D([0], [0], marker='s', color='w', markerfacecolor='#4CAF50', markersize=8, label='T2/Floor Exit'),
+        Line2D([0], [0], marker='p', color='w', markerfacecolor='#4CAF50', markersize=8, label='Runner Exit'),
+        plt.Rectangle((0,0), 1, 1, facecolor='#9C27B0', alpha=0.15, label='OTE Zone (62-79%)'),
+        plt.Rectangle((0,0), 1, 1, facecolor='#2196F3', alpha=0.12, label='FVG Confluence'),
+        Line2D([0], [0], color='#1565C0', linestyle='--', label='Dealing Range'),
+        Line2D([0], [0], color='#757575', linestyle=':', label='Equilibrium'),
+        plt.Rectangle((0,0), 1, 1, facecolor='#FFCDD2', alpha=0.3, label='Premium Zone'),
+        plt.Rectangle((0,0), 1, 1, facecolor='#C8E6C9', alpha=0.3, label='Discount Zone'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='#4CAF50', markersize=6, label='Buy-Side Liq'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='#F44336', markersize=6, label='Sell-Side Liq'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=7, ncol=2)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print trade summary
+    print()
+    print('=' * 80)
+    print('TRADE SUMMARY (ET)')
+    print('=' * 80)
+    for i, t in enumerate(day_trades, 1):
+        trade = t.get('trade')
+        if not trade:
+            continue
+        pnl = t.get('pnl_dollars', 0)
+        et_time = trade.timestamp.strftime('%H:%M')
+        ote = trade.ote_zone
+        print(f"Trade {i}: {trade.direction} @ {trade.entry_price:.2f}")
+        print(f"  Entry: {et_time} ET")
+        print(f"  OTE Zone: {ote.bottom:.2f}-{ote.top:.2f} (70.5%: {ote.midpoint:.2f})")
+        print(f"  Impulse: {trade.impulse.start_price:.2f}->{trade.impulse.end_price:.2f} "
+              f"({trade.impulse.size_ticks:.0f} ticks)")
+        if trade.fvg:
+            print(f"  FVG Confluence: {trade.fvg.bottom:.2f}-{trade.fvg.top:.2f}")
+        # MMXM info
+        mmxm_parts = []
+        if hasattr(trade, 'pd_zone') and trade.pd_zone:
+            mmxm_parts.append(f"PD={trade.pd_zone}")
+        if hasattr(trade, 'mmxm_phase') and trade.mmxm_phase and trade.mmxm_phase != 'NONE':
+            mmxm_parts.append(f"MMXM={trade.mmxm_phase}")
+        if hasattr(trade, 'mmxm_model') and trade.mmxm_model:
+            mmxm_parts.append(f"Model={trade.mmxm_model}")
+        if hasattr(trade, 'smt_divergence') and trade.smt_divergence:
+            smt = trade.smt_divergence
+            mmxm_parts.append(f"SMT={smt.divergence_type} ({smt.primary_symbol}/{smt.correlated_symbol})")
+        if hasattr(trade, 'dealing_range') and trade.dealing_range:
+            dr = trade.dealing_range
+            mmxm_parts.append(f"DR={dr.low:.2f}-{dr.high:.2f}")
+        if mmxm_parts:
+            print(f"  MMXM: {', '.join(mmxm_parts)}")
+        print(f"  Stop: {trade.stop_price:.2f}, T1: {trade.t1_price:.2f}, Trail: {trade.t2_price:.2f}")
+        leg_exits = t.get('exits', [])
+        if leg_exits:
+            for leg in leg_exits:
+                print(f"  {leg['leg']}: {leg['price']:.2f} ({leg['contracts']}ct) ${leg['pnl']:+,.2f}")
+        else:
+            print(f"  Exit: {t.get('exit', trade.entry_price):.2f}")
+        print(f"  P/L: ${pnl:+,.2f}")
+        print()
+    print(f"TOTAL P/L: ${total_pnl:+,.2f}")
+
+
+if __name__ == '__main__':
+    symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
+
+    if len(sys.argv) >= 5:
+        year = int(sys.argv[2])
+        month = int(sys.argv[3])
+        day = int(sys.argv[4])
+        plot_ict_ote(symbol, year, month, day)
+    else:
+        plot_ict_ote(symbol)

@@ -1,0 +1,121 @@
+# ICT Optimal Trade Entry (OTE) Strategy Configuration
+#
+# Entry Logic:
+# 1. Impulse Leg - Strong directional move (displacement candle)
+# 2. OTE Zone - 62-79% Fibonacci retracement of impulse
+# 3. FVG Confluence - Optional: FVG overlaps OTE zone
+# 4. Retracement - Price retraces into OTE zone
+# 5. Rejection - Candle shows rejection from zone
+
+# ===== INSTRUMENT SETTINGS =====
+symbol: "ES"
+tick_size: 0.25
+tick_value: 12.50  # ES=$12.50, NQ=$5.00, MES=$1.25, MNQ=$0.50
+contracts: 3
+
+# ===== TIMEFRAME SETTINGS =====
+timeframes:
+  htf: "5m"   # Higher timeframe for impulse detection
+  ltf: "3m"   # Lower timeframe for retracement entry
+
+# ===== IMPULSE DETECTION =====
+impulse:
+  body_multiplier: 2.0          # Displacement candle body >= 2x avg body
+  avg_body_lookback: 20         # Bars to calculate average body
+  min_leg_ticks:
+    ES: 10                      # Min impulse size (2.5 pts)
+    NQ: 30                      # Min impulse size (7.5 pts)
+    MES: 10
+    MNQ: 30
+  swing_lookback: 3             # Bars on each side for swing confirmation
+  max_bars_back: 30             # How far back to search for impulse
+
+# ===== FIBONACCI OTE ZONE =====
+fibonacci:
+  fib_62: 0.618                 # Start of OTE zone
+  fib_705: 0.705                # Midpoint (optimal entry)
+  fib_79: 0.786                 # End of OTE zone
+
+# ===== FVG CONFLUENCE =====
+fvg:
+  require_confluence: false     # If true, only take OTE setups with FVG overlap
+  min_size_ticks:
+    ES: 3
+    NQ: 8
+    MES: 3
+    MNQ: 8
+
+# ===== STOP LOSS =====
+stop:
+  buffer_ticks: 2               # Ticks beyond impulse origin
+  max_risk_ticks: 40            # Maximum allowed risk in ticks
+
+# ===== TARGETS =====
+targets:
+  t1_r: 3                      # T1 fixed exit at 3R (1 contract)
+  trail_r: 6                   # Structure trail activation at 6R
+  t2_buffer_ticks: 4           # T2 trail buffer from swing
+  runner_buffer_ticks: 6       # Runner trail buffer (wider)
+
+# ===== SESSION FILTER =====
+session:
+  start: "08:00"
+  end: "16:00"
+  allow_lunch: false            # Skip 12:00-13:00 lunch lull
+  require_killzone: false
+
+# ===== RISK MANAGEMENT =====
+risk:
+  max_daily_trades: 5           # Maximum trades per day
+  max_daily_losses: 2           # Stop after N losses
+  max_position_size: 3          # Max contracts per trade
+  loss_cooldown_minutes: 15     # No re-entry within 15 min of loss
+
+# ===== TREND FILTER =====
+trend:
+  enabled: true                 # Use EMA trend filter
+  ema_fast: 10                  # Fast EMA period
+  ema_slow: 20                  # Slow EMA period
+
+# ===== MMXM ENHANCEMENTS =====
+
+# Premium/Discount Zone Filter
+# Only take longs in discount (below 50%), shorts in premium (above 50%)
+premium_discount:
+  enabled: true
+  method: "session"            # 'session' (day H/L) or 'swing' (HTF swings)
+
+# Dealing Range + Liquidity Targets
+# Swing-based range with buy-side/sell-side liquidity mapping
+dealing_range:
+  enabled: true
+  swing_lookback: 3
+  max_bars_back: 100
+
+# MMXM Phase Tracker
+# Tracks Accumulation -> Manipulation -> Distribution -> Expansion cycle
+mmxm:
+  enabled: true
+  require_valid_sequence: false  # If true, reject entries without valid MMXM sequence
+  min_accumulation_bars: 10     # Min bars of tight range for accumulation
+  accumulation_atr_ratio: 0.6   # ATR ratio threshold (recent/long-term)
+
+# SMT Divergence
+# Confirms entries with correlated symbol divergence
+smt:
+  enabled: true
+  require_confirmation: false   # If true, reject entries without SMT confirmation
+  lookback: 20                  # Bars to check for new highs/lows
+  pairs:
+    ES: "NQ"
+    NQ: "ES"
+    MES: "MNQ"
+    MNQ: "MES"
+    SPY: "QQQ"
+    QQQ: "SPY"
+
+# ===== BACKTEST SETTINGS =====
+backtest:
+  days: 14
+  initial_capital: 50000
+  commission_per_contract: 2.50
