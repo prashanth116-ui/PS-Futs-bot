@@ -109,19 +109,25 @@ class PaperTrade:
     exit_price: float = 0.0
     exit_reason: str = ""
 
-    # P/L tracking - 3 contract structure
-    t1_hit: bool = False  # 1 contract at 4R
+    # V10.9 targets
+    plus_4r: float = 0.0  # 3R price level (floor for T2/runner after 6R touch)
+    has_runner: bool = True  # False for 2-ct trades
+
+    # P/L tracking - 3 contract structure (or 2-ct: T1+T2 only)
+    t1_hit: bool = False  # 1 contract at 3R (V10.9)
     t2_hit: bool = False  # 1 contract at trail
-    runner_exit: bool = False  # 1 contract at trail
+    runner_exit: bool = False  # 1 contract at trail (only if has_runner)
 
     t1_pnl: float = 0.0
     t2_pnl: float = 0.0
     runner_pnl: float = 0.0
 
-    # Trail stops (activated after 4R)
-    t2_trail_stop: float = 0.0
-    runner_trail_stop: float = 0.0
-    trail_active: bool = False
+    # Two-stage trail (V10.9 parity)
+    t1_trail_stop: float = 0.0  # Between 3R and 6R: trail for all remaining cts
+    t2_trail_stop: float = 0.0  # After 6R: T2 trail (4-tick buffer)
+    runner_trail_stop: float = 0.0  # After 6R: runner trail (6-tick buffer)
+    touched_8r: bool = False  # Whether 6R has been touched (gates T2/runner trails)
+    trail_active: bool = False  # T1 has been hit
 
     @property
     def is_long(self) -> bool:
@@ -657,14 +663,16 @@ class LiveTrader:
         if not self.order_manager:
             return
 
-        # Create managed trade
+        # Create managed trade with pre-calculated targets from strategy
         trade = self.order_manager.create_trade_from_signal(
             symbol=config['tradovate_symbol'],
             direction=result['direction'],
             entry_type=result['entry_type'],
             entry_price=result['entry_price'],
             stop_price=result['stop_price'],
-            contracts=config['contracts'],
+            contracts=result.get('contracts', config['contracts']),
+            target_4r=result.get('target_4r'),
+            target_8r=result.get('target_8r'),
         )
 
         # Check if price has already moved to entry
@@ -684,32 +692,31 @@ class LiveTrader:
                 print("    Price moved past entry, skipping")
 
     def _create_paper_trade(self, symbol: str, result: Dict, config: Dict, asset_type: str = 'futures'):
-        """Create a simulated paper trade."""
+        """Create a simulated paper trade with V10.9 parity."""
         self.paper_trade_counter += 1
         trade_id = f"PAPER_{symbol}_{self.paper_trade_counter}"
 
-        # Calculate risk and targets
         entry_price = result['entry_price']
         stop_price = result['stop_price']
-        risk = abs(entry_price - stop_price)
-        is_long = result['direction'] == 'LONG'
 
-        if is_long:
-            target_4r = entry_price + (4 * risk)
-            target_8r = entry_price + (8 * risk)
-        else:
-            target_4r = entry_price - (4 * risk)
-            target_8r = entry_price - (8 * risk)
+        # Use pre-calculated targets from strategy (V10.9: 3R/6R)
+        target_4r = result['target_4r']
+        target_8r = result['target_8r']
+        plus_4r = result.get('plus_4r', target_4r)
 
-        # Get contracts/shares
+        # Get contracts/shares with dynamic sizing
         if asset_type == 'futures':
-            contracts = config['contracts']
+            # V10.7: Use strategy's dynamic sizing (3 for 1st, 2 for 2nd+)
+            contracts = result.get('contracts', config['contracts'])
             tick_size = config['tick_size']
             tick_value = config['tick_value']
         else:
             contracts = result.get('total_shares', 100)
             tick_size = 0.01
             tick_value = 1.0
+
+        # V10.7: 2-ct trades have no runner (T1 + T2 only)
+        has_runner = contracts >= 3
 
         # Create paper trade
         paper_trade = PaperTrade(
@@ -721,6 +728,8 @@ class LiveTrader:
             stop_price=stop_price,
             target_4r=target_4r,
             target_8r=target_8r,
+            plus_4r=plus_4r,
+            has_runner=has_runner,
             contracts=contracts,
             tick_size=tick_size,
             tick_value=tick_value,
@@ -730,12 +739,22 @@ class LiveTrader:
 
         self.paper_trades[trade_id] = paper_trade
 
-        log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}")
-        log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | 4R: {target_4r:.2f}")
+        sizing_note = f" (no runner)" if not has_runner else ""
+        log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
+        log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | T1: {target_4r:.2f} | Trail: {target_8r:.2f}")
         log(f"    Trade ID: {trade_id}")
 
     def _manage_paper_trades(self):
-        """Manage open paper trades - check stops and targets."""
+        """Manage open paper trades - matches backtest exit logic exactly.
+
+        Two-stage trail system (V10.9 parity):
+        1. Before T1 (3R): full stop → all contracts exit at stop
+        2. At T1 (3R): T1 exits fixed profit, t1_trail_stop set at entry
+        3. Between T1 and 6R: t1_trail_stop structure-trails (2-tick buffer)
+           - If hit, ALL remaining contracts exit (breakeven floor)
+        4. At 6R touch: T2/runner trails activate at plus_4r (3R floor)
+        5. After 6R: T2 trail (4-tick), runner trail (6-tick) independently
+        """
         closed_trades = []
 
         for trade_id, trade in self.paper_trades.items():
@@ -747,113 +766,181 @@ class LiveTrader:
             if not bars or len(bars) < 1:
                 continue
 
-            bars[-1].close
             current_high = bars[-1].high
             current_low = bars[-1].low
 
-            # Check stop loss (full position if not yet at 4R)
-            stop_hit = False
-            if trade.is_long:
-                stop_hit = current_low <= trade.stop_price
-            else:
-                stop_hit = current_high >= trade.stop_price
+            # Contract split (matches backtest: 1 T1, 1 T2, remainder runner)
+            cts_t1 = 1
+            cts_t2 = 1
+            cts_runner = max(0, trade.contracts - cts_t1 - cts_t2)
 
-            if stop_hit and not trade.t1_hit:
-                # Full stop - all 3 contracts
-                trade.exit_price = trade.stop_price
-                trade.exit_reason = "STOP"
-                trade.t1_pnl = trade.calculate_pnl(trade.stop_price, 1)
-                trade.t2_pnl = trade.calculate_pnl(trade.stop_price, 1)
-                trade.runner_pnl = trade.calculate_pnl(trade.stop_price, 1)
-                trade.status = PaperTradeStatus.CLOSED
-                trade.exit_time = get_est_now()
+            # === STRUCTURE TRAIL UPDATES (before exit checks) ===
 
-                self.paper_daily_pnl += trade.total_pnl
-                self.paper_daily_trades += 1
-                self.paper_daily_losses += 1
-
-                log(f"\n  [PAPER] STOPPED: {trade.symbol} {trade.direction}")
-                log(f"    P/L: ${trade.total_pnl:+,.2f} (full stop)")
-
-                notify_exit(
-                    symbol=trade.symbol,
-                    direction=trade.direction,
-                    exit_type="STOP",
-                    exit_price=trade.stop_price,
-                    pnl=trade.total_pnl,
-                    contracts=trade.contracts,
-                )
-
-                closed_trades.append(trade_id)
-                continue
-
-            # Check 4R target (T1 - 1 contract)
-            if not trade.t1_hit:
-                t1_hit = False
-                if trade.is_long:
-                    t1_hit = current_high >= trade.target_4r
-                else:
-                    t1_hit = current_low <= trade.target_4r
-
-                if t1_hit:
-                    trade.t1_hit = True
-                    trade.t1_pnl = trade.calculate_pnl(trade.target_4r, 1)
-                    trade.trail_active = True
-
-                    # Set initial trail stops at entry (breakeven)
-                    trade.t2_trail_stop = trade.entry_price
-                    trade.runner_trail_stop = trade.entry_price
-
-                    log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (4R)")
-                    log("    Trail stops activated at breakeven")
-
-            # Update trail stops based on structure (if trail active)
-            if trade.trail_active and len(bars) >= 5:
-                # Look for swing points to update trails
+            # T1 trail: update between 3R and 6R (2-tick buffer)
+            if trade.t1_hit and not trade.touched_8r and len(bars) >= 5:
                 for i in range(len(bars) - 4, len(bars) - 1):
                     if trade.is_long:
-                        # For longs, trail below swing lows
                         if is_swing_low(bars, i, 2):
-                            new_trail = bars[i].low - (4 * trade.tick_size)  # 4-tick buffer
+                            new_trail = bars[i].low - (2 * trade.tick_size)
+                            if new_trail > trade.t1_trail_stop:
+                                trade.t1_trail_stop = new_trail
+                    else:
+                        if is_swing_high(bars, i, 2):
+                            new_trail = bars[i].high + (2 * trade.tick_size)
+                            if new_trail < trade.t1_trail_stop:
+                                trade.t1_trail_stop = new_trail
+
+            # T2 trail: update after 6R touch (4-tick buffer)
+            if trade.touched_8r and not trade.t2_hit and len(bars) >= 5:
+                for i in range(len(bars) - 4, len(bars) - 1):
+                    if trade.is_long:
+                        if is_swing_low(bars, i, 2):
+                            new_trail = bars[i].low - (4 * trade.tick_size)
                             if new_trail > trade.t2_trail_stop:
                                 trade.t2_trail_stop = new_trail
-                            new_runner_trail = bars[i].low - (6 * trade.tick_size)  # 6-tick buffer
-                            if new_runner_trail > trade.runner_trail_stop:
-                                trade.runner_trail_stop = new_runner_trail
                     else:
-                        # For shorts, trail above swing highs
                         if is_swing_high(bars, i, 2):
                             new_trail = bars[i].high + (4 * trade.tick_size)
-                            if new_trail < trade.t2_trail_stop or trade.t2_trail_stop == trade.entry_price:
+                            if new_trail < trade.t2_trail_stop:
                                 trade.t2_trail_stop = new_trail
-                            new_runner_trail = bars[i].high + (6 * trade.tick_size)
-                            if new_runner_trail < trade.runner_trail_stop or trade.runner_trail_stop == trade.entry_price:
-                                trade.runner_trail_stop = new_runner_trail
 
-            # Check T2 trail stop (after T1 hit)
-            if trade.t1_hit and not trade.t2_hit and trade.t2_trail_stop > 0:
-                t2_stopped = False
-                if trade.is_long:
-                    t2_stopped = current_low <= trade.t2_trail_stop
-                else:
-                    t2_stopped = current_high >= trade.t2_trail_stop
+            # Runner trail: update after 6R touch AND T2 exited (6-tick buffer)
+            if trade.touched_8r and trade.t2_hit and not trade.runner_exit and trade.has_runner and len(bars) >= 5:
+                for i in range(len(bars) - 4, len(bars) - 1):
+                    if trade.is_long:
+                        if is_swing_low(bars, i, 2):
+                            new_trail = bars[i].low - (6 * trade.tick_size)
+                            if new_trail > trade.runner_trail_stop:
+                                trade.runner_trail_stop = new_trail
+                    else:
+                        if is_swing_high(bars, i, 2):
+                            new_trail = bars[i].high + (6 * trade.tick_size)
+                            if new_trail < trade.runner_trail_stop:
+                                trade.runner_trail_stop = new_trail
 
+            # === CHECK 3R TOUCH (T1 exit) ===
+            if not trade.t1_hit:
+                t1_hit = (current_high >= trade.target_4r) if trade.is_long else (current_low <= trade.target_4r)
+                if t1_hit:
+                    trade.t1_hit = True
+                    trade.trail_active = True
+                    trade.t1_pnl = trade.calculate_pnl(trade.target_4r, cts_t1)
+                    # Set t1_trail_stop at entry (breakeven floor for remaining cts)
+                    trade.t1_trail_stop = trade.entry_price
+                    log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (3R)")
+                    log(f"    Breakeven trail active for {trade.contracts - cts_t1} remaining cts")
+
+            # === CHECK 6R TOUCH (activates T2/runner trails) ===
+            if trade.t1_hit and not trade.touched_8r:
+                t8r_hit = (current_high >= trade.target_8r) if trade.is_long else (current_low <= trade.target_8r)
+                if t8r_hit:
+                    trade.touched_8r = True
+                    # Set T2 and runner floors at plus_4r (3R guaranteed profit)
+                    trade.t2_trail_stop = trade.plus_4r
+                    trade.runner_trail_stop = trade.plus_4r
+                    log(f"\n  [PAPER] 6R TOUCHED: {trade.symbol} - T2/Runner trails at 3R floor")
+
+            # === STOP CHECKS ===
+
+            # Before T1: full stop
+            if not trade.t1_hit:
+                stop_hit = (current_low <= trade.stop_price) if trade.is_long else (current_high >= trade.stop_price)
+                if stop_hit:
+                    trade.exit_price = trade.stop_price
+                    trade.exit_reason = "STOP"
+                    trade.t1_pnl = trade.calculate_pnl(trade.stop_price, cts_t1)
+                    trade.t2_pnl = trade.calculate_pnl(trade.stop_price, cts_t2)
+                    trade.runner_pnl = trade.calculate_pnl(trade.stop_price, cts_runner) if trade.has_runner else 0.0
+                    trade.status = PaperTradeStatus.CLOSED
+                    trade.exit_time = get_est_now()
+
+                    self.paper_daily_pnl += trade.total_pnl
+                    self.paper_daily_trades += 1
+                    self.paper_daily_losses += 1
+
+                    log(f"\n  [PAPER] STOPPED: {trade.symbol} {trade.direction}")
+                    log(f"    P/L: ${trade.total_pnl:+,.2f} (full stop, {trade.contracts} cts)")
+
+                    notify_exit(
+                        symbol=trade.symbol, direction=trade.direction,
+                        exit_type="STOP", exit_price=trade.stop_price,
+                        pnl=trade.total_pnl, contracts=trade.contracts,
+                    )
+                    closed_trades.append(trade_id)
+                    continue
+
+            # Between T1 and 6R: t1_trail_stop covers ALL remaining
+            if trade.t1_hit and not trade.touched_8r:
+                trail_hit = (current_low <= trade.t1_trail_stop) if trade.is_long else (current_high >= trade.t1_trail_stop)
+                if trail_hit:
+                    # All remaining contracts exit at t1_trail_stop
+                    remaining_cts = trade.contracts - cts_t1  # T1 already exited
+                    trade.t2_pnl = trade.calculate_pnl(trade.t1_trail_stop, cts_t2)
+                    trade.t2_hit = True
+                    if trade.has_runner and cts_runner > 0:
+                        trade.runner_pnl = trade.calculate_pnl(trade.t1_trail_stop, cts_runner)
+                        trade.runner_exit = True
+                    trade.status = PaperTradeStatus.CLOSED
+                    trade.exit_time = get_est_now()
+                    trade.exit_price = trade.t1_trail_stop
+                    trade.exit_reason = "TRAIL_STOP"
+
+                    self.paper_daily_pnl += trade.total_pnl
+                    self.paper_daily_trades += 1
+                    if trade.total_pnl > 0:
+                        self.paper_daily_wins += 1
+                    else:
+                        self.paper_daily_losses += 1
+
+                    log(f"\n  [PAPER] TRAIL STOP: {trade.symbol} {trade.direction} (before 6R)")
+                    log(f"    T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}" +
+                        (f" | Runner: ${trade.runner_pnl:+,.2f}" if trade.has_runner else ""))
+                    log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                    notify_exit(
+                        symbol=trade.symbol, direction=trade.direction,
+                        exit_type="TRAIL_STOP", exit_price=trade.t1_trail_stop,
+                        pnl=trade.total_pnl, contracts=trade.contracts,
+                    )
+                    closed_trades.append(trade_id)
+                    continue
+
+            # After 6R: T2 trail stop
+            if trade.touched_8r and not trade.t2_hit:
+                t2_stopped = (current_low <= trade.t2_trail_stop) if trade.is_long else (current_high >= trade.t2_trail_stop)
                 if t2_stopped:
                     trade.t2_hit = True
-                    trade.t2_pnl = trade.calculate_pnl(trade.t2_trail_stop, 1)
-                    log(f"\n  [PAPER] T2 TRAIL: {trade.symbol} +${trade.t2_pnl:,.2f}")
+                    trade.t2_pnl = trade.calculate_pnl(trade.t2_trail_stop, cts_t2)
+                    log(f"\n  [PAPER] T2 TRAIL: {trade.symbol} ${trade.t2_pnl:+,.2f}")
 
-            # Check runner trail stop
-            if trade.t1_hit and trade.t2_hit and not trade.runner_exit and trade.runner_trail_stop > 0:
-                runner_stopped = False
-                if trade.is_long:
-                    runner_stopped = current_low <= trade.runner_trail_stop
-                else:
-                    runner_stopped = current_high >= trade.runner_trail_stop
+                    # For 2-ct trades (no runner), trade is done
+                    if not trade.has_runner:
+                        trade.status = PaperTradeStatus.CLOSED
+                        trade.exit_time = get_est_now()
+                        trade.exit_price = trade.t2_trail_stop
+                        trade.exit_reason = "T2_TRAIL"
 
+                        self.paper_daily_pnl += trade.total_pnl
+                        self.paper_daily_trades += 1
+                        self.paper_daily_wins += 1
+
+                        log(f"    CLOSED (2-ct): T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}")
+                        log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                        notify_exit(
+                            symbol=trade.symbol, direction=trade.direction,
+                            exit_type="T2_TRAIL", exit_price=trade.t2_trail_stop,
+                            pnl=trade.total_pnl, contracts=trade.contracts,
+                        )
+                        closed_trades.append(trade_id)
+                        continue
+
+            # After 6R: Runner trail stop (only after T2 exited)
+            if trade.touched_8r and trade.t2_hit and not trade.runner_exit and trade.has_runner:
+                runner_stopped = (current_low <= trade.runner_trail_stop) if trade.is_long else (current_high >= trade.runner_trail_stop)
                 if runner_stopped:
                     trade.runner_exit = True
-                    trade.runner_pnl = trade.calculate_pnl(trade.runner_trail_stop, 1)
+                    trade.runner_pnl = trade.calculate_pnl(trade.runner_trail_stop, cts_runner)
                     trade.status = PaperTradeStatus.CLOSED
                     trade.exit_time = get_est_now()
                     trade.exit_price = trade.runner_trail_stop
@@ -868,54 +955,10 @@ class LiveTrader:
                     log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
 
                     notify_exit(
-                        symbol=trade.symbol,
-                        direction=trade.direction,
-                        exit_type="RUNNER_TRAIL",
-                        exit_price=trade.runner_trail_stop,
-                        pnl=trade.total_pnl,
-                        contracts=trade.contracts,
+                        symbol=trade.symbol, direction=trade.direction,
+                        exit_type="RUNNER_TRAIL", exit_price=trade.runner_trail_stop,
+                        pnl=trade.total_pnl, contracts=trade.contracts,
                     )
-
-                    closed_trades.append(trade_id)
-
-            # Check 8R target (close runner early for big win)
-            if trade.t1_hit and not trade.runner_exit:
-                t8r_hit = False
-                if trade.is_long:
-                    t8r_hit = current_high >= trade.target_8r
-                else:
-                    t8r_hit = current_low <= trade.target_8r
-
-                if t8r_hit:
-                    # Close T2 and runner at 8R
-                    if not trade.t2_hit:
-                        trade.t2_hit = True
-                        trade.t2_pnl = trade.calculate_pnl(trade.target_8r, 1)
-
-                    trade.runner_exit = True
-                    trade.runner_pnl = trade.calculate_pnl(trade.target_8r, 1)
-                    trade.status = PaperTradeStatus.CLOSED
-                    trade.exit_time = get_est_now()
-                    trade.exit_price = trade.target_8r
-                    trade.exit_reason = "8R_TARGET"
-
-                    self.paper_daily_pnl += trade.total_pnl
-                    self.paper_daily_trades += 1
-                    self.paper_daily_wins += 1
-
-                    log(f"\n  [PAPER] 8R TARGET: {trade.symbol} {trade.direction}")
-                    log(f"    T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f} | Runner: ${trade.runner_pnl:+,.2f}")
-                    log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
-
-                    notify_exit(
-                        symbol=trade.symbol,
-                        direction=trade.direction,
-                        exit_type="8R_TARGET",
-                        exit_price=trade.target_8r,
-                        pnl=trade.total_pnl,
-                        contracts=trade.contracts,
-                    )
-
                     closed_trades.append(trade_id)
 
         # Remove closed trades from active tracking

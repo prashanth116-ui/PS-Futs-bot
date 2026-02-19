@@ -138,6 +138,8 @@ class OrderManager:
         entry_price: float,
         stop_price: float,
         contracts: int = 3,
+        target_4r: float = None,
+        target_8r: float = None,
     ) -> ManagedTrade:
         """
         Create a managed trade from a strategy signal.
@@ -149,6 +151,8 @@ class OrderManager:
             entry_price: Entry price (FVG midpoint)
             stop_price: Stop loss price
             contracts: Number of contracts (default 3)
+            target_4r: Pre-calculated T1 target (V10.9: 3R). If None, calculates at 3R.
+            target_8r: Pre-calculated trail trigger (V10.9: 6R). If None, calculates at 6R.
 
         Returns:
             ManagedTrade object ready for execution.
@@ -156,9 +160,11 @@ class OrderManager:
         is_long = direction == 'LONG'
         risk = abs(entry_price - stop_price)
 
-        # Calculate targets (4R and 8R)
-        target_4r = entry_price + (4 * risk) if is_long else entry_price - (4 * risk)
-        target_8r = entry_price + (8 * risk) if is_long else entry_price - (8 * risk)
+        # V10.9: Use pre-calculated targets or default to 3R/6R
+        if target_4r is None:
+            target_4r = entry_price + (3 * risk) if is_long else entry_price - (3 * risk)
+        if target_8r is None:
+            target_8r = entry_price + (6 * risk) if is_long else entry_price - (6 * risk)
 
         # Split contracts: T1, T2, Runner
         t1_contracts = 1
@@ -314,8 +320,8 @@ class OrderManager:
                 trade.contracts_remaining -= trade.t1_contracts
                 trade.status = TradeStatus.T1_HIT
 
-                # Calculate P/L
-                pnl_pts = 4 * trade.risk_pts
+                # Calculate P/L (use actual target distance, not hardcoded 4R)
+                pnl_pts = abs(trade.target_4r - trade.entry_price)
                 pnl_dollars = (pnl_pts / self._get_tick_size(trade.symbol)) * self._get_tick_value(trade.symbol) * trade.t1_contracts
                 trade.realized_pnl += pnl_dollars
                 trade.exits.append({
