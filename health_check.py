@@ -71,6 +71,42 @@ def main():
             print(f"  Connection: FAILED - {e}")
             errors.append(f"TradingView: {e}")
 
+    # Check droplet paper trading service
+    print("\nDroplet Paper Trading:")
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+             "root@107.170.74.154", "systemctl is-active paper-trading && systemctl show paper-trading --property=ActiveEnterTimestamp,MemoryCurrent"],
+            capture_output=True, text=True, timeout=15
+        )
+        lines = result.stdout.strip().split("\n")
+        if result.returncode == 0 and lines and lines[0] == "active":
+            print("  Service: ACTIVE")
+            for line in lines[1:]:
+                if "ActiveEnterTimestamp=" in line:
+                    ts = line.split("=", 1)[1].strip()
+                    print(f"  Started: {ts}")
+                elif "MemoryCurrent=" in line:
+                    mem_bytes = line.split("=", 1)[1].strip()
+                    try:
+                        mem_mb = int(mem_bytes) / (1024 * 1024)
+                        print(f"  Memory: {mem_mb:.1f} MB")
+                    except ValueError:
+                        pass
+        else:
+            status = lines[0] if lines else "unknown"
+            print(f"  Service: {status.upper()}")
+            errors.append(f"Paper trading service: {status}")
+    except subprocess.TimeoutExpired:
+        print("  Service: UNREACHABLE (SSH timeout)")
+        errors.append("Droplet unreachable")
+    except FileNotFoundError:
+        print("  Service: SKIPPED (no SSH client)")
+    except Exception as e:
+        print(f"  Service: ERROR - {e}")
+        errors.append(f"Droplet check: {e}")
+
     # Run tests
     print("\nTests:")
     try:
