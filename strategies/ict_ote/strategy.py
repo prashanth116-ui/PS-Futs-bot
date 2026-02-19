@@ -299,6 +299,19 @@ class ICTOTEStrategy:
                 print(f'  DBG {bar.timestamp.strftime("%H:%M")} | No impulse detected')
             return None
 
+        # A+ filter: Opposing impulse invalidation
+        # If a new impulse in the OPPOSITE direction is larger than an existing
+        # setup's impulse, invalidate the old setup — the market has reversed
+        opposing_dir = 'BEARISH' if impulse.direction == 'BULLISH' else 'BULLISH'
+        opposing_setups = [s for s in self.pending_setups if s.impulse.direction == opposing_dir]
+        for opp in opposing_setups:
+            if impulse.size_ticks > opp.impulse.size_ticks:
+                if self._debug:
+                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | INVALIDATED {opposing_dir} OTE: '
+                          f'opposing {impulse.direction} impulse ({impulse.size_ticks:.0f} ticks) '
+                          f'> original ({opp.impulse.size_ticks:.0f} ticks)')
+                self.pending_setups.remove(opp)
+
         # Check if we already have a setup for this direction
         existing = [s for s in self.pending_setups if s.impulse.direction == impulse.direction]
         if existing:
@@ -456,57 +469,51 @@ class ICTOTEStrategy:
     def _create_trade_setup(self, setup: OTESetup, bar) -> Optional[TradeSetup]:
         """Create a trade from OTE zone rejection with hybrid filter chain.
 
-        If di_mandatory=True: DI is a hard gate, then N/4 remaining must pass.
-        Otherwise: all 5 filters scored as optional, N/5 must pass.
+        MANDATORY (must pass):
+        1. Premium/Discount — buy in discount, sell in premium
+
+        OPTIONAL (N of 4 must pass, default 2):
+        2. DI Direction — +DI > -DI for LONG, -DI > +DI for SHORT
+        3. EMA trend alignment
+        4. Strong displacement (>= 2x avg body)
+        5. FVG overlaps OTE zone
         """
         direction = setup.impulse.direction
-        di_mandatory = self.config.get('di_mandatory', False)
 
-        # MANDATORY DI gate (if enabled)
-        if di_mandatory and self.use_di_filter:
-            if not self._check_di_direction(direction):
+        # MANDATORY: Premium/Discount — buy low, sell high in session range
+        if self.use_premium_discount:
+            if not check_premium_discount_filter(self.pd_zone, direction):
+                zone_str = self.pd_zone.zone if self.pd_zone else 'N/A'
                 if self._debug:
-                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: DI mandatory ({direction})')
+                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: {direction} in {zone_str} zone')
                 return None
 
-        # HYBRID scoring of remaining filters
+        # OPTIONAL: N/4 must pass (DI, EMA trend, displacement, FVG confluence)
         optional_passes = 0
-        total_filters = 5
 
-        if di_mandatory:
-            # DI already passed as mandatory — skip it, score 4 remaining
-            total_filters = 4
-        else:
-            # Filter 1: DI direction alignment (scored as optional)
-            if self.use_di_filter:
-                if self._check_di_direction(direction):
-                    optional_passes += 1
-            else:
-                optional_passes += 1  # auto-pass if disabled
-
-        # Filter 2: Premium/Discount zone alignment
-        if self.use_premium_discount:
-            if check_premium_discount_filter(self.pd_zone, direction):
+        # Optional 1: DI Direction alignment
+        if self.use_di_filter:
+            if self._check_di_direction(direction):
                 optional_passes += 1
         else:
             optional_passes += 1  # auto-pass if disabled
 
-        # Filter 3: EMA trend alignment
+        # Optional 2: EMA trend alignment
         if self._check_trend_filter(direction):
             optional_passes += 1
 
-        # Filter 4: Strong displacement (>= 2x avg body)
+        # Optional 3: Strong displacement (>= 2x avg body)
         if setup.impulse.displacement_ratio >= 2.0:
             optional_passes += 1
 
-        # Filter 5: FVG overlaps OTE zone
+        # Optional 4: FVG overlaps OTE zone
         if setup.has_fvg_confluence:
             optional_passes += 1
 
-        min_optional = self.config.get('min_hybrid_passes', 3)
+        min_optional = self.config.get('min_hybrid_passes', 2)
         if optional_passes < min_optional:
             if self._debug:
-                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: hybrid filter ({optional_passes}/{total_filters} optional, need {min_optional})')
+                print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: hybrid filter ({optional_passes}/4 optional, need {min_optional})')
             return None
 
         # MMXM sequence filter (optional hard filter)
@@ -520,15 +527,22 @@ class ICTOTEStrategy:
         entry_price = bar.close
         impulse = setup.impulse
 
-        # Stop beyond OTE zone boundary + buffer
-        # Tighter stop = smaller risk = more achievable R-targets
+        # A+ Stop: Use rejection bar's wick (tighter) instead of zone boundary
+        # The rejection candle's extreme IS the invalidation — if price goes past
+        # the wick, the rejection failed. Much tighter than zone boundary stop.
         buffer = self.stop_buffer_ticks * self.tick_size
         zone = setup.ote_zone
         if direction == 'BULLISH':
-            stop_price = zone.bottom - buffer
+            # Stop below rejection bar's low (the wick tip)
+            bar_stop = bar.low - buffer
+            zone_stop = zone.bottom - buffer
+            stop_price = max(bar_stop, zone_stop)  # use tighter of the two
             risk = entry_price - stop_price
         else:  # BEARISH
-            stop_price = zone.top + buffer
+            # Stop above rejection bar's high (the wick tip)
+            bar_stop = bar.high + buffer
+            zone_stop = zone.top + buffer
+            stop_price = min(bar_stop, zone_stop)  # use tighter of the two
             risk = stop_price - entry_price
 
         risk_ticks = risk / self.tick_size
@@ -539,7 +553,18 @@ class ICTOTEStrategy:
                 print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: risk {risk_ticks:.1f} ticks')
             return None
 
-        # 6. SMT divergence (soft confirmation or hard filter)
+        # 6. A+ filter: Risk/impulse ratio — reject if risk > 20% of impulse
+        max_risk_impulse_ratio = self.config.get('max_risk_impulse_ratio', 0.20)
+        if impulse.size_ticks > 0:
+            risk_ratio = risk_ticks / impulse.size_ticks
+            if risk_ratio > max_risk_impulse_ratio:
+                if self._debug:
+                    print(f'  DBG {bar.timestamp.strftime("%H:%M")} | REJECTED: risk/impulse ratio '
+                          f'{risk_ratio:.1%} > {max_risk_impulse_ratio:.0%} '
+                          f'(risk={risk_ticks:.1f}, impulse={impulse.size_ticks:.0f})')
+                return None
+
+        # 7. SMT divergence (soft confirmation or hard filter)
         smt_div = None
         if self.use_smt and self.last_smt:
             # Check if SMT direction matches trade direction

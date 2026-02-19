@@ -79,7 +79,7 @@ EQUITY_CONFIG = {
 
 
 def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
-                 t1_r: int = 4, trail_r: int = 4, risk_per_trade: float = 500):
+                 t1_r: int = 2, trail_r: int = 4, risk_per_trade: float = 500):
     """
     Run ICT OTE strategy backtest.
 
@@ -109,14 +109,14 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         min_fvg_ticks = 3
         min_impulse_ticks = 10  # 2.5 pts
         min_risk_ticks = 6     # 1.5 pts
-        max_risk_ticks = 24    # 6 pts — cap worst-case losses
+        max_risk_ticks = 20    # 5 pts max risk
     elif symbol in ['NQ', 'MNQ']:
         tick_size = 0.25
         tick_value = 5.00 if symbol == 'NQ' else 0.50
         min_fvg_ticks = 8
         min_impulse_ticks = 30  # 7.5 pts
         min_risk_ticks = 24     # 6 pts
-        max_risk_ticks = 80     # 20 pts — OTE zones need wider risk than FVG
+        max_risk_ticks = 60     # 15 pts max risk
     else:
         tick_size = 0.25
         tick_value = 12.50
@@ -124,18 +124,9 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         min_impulse_ticks = 10
         min_risk_ticks = 6
 
-    # Per-symbol defaults (NQ has 3-5x larger risk per trade than ES)
-    if contracts == 0:  # auto-size
-        if symbol in ['NQ', 'MNQ']:
-            contracts = 2  # NQ: $10/tick, moderate risk per trade
-        elif symbol in ['ES', 'MES']:
-            contracts = 3
-        else:
-            contracts = 3
-
-    # NQ needs lower R-target (4R/3R too ambitious for NQ zone size)
-    if symbol in ['NQ', 'MNQ'] and t1_r >= 3:
-        t1_r = 2
+    # 1 contract per trade — simple R/R: Win=+2R, Loss=-1R, BE=0R
+    if contracts == 0:
+        contracts = 1
 
     # Bars needed
     htf_bars_per_day = 78   # 5m bars in RTH
@@ -193,9 +184,9 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         'loss_cooldown_minutes': 15,
         'allow_lunch': False,
         'require_killzone': False,
-        'max_daily_trades': 5,
+        'max_daily_trades': 3,
         'max_daily_losses': 2,
-        'max_ote_age_bars': 30,          # ~2.5hrs on 5m (was 50)
+        'max_ote_age_bars': 25,          # ~2hrs on 5m
         # Trend filter ON — EMA 20/50 as optional in hybrid chain
         'use_trend_filter': True,
         'ema_fast_period': 20,           # was 10 — match V10 proven pair
@@ -221,16 +212,15 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
             'require_confirmation': False,
             'lookback': 20,
         },
-        # Hybrid filter config — per-symbol tuning below
-        'min_hybrid_passes': 3,
-        'di_mandatory': False,
+        # A+ filter: risk/impulse ratio — reject wide-stop small-impulse entries
+        'max_risk_impulse_ratio': 0.20,
+        # Hybrid filter config — DI+P/D mandatory, 2/3 optional (EMA/disp/FVG)
+        'min_hybrid_passes': 2,
     }
 
-    # Per-symbol hybrid tuning
-    # NQ: 2/5 hybrid (permissive) — NQ has few OTE setups, need more trades
-    # ES: 3/5 hybrid — proven profitable, more setups available
+    # Per-symbol tuning
     if symbol in ['NQ', 'MNQ']:
-        config['min_hybrid_passes'] = 2  # 2/5 = more permissive for NQ
+        config['max_risk_impulse_ratio'] = 0.35  # NQ OTE zones are wider relative to impulses
 
     # Group bars by date
     dates = sorted(set(b.timestamp.date() for b in ltf_bars))
@@ -596,7 +586,7 @@ def simulate_trade(bars, trade: TradeSetup, tick_size, tick_value, contracts=1,
 
 
 if __name__ == '__main__':
-    t1_r_val = 4
+    t1_r_val = 2
     trail_r_val = 4
     positional = []
     for a in sys.argv[1:]:
