@@ -59,7 +59,7 @@ def plot_4r8r_backtest():
     ax1.grid(True, alpha=0.3)
 
     # Add annotations for key trades
-    ax1.annotate(f'Re-entry\n+$14,050', xy=(12, equity[12]), xytext=(9, equity[12] + 3000),
+    ax1.annotate('Re-entry\n+$14,050', xy=(12, equity[12]), xytext=(9, equity[12] + 3000),
                  fontsize=10, fontweight='bold', color='#4CAF50',
                  arrowprops=dict(arrowstyle='->', color='#4CAF50', lw=2))
 

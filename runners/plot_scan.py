@@ -15,7 +15,7 @@ from matplotlib.lines import Line2D
 from datetime import date, time as dt_time, timedelta
 
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup, SetupState
+from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup
 from strategies.ict_sweep.filters.displacement import calculate_avg_body
 from runners.scan_ict_sweep import SYMBOL_CONFIGS, EQUITY_SYMBOLS
 

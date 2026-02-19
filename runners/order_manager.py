@@ -7,8 +7,8 @@ for the V10.4 Quad Entry strategy.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import datetime, time as dt_time
-from typing import Optional, Dict, List, Any
+from datetime import datetime
+from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -17,7 +17,6 @@ from runners.tradovate_client import (
     OrderAction,
     OrderType,
     Order,
-    Position,
 )
 
 

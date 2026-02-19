@@ -4,7 +4,7 @@ Compare ICT Entry Strategies: Baseline vs IFVG vs Liquidity Sweep + FVG vs OTE +
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
@@ -440,8 +440,6 @@ def run_comparison():
     """Run comparison of all entry strategies."""
 
     contracts = 3
-    target1_r = 4
-    target2_r = 8
     tick_size = 0.25
     tick_value = 12.50
 
@@ -617,7 +615,7 @@ def run_comparison():
     print('-'*120)
 
     for stats in all_stats:
-        pf = f'{stats["profit_factor"]:.2f}' if stats["profit_factor"] != float('inf') else 'inf'
+        f'{stats["profit_factor"]:.2f}' if stats["profit_factor"] != float('inf') else 'inf'
         diff = stats['total_pnl'] - baseline_stats['total_pnl']
         diff_pct = (diff / baseline_stats['total_pnl'] * 100) if baseline_stats['total_pnl'] != 0 else 0
         diff_str = f'${diff:+,.0f} ({diff_pct:+.1f}%)' if stats['name'] != 'Baseline (FVG Midpoint)' else '-'

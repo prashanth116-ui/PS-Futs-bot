@@ -17,9 +17,9 @@ sys.path.insert(0, '.')
 
 import pickle
 from pathlib import Path
-from datetime import time as dt_time, timedelta, datetime
+from datetime import time as dt_time, timedelta
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict_ote.strategy import ICTOTEStrategy, TradeSetup, OTESetup
+from strategies.ict_ote.strategy import ICTOTEStrategy, TradeSetup
 from strategies.ict_ote.signals.smt import get_correlated_symbol
 
 CACHE_DIR = Path('.cache')

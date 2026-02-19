@@ -5,7 +5,6 @@ Handles authentication and REST API calls to Tradovate.
 """
 from __future__ import annotations
 import os
-import json
 import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass

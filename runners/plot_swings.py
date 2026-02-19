@@ -9,7 +9,7 @@ sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from datetime import date, time as dt_time, timedelta
+from datetime import date, time as dt_time
 
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.sweep import find_swing_highs, find_swing_lows

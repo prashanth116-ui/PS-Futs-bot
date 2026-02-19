@@ -5,7 +5,6 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from datetime import date
 
 def plot_comparison():

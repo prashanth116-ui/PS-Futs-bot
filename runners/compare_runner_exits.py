@@ -4,7 +4,7 @@ Compare different runner exit strategies.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations

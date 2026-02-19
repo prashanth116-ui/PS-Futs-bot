@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, '.')
 
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime
 import yfinance as yf
 
 from core.types import Bar
@@ -133,9 +133,9 @@ def print_analysis(analysis: dict):
     if adx and adx >= 20 and in_kz:
         print(f"  >> TRADEABLE: Look for {bias} FVG setups")
     elif adx and adx < 20:
-        print(f"  >> AVOID: Market is choppy (ADX < 20)")
+        print("  >> AVOID: Market is choppy (ADX < 20)")
     elif not in_kz:
-        print(f"  >> WAIT: Outside killzone hours")
+        print("  >> WAIT: Outside killzone hours")
 
 
 def run_scan():

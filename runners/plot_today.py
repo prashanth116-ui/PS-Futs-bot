@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_today import run_session_with_position_limit
 from strategies.ict.signals.fvg import detect_fvgs
@@ -86,9 +86,8 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
         'max_fvg_age_bars': 100,
         'invalidate_on_close_through': True
     }
-    all_fvgs = detect_fvgs(session_bars, fvg_config)
+    detect_fvgs(session_bars, fvg_config)
     is_long = direction == 'LONG'
-    fvg_dir = 'BULLISH' if is_long else 'BEARISH'
 
     # Create figure
     fig, ax = plt.subplots(figsize=(20, 12))
@@ -128,7 +127,7 @@ def plot_today(symbol='ES', direction='LONG', contracts=3):
         stop_price = result['stop_price']
         target_4r = result['target_4r']
         target_8r = result['target_8r']
-        risk = result['risk']
+        result['risk']
 
         # Find entry bar index
         entry_time = result['entry_time']

@@ -5,7 +5,6 @@ Filters trades based on time of day. Best setups occur during
 high-volume sessions (NY Open, London) and should avoid lunch lull.
 """
 from datetime import datetime, time as dt_time
-from typing import Optional
 
 try:
     from zoneinfo import ZoneInfo

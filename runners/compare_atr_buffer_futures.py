@@ -14,7 +14,7 @@ Futures have different tick values:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import (
     calculate_ema,
@@ -431,7 +431,7 @@ def run_backtest_with_buffer_futures(
 
     # Trail buffers in points (4 ticks, 6 ticks)
     trail_buffer_t2 = 4 * tick_size
-    trail_buffer_runner = 6 * tick_size
+    6 * tick_size
 
     for i, bar in enumerate(session_bars):
         trades_to_remove = []
@@ -697,10 +697,10 @@ def main():
     days = 13
 
     print(f"\n{'='*70}")
-    print(f"ATR BUFFER vs FIXED BUFFER - FUTURES COMPARISON")
+    print("ATR BUFFER vs FIXED BUFFER - FUTURES COMPARISON")
     print(f"{'='*70}")
-    print(f"Fixed Buffer: 2 ticks (0.50 pts)")
-    print(f"ATR Buffer: ATR(14) x 0.5 (adaptive)")
+    print("Fixed Buffer: 2 ticks (0.50 pts)")
+    print("ATR Buffer: ATR(14) x 0.5 (adaptive)")
     print(f"{'='*70}")
 
     all_results = {}
@@ -736,7 +736,7 @@ def main():
         total_atr_pnl += atr['pnl']
 
     print(f"{'='*70}")
-    print(f"TOTAL IMPACT")
+    print("TOTAL IMPACT")
     print(f"{'='*70}")
     print(f"Fixed Total: ${total_fixed_pnl:+,.0f}")
     print(f"ATR Total:   ${total_atr_pnl:+,.0f}")

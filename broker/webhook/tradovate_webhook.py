@@ -9,7 +9,6 @@ Setup:
 3. Add to config/.env: TRADOVATE_WEBHOOK_URL=your_url
 """
 import os
-import json
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -119,7 +118,7 @@ class TradovateWebhook:
         }
 
         if self.paper_mode:
-            print(f"\n[PAPER MODE] Order logged (not sent):")
+            print("\n[PAPER MODE] Order logged (not sent):")
             print(f"  {action} {qty} {contract}")
             if stop_price:
                 print(f"  Stop: {stop_price}")
@@ -141,7 +140,7 @@ class TradovateWebhook:
             if response.status_code == 200:
                 order_record["status"] = "SENT"
                 order_record["response"] = response.text
-                print(f"\n[WEBHOOK] Order sent successfully:")
+                print("\n[WEBHOOK] Order sent successfully:")
                 print(f"  {action} {qty} {contract}")
                 result = {"success": True, "order": order_record, "response": response.text}
             else:

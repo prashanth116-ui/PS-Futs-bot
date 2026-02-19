@@ -5,7 +5,6 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from datetime import datetime
 import numpy as np
 

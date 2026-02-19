@@ -447,7 +447,7 @@ def calculate_key_levels(
         return levels
 
     current_date = current_bar.timestamp.date()
-    current_time = current_bar.timestamp.time()
+    current_bar.timestamp.time()
     rth_start = dt_time(rth_start_hour, rth_start_minute)
     rth_end = dt_time(rth_end_hour, rth_end_minute)
 

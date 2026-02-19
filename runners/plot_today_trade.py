@@ -5,7 +5,6 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from datetime import date, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
@@ -44,7 +43,6 @@ def plot_today_trade():
     print(f'Got {len(session_bars)} session bars')
 
     # Trade parameters
-    contracts = 3
     target1_r = 4
     target2_r = 8
     tick_size = 0.25

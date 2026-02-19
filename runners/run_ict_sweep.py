@@ -17,9 +17,9 @@ sys.path.insert(0, '.')
 
 import pickle
 from pathlib import Path
-from datetime import time as dt_time, timedelta, datetime
+from datetime import time as dt_time, timedelta
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup, SetupState
+from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup
 
 CACHE_DIR = Path('.cache')
 CACHE_DIR.mkdir(exist_ok=True)
@@ -129,13 +129,13 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 3, ltf_int
 
     htf_bars_needed = days * htf_bars_per_day + 1000
     mtf_bars_needed = days * mtf_bars_per_day + 1500
-    ltf_bars_needed = days * ltf_bars_per_day + 1500
+    days * ltf_bars_per_day + 1500
 
     print(f"Fetching {symbol} HTF (5m) data...")
     htf_bars = fetch_futures_bars(symbol=symbol, interval='5m', n_bars=htf_bars_needed)
 
     if ltf_interval == '5m':
-        print(f"Using 5m for all timeframes")
+        print("Using 5m for all timeframes")
         mtf_bars = htf_bars
     else:
         print(f"Fetching {symbol} MTF ({ltf_interval}) data for FVG...")
@@ -226,7 +226,7 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 3, ltf_int
                 prev_day = prev_day - timedelta(days=1)
 
             prev_rth_start = dt_time(9, 30)
-            premarket_start = dt_time(4, 0)
+            dt_time(4, 0)
 
             # HTF: prev day RTH + current day premarket through close
             day_htf = [b for b in htf_bars

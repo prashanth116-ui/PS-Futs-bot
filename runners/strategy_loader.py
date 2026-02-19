@@ -15,8 +15,8 @@ def build_strategy(config_path: str | Path):
     cfg = load_yaml(config_path)
 
     instrument = cfg.get("instrument", {})
-    risk = cfg.get("risk", {})
-    killzones = cfg.get("killzones", {})
+    cfg.get("risk", {})
+    cfg.get("killzones", {})
 
     # Strategy expects a unified dict config (you already structured it this way)
     strategy = ICTStrategy(

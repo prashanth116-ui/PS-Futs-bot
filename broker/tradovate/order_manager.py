@@ -165,7 +165,7 @@ class OrderManager:
             return order
         else:
             order.status = OrderStatus.REJECTED
-            print(f"Order rejected by broker")
+            print("Order rejected by broker")
             return None
 
     def execute_bracket(

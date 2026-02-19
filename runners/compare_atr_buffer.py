@@ -12,7 +12,7 @@ The ATR buffer should help avoid stop hunts by:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import (
     calculate_ema,
@@ -82,7 +82,7 @@ def run_backtest_with_buffer(
     pre_session_bars = [b for b in all_bars if b.timestamp < session_start]
 
     rth_start = dt_time(9, 30)
-    rth_end = dt_time(16, 0)
+    dt_time(16, 0)
     morning_end = dt_time(12, 0)
 
     all_fvgs = detect_fvgs(all_bars, fvg_config)
@@ -119,8 +119,6 @@ def run_backtest_with_buffer(
     else:
         htf_bias = None
 
-    recent_swing_high = None
-    recent_swing_low = None
 
     # Calculate initial ATR
     current_atr = calculate_atr(indicator_bars, 14)
@@ -148,9 +146,9 @@ def run_backtest_with_buffer(
         if i >= 4:
             check_idx = i - 2
             if is_swing_high(session_bars, check_idx, 2):
-                recent_swing_high = {'price': session_bars[check_idx].high, 'idx': check_idx}
+                {'price': session_bars[check_idx].high, 'idx': check_idx}
             if is_swing_low(session_bars, check_idx, 2):
-                recent_swing_low = {'price': session_bars[check_idx].low, 'idx': check_idx}
+                {'price': session_bars[check_idx].low, 'idx': check_idx}
 
         if bar_time < rth_start:
             continue
@@ -529,7 +527,7 @@ def run_backtest_with_buffer(
             continue
 
         total_pnl = sum(e['pnl'] for e in trade['exits'])
-        exit_types = [e['type'] for e in trade['exits']]
+        [e['type'] for e in trade['exits']]
         result = 'WIN' if total_pnl > 0 else 'LOSS'
 
         final_results.append({
@@ -656,7 +654,7 @@ def run_30day_comparison(symbol='SPY', risk_per_trade=500):
     stops_avoided = fixed_results['stopped_out'] - atr_results['stopped_out']
 
     print(f"\n{'='*70}")
-    print(f"ATR BUFFER IMPACT")
+    print("ATR BUFFER IMPACT")
     print(f"{'='*70}")
     print(f"P/L Improvement: ${improvement:+,.0f}")
     print(f"Stops Avoided: {stops_avoided}")
@@ -665,7 +663,7 @@ def run_30day_comparison(symbol='SPY', risk_per_trade=500):
     # Show trades where ATR buffer made biggest difference
     if detailed_comparison:
         print(f"\n{'='*70}")
-        print(f"TOP IMPROVEMENTS (ATR buffer helped most)")
+        print("TOP IMPROVEMENTS (ATR buffer helped most)")
         print(f"{'='*70}")
 
         sorted_comp = sorted(detailed_comparison, key=lambda x: x['improvement'], reverse=True)
@@ -678,7 +676,7 @@ def run_30day_comparison(symbol='SPY', risk_per_trade=500):
                 print(f"  Improvement: ${comp['improvement']:+,.0f}")
 
         print(f"\n{'='*70}")
-        print(f"TOP REGRESSIONS (ATR buffer hurt)")
+        print("TOP REGRESSIONS (ATR buffer hurt)")
         print(f"{'='*70}")
 
         for comp in sorted_comp[-5:]:
@@ -701,10 +699,10 @@ if __name__ == "__main__":
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'SPY'
 
     print(f"\n{'='*70}")
-    print(f"ATR BUFFER vs FIXED BUFFER COMPARISON")
+    print("ATR BUFFER vs FIXED BUFFER COMPARISON")
     print(f"{'='*70}")
-    print(f"Fixed Buffer: $0.02 (constant)")
-    print(f"ATR Buffer: ATR(14) × 0.5 (adaptive)")
+    print("Fixed Buffer: $0.02 (constant)")
+    print("ATR Buffer: ATR(14) × 0.5 (adaptive)")
     print(f"{'='*70}")
 
     results = run_30day_comparison(symbol, risk_per_trade=500)

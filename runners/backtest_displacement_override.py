@@ -9,7 +9,7 @@ sys.path.insert(0, '.')
 
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs
-from datetime import datetime, timedelta, time as dt_time
+from datetime import time as dt_time
 from runners.run_v10_dual_entry import calculate_ema, calculate_adx
 
 
@@ -32,9 +32,6 @@ def run_session_with_override(
     If high_displacement_override is set (e.g., 3.0), Creation entries with
     displacement >= 3x avg body will skip the ADX check.
     """
-    from runners.run_v10_dual_entry import (
-        is_swing_high, is_swing_low, detect_bos
-    )
 
     # Build mappings
     session_to_all_idx = {}
@@ -131,7 +128,7 @@ def run_session_with_override(
     # === RETRACEMENT ENTRIES (unchanged - always require ADX) ===
     rth_start = dt_time(9, 30)
     overnight_fvgs = [f for f in all_fvgs if all_bars[f.created_bar_index].timestamp.time() < rth_start]
-    session_fvgs = [f for f in all_fvgs if all_bars[f.created_bar_index].timestamp.time() >= rth_start]
+    [f for f in all_fvgs if all_bars[f.created_bar_index].timestamp.time() >= rth_start]
 
     for i, bar in enumerate(session_bars):
         if i < 1:

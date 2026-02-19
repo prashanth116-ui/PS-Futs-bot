@@ -55,7 +55,7 @@ def main():
         bars = fetch_futures_bars("ES", interval="1m", n_bars=1, timeout=15)
         if bars:
             latest = bars[-1]
-            print(f"  Connection: OK (Pro account verified)")
+            print("  Connection: OK (Pro account verified)")
             print(f"  Latest ES: {latest.timestamp.strftime('%Y-%m-%d %H:%M')} @ {latest.close:.2f}")
         else:
             print("  Connection: FAILED - No data returned")

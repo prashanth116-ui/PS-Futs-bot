@@ -15,7 +15,6 @@ import sys
 import time
 from datetime import datetime, time as dtime
 from pathlib import Path
-import os
 
 # Configuration
 MAX_RESTARTS_PER_DAY = 5

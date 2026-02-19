@@ -93,7 +93,7 @@ def plot_4min(symbol):
         print(f"  Entry: {r['entry_price']:.2f} @ {r['entry_time'].strftime('%H:%M')}")
         print(f"  FVG: {r['fvg_low']:.2f} - {r['fvg_high']:.2f}")
         print(f"  Stop: {r['stop_price']:.2f}, Risk: {r['risk']:.2f} pts")
-        print(f"  Exits: ", end='')
+        print("  Exits: ", end='')
         for e in r['exits']:
             dollars = (e['pnl'] / tick_size) * tick_value
             print(f"{e['type']}@{e['price']:.2f}=${dollars:+,.0f} ", end='')

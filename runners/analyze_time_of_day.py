@@ -7,7 +7,7 @@ optimal trading windows and underperforming hours.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
@@ -201,12 +201,12 @@ def analyze_time_of_day(symbol='ES', days=15, contracts=3, t1_r=3, trail_r=6):
         print(f'Best hour:  {best["label"]} — {best["trades"]} trades, {best["win_rate"]:.1f}% WR, ${best["total_pnl"]:+,.0f}')
 
     if unprofitable_hours:
-        print(f'\nUnprofitable hours:')
+        print('\nUnprofitable hours:')
         for h in sorted(unprofitable_hours, key=lambda x: x['total_pnl']):
             print(f'  {h["label"]} — {h["trades"]} trades, {h["win_rate"]:.1f}% WR, ${h["total_pnl"]:+,.0f}')
 
     if low_wr_hours:
-        print(f'\nLow win rate hours (<60%):')
+        print('\nLow win rate hours (<60%):')
         for h in sorted(low_wr_hours, key=lambda x: x['win_rate']):
             print(f'  {h["label"]} — {h["trades"]} trades, {h["win_rate"]:.1f}% WR, ${h["total_pnl"]:+,.0f}')
 
@@ -217,7 +217,7 @@ def analyze_time_of_day(symbol='ES', days=15, contracts=3, t1_r=3, trail_r=6):
         filtered_pnl = sum(t['pnl'] for t in filtered_trades)
         filtered_wins = sum(1 for t in filtered_trades if t['is_win'])
         filtered_wr = filtered_wins / len(filtered_trades) * 100 if filtered_trades else 0
-        removed_pnl = sum(h['total_pnl'] for h in unprofitable_hours)
+        sum(h['total_pnl'] for h in unprofitable_hours)
 
         print(f'\nWhat-if: Remove unprofitable hours ({", ".join(h["label"] for h in unprofitable_hours)}):')
         print(f'  Current:  {len(all_trades)} trades, {total_wins/len(all_trades)*100:.1f}% WR, ${total_pnl:+,.0f}')

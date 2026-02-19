@@ -4,9 +4,9 @@ Debug why V6-Aggressive didn't take trades in a specific window.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 def calculate_ema(bars, period):
@@ -120,7 +120,7 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
     avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
     disp_threshold_value = avg_body_size * displacement_threshold
 
-    print(f'\nV6-Aggressive Settings:')
+    print('\nV6-Aggressive Settings:')
     print(f'  Displacement threshold: {displacement_threshold}x')
     print(f'  Avg body size: {avg_body_size:.2f}')
     print(f'  Min displacement needed: {disp_threshold_value:.2f}')
@@ -171,14 +171,14 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
                 ema_slow = calculate_ema(bars_to_entry, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
-                print(f'\n  FILTER CHECK (V6-Aggressive enters at creation):')
+                print('\n  FILTER CHECK (V6-Aggressive enters at creation):')
 
                 ema_ok = True
                 if ema_fast and ema_slow:
                     ema_ok = ema_fast > ema_slow  # For LONG
                     print(f'    EMA 20/50: {ema_fast:.2f} / {ema_slow:.2f} -> {"PASS" if ema_ok else "FAIL (need EMA20 > EMA50)"}')
                 else:
-                    print(f'    EMA: Not enough data (PASS)')
+                    print('    EMA: Not enough data (PASS)')
 
                 adx_ok = True
                 di_ok = True
@@ -188,10 +188,10 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
                     print(f'    ADX: {adx:.1f} -> {"PASS" if adx_ok else "FAIL (need >= 17)"}')
                     print(f'    DI: +{plus_di:.1f} / -{minus_di:.1f} -> {"PASS" if di_ok else "FAIL (need +DI > -DI)"}')
                 else:
-                    print(f'    ADX/DI: Not enough data (PASS)')
+                    print('    ADX/DI: Not enough data (PASS)')
 
                 if ema_ok and adx_ok and di_ok:
-                    print(f'\n  >>> V6-AGGRESSIVE WOULD ENTER HERE!')
+                    print('\n  >>> V6-AGGRESSIVE WOULD ENTER HERE!')
                 else:
                     failed = []
                     if not ema_ok: failed.append("EMA")
@@ -199,7 +199,7 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
                     if not di_ok: failed.append("DI")
                     print(f'\n  >>> FILTERED OUT by: {", ".join(failed)}')
             else:
-                print(f'  >>> SKIPPED (displacement too small)')
+                print('  >>> SKIPPED (displacement too small)')
 
     # Also check why V6-Aggressive might have already traded
     print()
@@ -238,8 +238,8 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
 
         if entry_time.time() < window_start:
             print(f'\n>>> V6-Aggressive entered BEFORE the {start_time}-{end_time} window!')
-            print(f'>>> Strategy only takes 1 trade per direction (no re-entry unless stopped)')
-            print(f'>>> This is why no new entry was taken in the window.')
+            print('>>> Strategy only takes 1 trade per direction (no re-entry unless stopped)')
+            print('>>> This is why no new entry was taken in the window.')
     else:
         print('\nNo valid V6-Aggressive LONG entry found')
 

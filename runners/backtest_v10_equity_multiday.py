@@ -10,9 +10,9 @@ V10.4 includes:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
+from runners.run_v10_equity import run_session_v10_equity
 
 
 def run_multiday_backtest(symbol='SPY', days=30, risk_per_trade=500):

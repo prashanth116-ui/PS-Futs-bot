@@ -6,7 +6,7 @@ Tests the hypothesis: ADX >= 22 for overnight retrace entries improves results
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, calculate_adx
 
@@ -103,13 +103,13 @@ def run_backtest(symbol='ES', days=30, adx_threshold=None):
     losses = [t for t in all_retrace_trades if t['pnl'] <= 0]
     total_pnl = sum(t['pnl'] for t in all_retrace_trades)
 
-    print(f"\nCURRENT (No ADX Filter):")
+    print("\nCURRENT (No ADX Filter):")
     print(f"  Trades: {total_trades} ({len(wins)} wins, {len(losses)} losses)")
     print(f"  Win Rate: {len(wins)/total_trades*100:.1f}%")
     print(f"  Total P/L: ${total_pnl:+,.2f}")
 
     # With ADX filter
-    print(f"\nWITH ADX >= 22 FILTER:")
+    print("\nWITH ADX >= 22 FILTER:")
     filtered_trades = [t for t in all_retrace_trades if t['adx'] >= 22]
     skipped_trades = [t for t in all_retrace_trades if t['adx'] < 22]
 
@@ -123,8 +123,8 @@ def run_backtest(symbol='ES', days=30, adx_threshold=None):
         print(f"  Total P/L: ${filtered_pnl:+,.2f}")
     else:
         filtered_pnl = 0
-        print(f"  Trades: 0")
-        print(f"  Total P/L: $0.00")
+        print("  Trades: 0")
+        print("  Total P/L: $0.00")
 
     # Skipped trades analysis
     if skipped_trades:
@@ -132,19 +132,19 @@ def run_backtest(symbol='ES', days=30, adx_threshold=None):
         skipped_losses = [t for t in skipped_trades if t['pnl'] <= 0]
         skipped_pnl = sum(t['pnl'] for t in skipped_trades)
 
-        print(f"\nSKIPPED TRADES (ADX < 22):")
+        print("\nSKIPPED TRADES (ADX < 22):")
         print(f"  Trades: {len(skipped_trades)} ({len(skipped_wins)} wins, {len(skipped_losses)} losses)")
         print(f"  Total P/L: ${skipped_pnl:+,.2f}")
 
         if skipped_pnl > 0:
-            print(f"  WARNING: Skipped trades were NET PROFITABLE")
+            print("  WARNING: Skipped trades were NET PROFITABLE")
         else:
-            print(f"  GOOD: Skipped trades were NET LOSING")
+            print("  GOOD: Skipped trades were NET LOSING")
 
     # Summary comparison
     improvement = filtered_pnl - total_pnl
     print(f"\n{'='*80}")
-    print(f"SUMMARY")
+    print("SUMMARY")
     print(f"{'='*80}")
     print(f"  Current P/L:     ${total_pnl:+,.2f}")
     print(f"  With ADX Filter: ${filtered_pnl:+,.2f}")
@@ -152,19 +152,19 @@ def run_backtest(symbol='ES', days=30, adx_threshold=None):
 
     # Detailed trade list
     print(f"\n{'='*80}")
-    print(f"DETAILED OVERNIGHT RETRACE TRADES")
+    print("DETAILED OVERNIGHT RETRACE TRADES")
     print(f"{'='*80}")
     print(f"{'Date':<12} {'Time':<6} {'Dir':<6} {'ADX':>6} {'Risk':>6} {'P/L':>12} {'Filter':<10}")
     print("-" * 70)
 
     for t in sorted(all_retrace_trades, key=lambda x: (x['date'], x['time'])):
         filter_status = "TAKE" if t['adx'] >= 22 else "SKIP"
-        result = "WIN" if t['pnl'] > 0 else "LOSS"
+        "WIN" if t['pnl'] > 0 else "LOSS"
         print(f"{t['date']} {t['time']:<6} {t['direction']:<6} {t['adx']:>6.1f} {t['risk']:>6.2f} ${t['pnl']:>10,.2f} {filter_status:<10}")
 
     # Test different thresholds
     print(f"\n{'='*80}")
-    print(f"ADX THRESHOLD COMPARISON")
+    print("ADX THRESHOLD COMPARISON")
     print(f"{'='*80}")
     print(f"{'Threshold':>10} | {'Trades':>7} | {'Wins':>5} | {'Losses':>6} | {'Win%':>6} | {'P/L':>12}")
     print("-" * 65)
@@ -184,7 +184,7 @@ def run_backtest(symbol='ES', days=30, adx_threshold=None):
     if all_other_trades:
         other_pnl = sum(t['pnl'] for t in all_other_trades)
         print(f"\n{'='*80}")
-        print(f"OTHER ENTRY TYPES (Creation, Intraday, BOS)")
+        print("OTHER ENTRY TYPES (Creation, Intraday, BOS)")
         print(f"{'='*80}")
         print(f"  Trades: {len(all_other_trades)}")
         print(f"  Total P/L: ${other_pnl:+,.2f}")

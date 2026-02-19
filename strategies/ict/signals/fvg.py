@@ -68,7 +68,7 @@ from typing import TYPE_CHECKING, Literal
 from core.types import Bar
 
 if TYPE_CHECKING:
-    from strategies.ict.signals.displacement import DisplacementEvent
+    pass
 
 
 # =============================================================================

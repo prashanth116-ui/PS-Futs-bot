@@ -6,7 +6,6 @@ Liquidity pools are areas where stop losses cluster (above swing highs, below sw
 """
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass

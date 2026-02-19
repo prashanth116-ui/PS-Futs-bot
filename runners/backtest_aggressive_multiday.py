@@ -7,7 +7,7 @@ Multi-day backtest comparing aggressive strategies:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
@@ -644,7 +644,7 @@ def backtest_multiday(symbol='ES', days=18, contracts=3):
 
         # Winning days
         winning_days = sum(1 for pnl in daily_pnl if pnl > 0)
-        losing_days = sum(1 for pnl in daily_pnl if pnl < 0)
+        sum(1 for pnl in daily_pnl if pnl < 0)
 
         print(f'{strat_name:<20} Max Day Loss: ${max_day_loss:>+10,.2f} | Consec Losses: {max_consec_loss} | Win Days: {winning_days}/{len(dates)}')
 

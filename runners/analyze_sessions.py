@@ -11,7 +11,7 @@ Sessions:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
 
@@ -194,7 +194,7 @@ def analyze_sessions(symbol='ES', days=30):
     if overnight_data:
         best = max(overnight_data, key=lambda x: x['win_rate'])
         worst = min(overnight_data, key=lambda x: x['win_rate'])
-        print(f"\nOvernight Retrace Performance:")
+        print("\nOvernight Retrace Performance:")
         print(f"  Best session: {best['session']} ({best['win_rate']:.1f}% WR, ${best['pnl']:,.0f} P/L)")
         print(f"  Worst session: {worst['session']} ({worst['win_rate']:.1f}% WR, ${worst['pnl']:,.0f} P/L)")
 

@@ -4,9 +4,9 @@ Debug V6-Aggressive full day - why no second entry after first trade closed?
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 def calculate_ema(bars, period):
@@ -113,7 +113,7 @@ def debug_v6_fullday(symbol='ES'):
     avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
     disp_threshold_value = avg_body_size * displacement_threshold
 
-    print(f'\nV6-Aggressive Settings:')
+    print('\nV6-Aggressive Settings:')
     print(f'  Displacement: {displacement_threshold}x = {disp_threshold_value:.2f}')
     print()
 
@@ -184,7 +184,7 @@ def debug_v6_fullday(symbol='ES'):
     print('=' * 100)
     print('ANALYSIS:')
     print('=' * 100)
-    print(f'''
+    print('''
 The test_aggressive.py script shows V6-Aggressive took 2 trades today:
   1. LONG @ 04:21 (6915.12) -> WIN +$1,062.50
   2. LONG [RE-ENTRY] @ 09:33 (6950.12) -> WIN +$7,381.25
@@ -204,7 +204,7 @@ Let me check if the 04:21 trade was stopped (allowing re-entry) or not...
         entry_price = first['midpoint']
         stop_price = first['fvg'].low - (2 * tick_size)
 
-        print(f'First trade:')
+        print('First trade:')
         print(f'  Entry: {entry_price:.2f} @ {first["time"].strftime("%H:%M")}')
         print(f'  Stop: {stop_price:.2f}')
 
@@ -218,9 +218,9 @@ Let me check if the 04:21 trade was stopped (allowing re-entry) or not...
                 break
 
         if not was_stopped:
-            print(f'  NOT STOPPED - trade was a winner')
+            print('  NOT STOPPED - trade was a winner')
 
-        print(f'''
+        print('''
 CONCLUSION:
 The backtest (test_aggressive.py) uses "fvg_num" parameter:
   - fvg_num=1: First valid FVG

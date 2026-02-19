@@ -10,7 +10,7 @@ V9 Features:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_today import run_session_with_position_limit
 
@@ -40,9 +40,9 @@ def backtest_multiday(symbol='ES', days=30, contracts=3, interval='3m'):
     # Group by date
     dates = sorted(set(b.timestamp.date() for b in all_bars))
 
-    print(f"=" * 80)
+    print("=" * 80)
     print(f"{symbol} MULTI-DAY BACKTEST (V9) - {len(dates)} Days - {contracts} Contracts")
-    print(f"=" * 80)
+    print("=" * 80)
     print(f"  Min Risk: {min_risk_pts} pts | Tiered Trail | Independent Entries")
     print()
 

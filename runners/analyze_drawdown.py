@@ -4,7 +4,7 @@ Drawdown Analysis - Identify sources of losses for strategy refinement
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_equity import run_session_v10_equity

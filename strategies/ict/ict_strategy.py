@@ -59,29 +59,6 @@ from strategies.ict.signals.sweep import (
 from strategies.ict.signals.cisd import (
     CISDEvent,
     detect_cisd,
-    detect_cisd_on_bar,
-)
-from strategies.ict.signals.displacement import (
-    DisplacementEvent,
-    detect_displacement,
-    detect_displacement_with_fvg,
-    get_expected_displacement_direction,
-)
-from strategies.ict.signals.liquidity import (
-    LiquidityZone,
-    define_liquidity_zones,
-    check_liquidity_sweep,
-    get_nearest_liquidity,
-)
-from strategies.ict.signals.mss import (
-    MSSEvent,
-    detect_mss,
-    detect_mss_after_sweep,
-)
-from strategies.ict.state_machine import (
-    ICTStateMachine,
-    SetupContext,
-    SignalState,
 )
 
 if TYPE_CHECKING:
@@ -804,7 +781,7 @@ class ICTStrategy(Strategy):
 
         from datetime import time as dt_time
         premarket_start = dt_time(4, 0)
-        rth_start = dt_time(9, 30)
+        dt_time(9, 30)
         bar_time = bar.timestamp.time()
 
         if self._use_proactive_levels and not self._key_levels_calculated:
@@ -849,7 +826,6 @@ class ICTStrategy(Strategy):
         # -----------------------------------------------------------------
 
         rth_end = dt_time(16, 0)
-        is_rth = rth_start <= bar_time <= rth_end
         is_session = premarket_start <= bar_time <= rth_end
 
         # Reset trade counter at session start (first premarket bar of the day)

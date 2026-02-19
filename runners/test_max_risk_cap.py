@@ -54,7 +54,7 @@ def main():
             print(f"  Capped P/L:  ${t['current_pnl']:+,.2f}")
         else:
             skipped_trades.append(t)
-            print(f"  Capped P/L:  $0.00 (trade skipped)")
+            print("  Capped P/L:  $0.00 (trade skipped)")
 
     print(f"\n{'=' * 70}")
     print(f"SUMMARY: MAX RISK CAP {MAX_RISK} pts")

@@ -4,7 +4,7 @@ Debug 9:30 Entry - Why didn't the strategy enter at 9:30?
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs
 from runners.run_v10_dual_entry import calculate_ema, calculate_adx, detect_bos, is_rejection_candle
@@ -14,7 +14,6 @@ def debug_930(symbol='ES'):
     """Debug why no entry was taken at 9:30."""
 
     tick_size = 0.25
-    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0
 
     print(f'Fetching {symbol} 3m data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1000)

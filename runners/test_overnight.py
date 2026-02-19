@@ -80,7 +80,6 @@ def main():
     print('Fetching data...')
     htf_bars = fetch_futures_bars(symbol=symbol, interval='5m', n_bars=1000)
     mtf_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=1500)
-    ltf_bars = mtf_bars
 
     target_date = date(2026, 2, 12)
 

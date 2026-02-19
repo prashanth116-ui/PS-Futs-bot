@@ -36,11 +36,9 @@ from runners.run_v10_dual_entry import (
     calculate_adx,
     is_swing_high,
     is_swing_low,
-    find_recent_swing_high,
-    find_recent_swing_low,
     get_est_hour,  # V10.7: EST timezone for time filters
 )
-from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 # Equity instrument configurations
@@ -156,7 +154,7 @@ def run_session_v10_equity(
 
     # Session time boundaries
     rth_start = dt_time(9, 30)
-    rth_end = dt_time(16, 0)
+    dt_time(16, 0)
     morning_end = dt_time(12, 0)
 
     # Detect all FVGs from all bars (similar to V10 futures)
@@ -650,7 +648,6 @@ def run_session_v10_equity(
     # For equities, we use position ratios: 33% T1, 33% T2, 33% Runner
     t1_ratio = 0.33
     t2_ratio = 0.33
-    runner_ratio = 0.34
 
     for i, bar in enumerate(session_bars):
         trades_to_remove = []
@@ -957,7 +954,7 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, 
     config = EQUITY_CONFIG.get(symbol.upper(), EQUITY_CONFIG['SPY'])
     print(f"Min FVG: ${config['min_fvg_points']:.2f}")
     print(f"Min Risk: ${config['min_risk_points']:.2f}")
-    print(f"Stop Buffer: ATR x 0.5 (V10.4)")
+    print("Stop Buffer: ATR x 0.5 (V10.4)")
     print(f"T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R")
 
     results = run_session_v10_equity(

@@ -4,8 +4,7 @@ Backtest ICT Strategy for a specific trading session.
 Uses TradingView data via tvDatafeed.
 """
 from __future__ import annotations
-from datetime import datetime, date
-from runners.tradingview_loader import fetch_rth_bars
+from datetime import date
 from strategies.factory import build_ict_from_yaml
 
 
@@ -37,7 +36,7 @@ def run_backtest(symbols: list[str], session_date: date, interval: str = "3m"):
         # Filter to target date for extended session (premarket 4:00 AM + RTH 9:30-16:00)
         from datetime import time as dt_time
         premarket_start = dt_time(4, 0)
-        rth_start = dt_time(9, 30)
+        dt_time(9, 30)
         rth_end = dt_time(16, 0)
 
         session_bars = [
@@ -76,7 +75,7 @@ def run_backtest(symbols: list[str], session_date: date, interval: str = "3m"):
         # Run strategy on ALL historical bars (needed for key level calculation)
         # but only record signals from the target RTH session
         print(f"\n  Processing {len(historical_bars)} bars through ICT strategy...")
-        print(f"  (Recording signals only from RTH session)")
+        print("  (Recording signals only from RTH session)")
         signals = []
 
         for bar in historical_bars:

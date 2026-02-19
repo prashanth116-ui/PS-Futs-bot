@@ -14,7 +14,7 @@ sys.path.insert(0, '.')
 import pickle
 from pathlib import Path
 import matplotlib.pyplot as plt
-from datetime import date, time as dt_time
+from datetime import date
 from matplotlib.lines import Line2D
 
 CACHE_DIR = Path('.cache')
@@ -24,13 +24,12 @@ def plot_ict_sweep(symbol='ES', year=None, month=None, day=None, contracts=3, zo
     """Plot ICT Sweep strategy for a specific date using cached runner results."""
 
     # Instrument config
-    tick_size = 0.25
     if symbol in ['ES', 'MES']:
-        tick_value = 12.50 if symbol == 'ES' else 1.25
+        pass
     elif symbol in ['NQ', 'MNQ']:
-        tick_value = 5.00 if symbol == 'NQ' else 0.50
+        pass
     else:
-        tick_value = 12.50
+        pass
 
     # Determine target date
     if year and month and day:

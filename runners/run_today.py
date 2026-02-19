@@ -20,7 +20,7 @@ Exit Strategy (Tiered Structure Trail):
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
@@ -683,7 +683,7 @@ def run_multi_trade(
     t1_stop = t1['stop']
     t1_original_stop = t1_stop
     t1_risk = abs(t1_entry - t1_stop)
-    t1_target_2r = t1_entry + (reentry_r_threshold * t1_risk) if is_long else t1_entry - (reentry_r_threshold * t1_risk)
+    t1_entry + (reentry_r_threshold * t1_risk) if is_long else t1_entry - (reentry_r_threshold * t1_risk)
     t1_target_4r = t1_entry + (target1_r * t1_risk) if is_long else t1_entry - (target1_r * t1_risk)
     t1_target_8r = t1_entry + (target2_r * t1_risk) if is_long else t1_entry - (target2_r * t1_risk)
     t1_plus_4r = t1_target_4r
@@ -1204,12 +1204,12 @@ def run_session_with_position_limit(
 
             # Determine current stop based on trade state
             if not trade['touched_4r']:
-                current_stop = trade['stop_price']
+                trade['stop_price']
             elif not trade['touched_8r']:
-                current_stop = trade['t1_trail_stop']
+                trade['t1_trail_stop']
             else:
                 # After 8R, use the tightest applicable stop
-                current_stop = trade['t1_trail_stop'] if not trade['t1_exited'] else trade['t2_trail_stop']
+                trade['t1_trail_stop'] if not trade['t1_exited'] else trade['t2_trail_stop']
 
             # Check original stop (before 4R touched)
             if not trade['touched_4r'] and remaining > 0:
@@ -1482,7 +1482,7 @@ def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, us
     for result in all_results:
         result['date'] = today
 
-    loss_count = sum(1 for r in all_results if r['total_dollars'] < 0)
+    sum(1 for r in all_results if r['total_dollars'] < 0)
 
     total_pnl = 0
     for r in all_results:
@@ -1504,7 +1504,7 @@ def run_today(symbol='ES', contracts=3, max_open_trades=2, min_risk_pts=None, us
         print(f"  Stop: {stop_info}")
         print(f"  Risk: {r['risk']:.2f} pts")
         print(f"  Targets: 4R={r['target_4r']:.2f}, 8R={r['target_8r']:.2f}")
-        print(f"  Exits:")
+        print("  Exits:")
         for e in r['exits']:
             dollars = (e['pnl'] / tick_size) * tick_value
             print(f"    {e['type']}: {e['cts']} ct @ {e['price']:.2f} = ${dollars:+,.2f}")

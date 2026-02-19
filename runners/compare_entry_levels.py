@@ -4,7 +4,7 @@ Compare entry strategies: Midpoint-only vs Partial Fill (Edge + Midpoint).
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
@@ -294,8 +294,6 @@ def run_comparison():
     """Run comparison between midpoint-only and partial fill entry strategies."""
 
     contracts = 3
-    target1_r = 4
-    target2_r = 8
     tick_size = 0.25
     tick_value = 12.50
 

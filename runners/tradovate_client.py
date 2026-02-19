@@ -8,11 +8,10 @@ API Documentation: https://api.tradovate.com/
 """
 import os
 import json
-import time
 import requests
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from enum import Enum
 

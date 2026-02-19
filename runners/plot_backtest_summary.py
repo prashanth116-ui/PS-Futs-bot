@@ -94,9 +94,9 @@ def plot_backtest_summary():
     pnl_2nd = [t['pnl'] for t in results_2nd_fvg['trades']]
     pnl_1st = [t['pnl'] for t in results_1st_fvg['trades']]
 
-    bars1 = ax2.bar([i - width/2 for i in x], pnl_2nd, width, label='2nd FVG',
+    ax2.bar([i - width/2 for i in x], pnl_2nd, width, label='2nd FVG',
                     color=['green' if p > 0 else 'red' if p < 0 else 'gray' for p in pnl_2nd])
-    bars2 = ax2.bar([i + width/2 for i in x], pnl_1st, width, label='1st FVG',
+    ax2.bar([i + width/2 for i in x], pnl_1st, width, label='1st FVG',
                     color=['lime' if p > 0 else 'salmon' if p < 0 else 'lightgray' for p in pnl_1st])
 
     ax2.axhline(y=0, color='black', linewidth=1)

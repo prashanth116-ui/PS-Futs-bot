@@ -4,7 +4,7 @@ Debug what happened at 9:00 AM specifically.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
@@ -120,7 +120,7 @@ def debug_9am(symbol='ES'):
         return
 
     bar_9am = session_bars[bar_9am_idx]
-    print(f'\n09:00 AM Bar:')
+    print('\n09:00 AM Bar:')
     print(f'  Open: {bar_9am.open:.2f}')
     print(f'  High: {bar_9am.high:.2f}')
     print(f'  Low: {bar_9am.low:.2f}')
@@ -143,7 +143,7 @@ def debug_9am(symbol='ES'):
     all_fvgs = detect_fvgs(session_bars, fvg_config)
 
     print(f'\n{"="*80}')
-    print(f'ALL BULLISH FVGs THAT EXISTED BEFORE 09:00:')
+    print('ALL BULLISH FVGs THAT EXISTED BEFORE 09:00:')
     print(f'{"="*80}')
 
     # Find all bullish FVGs created before 9am
@@ -187,20 +187,20 @@ def debug_9am(symbol='ES'):
 
         if touched_at_9am and not mitigated_before:
             if is_disp:
-                print(f'  --> POTENTIAL ENTRY!')
+                print('  --> POTENTIAL ENTRY!')
                 # Check filters
                 bars_to_9am = session_bars[:bar_9am_idx+1]
                 ema_fast = calculate_ema(bars_to_9am, 20)
                 ema_slow = calculate_ema(bars_to_9am, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_9am, 14)
 
-                print(f'\n  FILTER CHECK AT 09:00:')
+                print('\n  FILTER CHECK AT 09:00:')
                 if ema_fast and ema_slow:
                     ema_ok = ema_fast > ema_slow
                     print(f'    EMA 20/50: {ema_fast:.2f} / {ema_slow:.2f} -> {"PASS" if ema_ok else "FAIL"}')
                 else:
                     ema_ok = True
-                    print(f'    EMA: Not enough data (PASS)')
+                    print('    EMA: Not enough data (PASS)')
 
                 if adx:
                     adx_ok = adx >= 17
@@ -210,11 +210,11 @@ def debug_9am(symbol='ES'):
                 else:
                     adx_ok = True
                     di_ok = True
-                    print(f'    ADX/DI: Not enough data (PASS)')
+                    print('    ADX/DI: Not enough data (PASS)')
 
                 all_pass = ema_ok and adx_ok and di_ok
                 if all_pass:
-                    print(f'  >>> ALL FILTERS PASS - ENTRY SHOULD HAPPEN!')
+                    print('  >>> ALL FILTERS PASS - ENTRY SHOULD HAPPEN!')
                 else:
                     failed = []
                     if not ema_ok: failed.append("EMA")
@@ -222,15 +222,15 @@ def debug_9am(symbol='ES'):
                     if not di_ok: failed.append("DI")
                     print(f'  >>> FILTERED OUT by: {", ".join(failed)}')
             else:
-                print(f'  --> No entry (failed displacement)')
+                print('  --> No entry (failed displacement)')
         elif mitigated_before:
-            print(f'  --> No entry (FVG already mitigated)')
+            print('  --> No entry (FVG already mitigated)')
         else:
-            print(f'  --> No entry (not touched)')
+            print('  --> No entry (not touched)')
 
     # Also show bars around 9am for context
     print(f'\n{"="*80}')
-    print(f'BARS AROUND 09:00:')
+    print('BARS AROUND 09:00:')
     print(f'{"="*80}')
     print(f'{"Time":<8} {"Open":<10} {"High":<10} {"Low":<10} {"Close":<10}')
     print('-' * 50)

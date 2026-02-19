@@ -5,7 +5,6 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-import numpy as np
 from datetime import date
 
 def plot_es_nq_comparison():

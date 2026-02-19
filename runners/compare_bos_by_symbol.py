@@ -195,11 +195,11 @@ def main():
     print(f"Best combination:      ${best['pnl']:,.0f}")
     print(f"Improvement:           ${best['pnl'] - baseline['pnl']:+,.0f}")
 
-    print(f"\nOptimal BOS settings:")
+    print("\nOptimal BOS settings:")
     for symbol, setting in best['config'].items():
         print(f"  {symbol}: BOS {setting}")
 
-    print(f"\nStats:")
+    print("\nStats:")
     print(f"  Trades:   {best['trades']} (vs {baseline['trades']} baseline)")
     print(f"  Win Rate: {best['win_rate']:.1f}% (vs {baseline['win_rate']:.1f}% baseline)")
     print(f"  Max DD:   ${best['max_dd']:,.0f} (vs ${baseline['max_dd']:,.0f} baseline)")

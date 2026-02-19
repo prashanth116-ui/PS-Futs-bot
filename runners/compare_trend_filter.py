@@ -180,7 +180,7 @@ def main():
         if in_filtered:
             print(f"  {trade.timestamp.strftime('%H:%M')} {trade.direction} @ {trade.entry_price:.2f}")
             print(f"    Result: {t['result']['result']} -> ${t['result']['pnl']:+,.0f}")
-            print(f"    ^ FILTERED: Counter-trend (EMA20 < EMA50 = bearish, trade was BULLISH)")
+            print("    ^ FILTERED: Counter-trend (EMA20 < EMA50 = bearish, trade was BULLISH)")
 
 
 if __name__ == '__main__':

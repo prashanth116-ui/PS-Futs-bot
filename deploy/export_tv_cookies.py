@@ -5,7 +5,6 @@ Run this on your local PC after logging into TradingView.
 Then copy the output file to your server.
 """
 import json
-import sys
 from pathlib import Path
 
 def export_cookies():

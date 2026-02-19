@@ -76,7 +76,7 @@ def model_es_3ct_5k():
     avg_loss = sum(losses) / len(losses)
     max_loss = max(losses)
 
-    print(f'   Actual losses from backtest (3 contracts):')
+    print('   Actual losses from backtest (3 contracts):')
     print(f'   - Average loss: ${avg_loss:.2f}')
     print(f'   - Largest loss: ${max_loss:.2f}')
     print()
@@ -190,9 +190,9 @@ def model_es_3ct_5k():
 
     print()
     print('   Over 13 trades (like backtest), probability of hitting:')
-    print(f'   - 3+ loss streak: ~35% (likely to happen)')
-    print(f'   - 4+ loss streak: ~15% (possible)')
-    print(f'   - 5+ loss streak: ~6% (unlikely but real)')
+    print('   - 3+ loss streak: ~35% (likely to happen)')
+    print('   - 4+ loss streak: ~15% (possible)')
+    print('   - 5+ loss streak: ~6% (unlikely but real)')
 
     print()
     print('='*70)

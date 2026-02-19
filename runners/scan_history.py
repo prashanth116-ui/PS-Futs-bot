@@ -9,11 +9,11 @@ import sys
 sys.path.insert(0, '.')
 
 import argparse
-from datetime import date, timedelta, time as dt_time
+from datetime import timedelta, time as dt_time
 from collections import defaultdict
 
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup, SetupState
+from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup
 from strategies.ict_sweep.filters.displacement import calculate_avg_body
 from runners.scan_ict_sweep import SYMBOL_CONFIGS, EQUITY_SYMBOLS
 
@@ -47,7 +47,7 @@ def make_config(symbol):
 
 def scan_symbol(symbol, htf_tf, n_bars_htf=500):
     """Scan one symbol on one HTF timeframe, return all setups and entries."""
-    cfg = SYMBOL_CONFIGS[symbol]
+    SYMBOL_CONFIGS[symbol]
     is_equity = symbol in EQUITY_SYMBOLS
     session_start = dt_time(9, 30) if is_equity else dt_time(8, 0)
     session_end = dt_time(16, 0)

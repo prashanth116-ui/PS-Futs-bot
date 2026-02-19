@@ -161,7 +161,7 @@ class AutoTrader:
         # Check if we already signaled this setup (avoid duplicate entries)
         signal_key = f"{symbol}_{direction}_{signal['fvg'].created_bar_index}"
         if signal_key in self.active_signals:
-            print(f"[SKIP] Already signaled this setup")
+            print("[SKIP] Already signaled this setup")
             return False
 
         print(f"\n{'='*60}")
@@ -198,7 +198,7 @@ class AutoTrader:
             }
             self.active_signals[signal_key] = signal
             self.daily_trades += 1
-            print(f"[SUCCESS] Order sent")
+            print("[SUCCESS] Order sent")
             return True
         else:
             print(f"[FAILED] Order failed: {result.get('error')}")
@@ -210,7 +210,6 @@ class AutoTrader:
             return None
 
         position = self.positions[symbol]
-        tick_size = 0.25 if symbol in ['ES', 'NQ'] else 0.01
 
         # Fetch current price
         all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=10)

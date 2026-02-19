@@ -4,7 +4,7 @@ Compare ICT-specific runner exit strategies.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, datetime, timedelta
+from datetime import time as dt_time, timedelta
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations

@@ -8,7 +8,7 @@ then reverses.
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-from strategies.ict_sweep.signals.liquidity import SwingPoint, find_swing_highs, find_swing_lows
+from strategies.ict_sweep.signals.liquidity import find_swing_highs, find_swing_lows
 
 
 @dataclass

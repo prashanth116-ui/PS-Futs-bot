@@ -10,7 +10,7 @@ Trailing:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
 
@@ -186,7 +186,6 @@ def run_trade_trailing(session_bars, direction, fvg_num, tick_size=0.25, tick_va
     cts_edge = 1
     cts_midpoint = contracts - cts_edge
 
-    fvg_stop_level = entry_fvg.low if is_long else entry_fvg.high
 
     edge_entry_bar_idx = None
     midpoint_entry_bar_idx = None

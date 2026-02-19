@@ -9,11 +9,11 @@ import asyncio
 import websockets
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, Callable, Any
+from typing import Optional, Callable
 from collections import defaultdict
 
 from core.types import Bar
-from broker.tradovate.api_client import TradovateClient, TradovateConfig
+from broker.tradovate.api_client import TradovateClient
 
 
 @dataclass

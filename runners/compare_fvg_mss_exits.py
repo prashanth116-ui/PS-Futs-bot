@@ -5,7 +5,7 @@ Uses 5-minute bars to get ~27 days of data.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, datetime, timedelta
+from datetime import time as dt_time
 from collections import defaultdict
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
@@ -135,7 +135,6 @@ def run_trade_with_strategy(session_bars, direction, fvg_num, runner_strategy='e
             last_swing_high = price
 
     # Track runner exit details
-    runner_exit_bar = None
     runner_exit_type = None
 
     for i in range(entry_bar_idx + 1, len(session_bars)):
@@ -220,7 +219,6 @@ def run_trade_with_strategy(session_bars, direction, fvg_num, runner_strategy='e
             if runner_exit and exit_price:
                 pnl = (exit_price - entry_price) * remaining if is_long else (entry_price - exit_price) * remaining
                 exits.append({'type': exit_type, 'pnl': pnl, 'price': exit_price, 'time': bar.timestamp, 'cts': remaining})
-                runner_exit_bar = i
                 runner_exit_type = exit_type
                 remaining = 0
 

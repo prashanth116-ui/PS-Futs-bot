@@ -13,14 +13,12 @@ Before running:
     3. Set TRADOVATE_ENV to "demo" for paper trading
 """
 from __future__ import annotations
-import sys
 import signal
 import asyncio
-from datetime import datetime
 from typing import Optional
 
 from core.types import Bar, Signal
-from broker.tradovate.api_client import TradovateClient, load_config_from_env
+from broker.tradovate.api_client import TradovateClient
 from broker.tradovate.data_feed import TradovateDataFeed, Quote
 from broker.tradovate.order_manager import OrderManager
 from strategies.factory import build_ict_from_yaml

@@ -118,7 +118,7 @@ def plot_backtest(symbol: str = "ES", session_date: date = None, interval: str =
     # Filter to target date for extended session (premarket + RTH)
     # Premarket starts at 4:00 AM ET, RTH ends at 16:00
     premarket_start = dt_time(4, 0)
-    rth_start = dt_time(9, 30)
+    dt_time(9, 30)
     rth_end = dt_time(16, 0)
 
     # Get all bars for the target date (premarket + RTH)
@@ -191,10 +191,10 @@ def plot_backtest(symbol: str = "ES", session_date: date = None, interval: str =
 
     # Extract data for plotting
     times = [b.timestamp for b in session_bars]
-    opens = [b.open for b in session_bars]
-    highs = [b.high for b in session_bars]
-    lows = [b.low for b in session_bars]
-    closes = [b.close for b in session_bars]
+    [b.open for b in session_bars]
+    [b.high for b in session_bars]
+    [b.low for b in session_bars]
+    [b.close for b in session_bars]
 
     # Create figure with 2 subplots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), height_ratios=[3, 1], sharex=True)

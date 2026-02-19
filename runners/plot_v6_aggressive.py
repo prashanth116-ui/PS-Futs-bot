@@ -10,9 +10,9 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 def calculate_ema(closes, period):
@@ -255,7 +255,6 @@ def plot_v6_aggressive(symbol='ES', direction='LONG', contracts=3, trade_num=1):
     cts_t2 = 1
     cts_runner = 1
 
-    exits = []
     remaining = contracts
     exited_t1 = False
     exited_t2 = False

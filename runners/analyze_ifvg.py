@@ -15,9 +15,9 @@ Usage:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import timedelta, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup, SetupState
+from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup
 from strategies.ict_sweep.filters.displacement import calculate_avg_body
 from runners.scan_ict_sweep import SYMBOL_CONFIGS, EQUITY_SYMBOLS
 
@@ -50,7 +50,7 @@ def analyze_ifvg_potential(symbol):
     3. Calculate potential recovery
     """
     cfg = SYMBOL_CONFIGS[symbol]
-    tick_size = cfg['tick_size']
+    cfg['tick_size']
     config = make_config(symbol)
 
     print(f'  Fetching {symbol}...', flush=True)

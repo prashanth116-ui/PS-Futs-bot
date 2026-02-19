@@ -16,7 +16,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import date
 from matplotlib.lines import Line2D
-import matplotlib.patches as mpatches
 
 CACHE_DIR = Path('.cache')
 
@@ -34,11 +33,11 @@ def plot_ict_ote(symbol='ES', year=None, month=None, day=None, contracts=3):
 
     # Instrument config
     if symbol in ['ES', 'MES']:
-        tick_value = 12.50 if symbol == 'ES' else 1.25
+        pass
     elif symbol in ['NQ', 'MNQ']:
-        tick_value = 5.00 if symbol == 'NQ' else 0.50
+        pass
     else:
-        tick_value = 12.50
+        pass
 
     # Determine target date
     if year and month and day:
@@ -73,8 +72,8 @@ def plot_ict_ote(symbol='ES', year=None, month=None, day=None, contracts=3):
     # Get price range for dealing range/premium-discount visualization
     all_highs = [b.high for b in day_ltf]
     all_lows = [b.low for b in day_ltf]
-    price_high = max(all_highs)
-    price_low = min(all_lows)
+    max(all_highs)
+    min(all_lows)
 
     # Plot candlesticks
     for i, bar in enumerate(day_ltf):
@@ -223,7 +222,7 @@ def plot_ict_ote(symbol='ES', year=None, month=None, day=None, contracts=3):
                                       facecolor=fvg_color, alpha=0.12,
                                       edgecolor=fvg_color, linewidth=0.8, linestyle=':')
             ax.add_patch(fvg_rect)
-            ax.annotate(f'FVG', xy=(entry_idx - 8, fvg.midpoint),
+            ax.annotate('FVG', xy=(entry_idx - 8, fvg.midpoint),
                         fontsize=7, color=fvg_color, fontweight='bold')
 
         # --- Entry marker ---
@@ -238,7 +237,7 @@ def plot_ict_ote(symbol='ES', year=None, month=None, day=None, contracts=3):
         if hasattr(trade, 'mmxm_phase') and trade.mmxm_phase and trade.mmxm_phase != 'NONE':
             mmxm_label_parts.append(f'MMXM:{trade.mmxm_phase[:5]}')
         if hasattr(trade, 'smt_divergence') and trade.smt_divergence:
-            mmxm_label_parts.append(f'SMT')
+            mmxm_label_parts.append('SMT')
         mmxm_label = f'\n[{" ".join(mmxm_label_parts)}]' if mmxm_label_parts else ''
 
         y_offset = 5 if is_long else -5

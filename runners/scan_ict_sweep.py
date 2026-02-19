@@ -27,7 +27,7 @@ sys.path.insert(0, '.')
 import argparse
 import time as _time
 import traceback
-from datetime import datetime, date, time as dt_time, timedelta
+from datetime import datetime, date, time as dt_time
 from typing import Optional
 
 from runners.tradingview_loader import fetch_futures_bars
@@ -354,7 +354,8 @@ class SweepScanner:
         fvg_ticks = (fvg.top - fvg.bottom) / tick_size
 
         time_str = bar.timestamp.strftime('%H:%M') + ' ET'
-        price_fmt = lambda p: _format_price(p, tick_size)
+        def price_fmt(p):
+            return _format_price(p, tick_size)
 
         msg = (
             f'<b>SWEEP SETUP \u2014 {symbol} ({htf_tf})</b>\n'
@@ -396,7 +397,8 @@ class SweepScanner:
         cfg = SYMBOL_CONFIGS.get(symbol, SYMBOL_CONFIGS['ES'])
         tick_size = cfg['tick_size']
         fvg = trade.fvg
-        price_fmt = lambda p: _format_price(p, tick_size)
+        def price_fmt(p):
+            return _format_price(p, tick_size)
 
         time_str = trade.timestamp.strftime('%H:%M') + ' ET'
 
@@ -498,7 +500,7 @@ class SweepScanner:
 
     def run(self):
         """Main scan loop."""
-        print(f'[SCANNER] Starting ICT Sweep Scanner')
+        print('[SCANNER] Starting ICT Sweep Scanner')
         print(f'  Symbols: {", ".join(self.symbols)}')
         print(f'  HTF timeframes: {", ".join(self.htf_timeframes)}')
         print(f'  Scan interval: {self.scan_interval}s')
@@ -524,7 +526,7 @@ class SweepScanner:
 
                 # Skip weekends
                 if today.weekday() >= 5:
-                    print(f'[SCANNER] Weekend — sleeping 60s')
+                    print('[SCANNER] Weekend — sleeping 60s')
                     self._interruptible_sleep(60)
                     continue
 

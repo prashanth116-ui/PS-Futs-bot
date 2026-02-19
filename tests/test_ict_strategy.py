@@ -315,12 +315,12 @@ def test_bullish_setup():
     bars = create_bullish_setup_bars()
 
     print(f"\nFeeding {len(bars)} bars to strategy...")
-    print(f"Swing low at bar 3: 4495.00")
-    print(f"Swing high at bar 6: 4502.00")
-    print(f"Sweep bar (#12): low=4494.00 (below 4495)")
-    print(f"BOS bar (#15): close=4507.00 (above 4502)")
-    print(f"FVG zone: ~4500.00 - 4503.00")
-    print(f"Entry bar (#17): low=4501.00 (enters FVG)")
+    print("Swing low at bar 3: 4495.00")
+    print("Swing high at bar 6: 4502.00")
+    print("Sweep bar (#12): low=4494.00 (below 4495)")
+    print("BOS bar (#15): close=4507.00 (above 4502)")
+    print("FVG zone: ~4500.00 - 4503.00")
+    print("Entry bar (#17): low=4501.00 (enters FVG)")
 
     # Process bars
     signals: list[Signal] = []
@@ -371,10 +371,10 @@ def test_bullish_setup():
         print(f"PASS: Stop ({signal.stop_price}) is below entry ({signal.entry_price})")
 
     if not signal.targets or signal.targets[0] <= signal.entry_price:
-        print(f"FAIL: Targets should be above entry")
+        print("FAIL: Targets should be above entry")
         passed = False
     else:
-        print(f"PASS: Targets are above entry")
+        print("PASS: Targets are above entry")
 
     if "sweep" not in signal.reason or "bos" not in signal.reason or "fvg" not in signal.reason:
         print("FAIL: Reason dict missing required keys")
@@ -405,12 +405,12 @@ def test_bearish_setup():
     bars = create_bearish_setup_bars()
 
     print(f"\nFeeding {len(bars)} bars to strategy...")
-    print(f"Swing high at bar 3: 4505.00")
-    print(f"Swing low at bar 6: 4497.00")
-    print(f"Sweep bar (#12): high=4506.50 (above 4505)")
-    print(f"BOS bar (#15): close=4493.00 (below 4497)")
-    print(f"FVG zone: ~4496.00 - 4500.00")
-    print(f"Entry bar (#17): high=4499.00 (enters FVG)")
+    print("Swing high at bar 3: 4505.00")
+    print("Swing low at bar 6: 4497.00")
+    print("Sweep bar (#12): high=4506.50 (above 4505)")
+    print("BOS bar (#15): close=4493.00 (below 4497)")
+    print("FVG zone: ~4496.00 - 4500.00")
+    print("Entry bar (#17): high=4499.00 (enters FVG)")
 
     # Process bars
     signals: list[Signal] = []
@@ -461,10 +461,10 @@ def test_bearish_setup():
         print(f"PASS: Stop ({signal.stop_price}) is above entry ({signal.entry_price})")
 
     if not signal.targets or signal.targets[0] >= signal.entry_price:
-        print(f"FAIL: Targets should be below entry")
+        print("FAIL: Targets should be below entry")
         passed = False
     else:
-        print(f"PASS: Targets are below entry")
+        print("PASS: Targets are below entry")
 
     assert passed, "One or more assertions failed"
 
@@ -521,7 +521,7 @@ def test_state_reset():
         strategy.on_bar(bar)
 
     state = strategy.get_state_summary()
-    print(f"After signal emission:")
+    print("After signal emission:")
     print(f"  Pending sweep: {state['pending_sweep']}")
     print(f"  Pending BOS: {state['pending_bos']}")
     print(f"  Has traded session: {state['has_traded_session']}")

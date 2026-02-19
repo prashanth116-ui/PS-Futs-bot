@@ -64,11 +64,9 @@ def plot_mes_today():
     print(f'Got {len(session_bars)} session bars')
 
     # Trade parameters
-    contracts = 3
     target1_r = 4
     target2_r = 8
     tick_size = 0.25
-    tick_value = 1.25
 
     # Detect FVGs
     fvg_config = {

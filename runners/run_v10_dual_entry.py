@@ -51,7 +51,7 @@ V10.3: Midday cutoff, PM cutoff for NQ
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -1133,7 +1133,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:
         print(f'    - B1: Overnight FVGs (ADX >= {overnight_retrace_min_adx})')
-        print(f'    - B2: Intraday FVGs (5+ bars old)')
+        print('    - B2: Intraday FVGs (5+ bars old)')
         print(f'    - Morning only filter: {"YES" if retracement_morning_only else "NO"}')
         print(f'    - Trend aligned: {"YES" if retracement_trend_aligned else "NO"}')
     print(f'  - Entry Type C (BOS + Retrace): {"ENABLED" if enable_bos else "DISABLED"}')
@@ -1148,10 +1148,10 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - BOS: {"OFF" if disable_bos else "ON (1 loss limit)"}')
-    print(f'  - T1 Exit: {t1_r}R FIXED (Hybrid)' if t1_fixed_4r else f'  - T1 Exit: Structure Trail')
+    print(f'  - T1 Exit: {t1_r}R FIXED (Hybrid)' if t1_fixed_4r else '  - T1 Exit: Structure Trail')
     print(f'  - Trail Activation: {trail_r}R')
     print(f'  - Trail Floor: {t1_r}R')
-    print(f'  - Midday cutoff (12-14): YES')
+    print('  - Midday cutoff (12-14): YES')
     print(f'  - PM cutoff (NQ/MNQ): {"YES" if symbol in ["NQ", "MNQ"] else "NO"}')
     print('='*70)
 
@@ -1210,7 +1210,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         print(f"  Stop: {r['stop_price']:.2f}")
         print(f"  Risk: {r['risk']:.2f} pts")
         print(f"  Targets: 4R={r['target_4r']:.2f}, 8R={r['target_8r']:.2f}")
-        print(f"  Exits:")
+        print("  Exits:")
         for e in r['exits']:
             dollars = (e['pnl'] / tick_size) * tick_value
             print(f"    {e['type']}: {e['cts']} ct @ {e['price']:.2f} = ${dollars:+,.2f}")

@@ -19,11 +19,10 @@ Usage:
 import sys
 sys.path.insert(0, '.')
 
-import os
 import argparse
 import time
 import signal
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 
 # EST timezone for all trading operations
@@ -65,17 +64,17 @@ def log(msg: str):
     print(msg)
     sys.stdout.flush()
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Dict, List
 
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
-from runners.run_v10_equity import run_session_v10_equity, EQUITY_CONFIG
-from runners.tradovate_client import TradovateClient, TradovateConfig, Environment, create_client
-from runners.order_manager import OrderManager, ManagedTrade, TradeStatus
-from runners.risk_manager import RiskManager, RiskLimits, create_default_risk_manager
-from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_error
+from runners.run_v10_equity import run_session_v10_equity
+from runners.tradovate_client import TradovateClient, create_client
+from runners.order_manager import OrderManager
+from runners.risk_manager import RiskManager, create_default_risk_manager
+from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status
 
 
 class PaperTradeStatus(Enum):
@@ -292,7 +291,7 @@ class LiveTrader:
             print(f"Equities: {', '.join(self.equity_symbols)} (${self.equity_risk}/trade, ATR buffer)")
         print(f"Scan interval: {self.scan_interval}s")
         print(f"Timezone: EST (Current: {get_est_now().strftime('%H:%M:%S')})")
-        print(f"Futures hours: 4:00-16:00 ET | Equities: 9:30-16:00 ET")
+        print("Futures hours: 4:00-16:00 ET | Equities: 9:30-16:00 ET")
         print("=" * 70)
 
         if not self.paper_mode and self.client:
@@ -649,7 +648,7 @@ class LiveTrader:
                 # Create simulated paper trade for equity
                 self._create_paper_trade(symbol, result, config, asset_type='equity')
             else:
-                print(f"    [EQUITY LIVE NOT IMPLEMENTED]")
+                print("    [EQUITY LIVE NOT IMPLEMENTED]")
 
             self.processed_signals[symbol].add(signal_id)
 
@@ -682,7 +681,7 @@ class LiveTrader:
                     self.risk_manager.record_trade_entry(symbol, config['contracts'])
                     print(f"    ENTRY SENT: {trade.id}")
             else:
-                print(f"    Price moved past entry, skipping")
+                print("    Price moved past entry, skipping")
 
     def _create_paper_trade(self, symbol: str, result: Dict, config: Dict, asset_type: str = 'futures'):
         """Create a simulated paper trade."""
@@ -748,7 +747,7 @@ class LiveTrader:
             if not bars or len(bars) < 1:
                 continue
 
-            current_price = bars[-1].close
+            bars[-1].close
             current_high = bars[-1].high
             current_low = bars[-1].low
 
@@ -806,7 +805,7 @@ class LiveTrader:
                     trade.runner_trail_stop = trade.entry_price
 
                     log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (4R)")
-                    log(f"    Trail stops activated at breakeven")
+                    log("    Trail stops activated at breakeven")
 
             # Update trail stops based on structure (if trail active)
             if trade.trail_active and len(bars) >= 5:
@@ -1047,7 +1046,7 @@ class LiveTrader:
 
         if self.paper_mode:
             # Paper mode summary
-            print(f"Mode: PAPER TRADING")
+            print("Mode: PAPER TRADING")
             print(f"Total Trades: {self.paper_daily_trades}")
             print(f"Wins: {self.paper_daily_wins} | Losses: {self.paper_daily_losses}")
             if self.paper_daily_trades > 0:
@@ -1122,7 +1121,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print(f"Starting V10.8 Live Trader...")
+    print("Starting V10.8 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:

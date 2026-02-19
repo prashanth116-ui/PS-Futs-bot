@@ -10,9 +10,9 @@ V10.6 Changes:
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from runners.run_v10_equity import run_session_v10_equity, calculate_atr
+from runners.run_v10_equity import run_session_v10_equity
 from runners.run_v10_dual_entry import run_session_v10
 
 
@@ -378,7 +378,7 @@ def main():
     v106_trades = sum(all_results['V10.6'][s]['trades'] for s in all_results['V10.6'])
     v105_trades = sum(all_results['V10.5'][s]['trades'] for s in all_results['V10.5'])
 
-    print(f"\nV10.5 -> V10.6:")
+    print("\nV10.5 -> V10.6:")
     print(f"  P/L Change:      ${v106_pnl - v105_pnl:>+,.0f}")
     print(f"  Max DD Change:   ${v106_dd - v105_dd:>+,.0f}")
     print(f"  Trades:          {v105_trades} -> {v106_trades} ({v106_trades - v105_trades:+d})")

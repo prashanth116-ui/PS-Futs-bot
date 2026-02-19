@@ -7,7 +7,7 @@ and candle 3's wick, with candle 2 being the displacement candle.
 Bullish FVG: Gap between candle 1 high and candle 3 low (price should go up to fill)
 Bearish FVG: Gap between candle 1 low and candle 3 high (price should go down to fill)
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 

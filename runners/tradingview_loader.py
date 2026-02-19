@@ -14,12 +14,10 @@ Exchange: CME_MINI
 from __future__ import annotations
 
 import os
-import sys
 import warnings
 import threading
 from datetime import datetime, date, time
 from pathlib import Path
-from typing import Literal
 
 from dotenv import load_dotenv
 from tvDatafeed import TvDatafeed, Interval

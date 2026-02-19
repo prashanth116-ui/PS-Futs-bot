@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, '.')
 
 import time
-from datetime import datetime, time as dt_time, date
+from datetime import datetime, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_all_fvg_mitigations
 
@@ -104,8 +104,6 @@ def check_for_signals(symbol='ES', tick_size=0.25, contracts=3):
             approaching = current_price < entry_fvg.low and current_price >= entry_fvg.low - proximity_threshold
 
         # Calculate R:R
-        rr_4r = 4.0
-        rr_8r = 8.0
 
         signal = {
             'symbol': symbol,
@@ -168,7 +166,7 @@ def run_live_signals(symbols=['ES', 'NQ'], interval_seconds=180, contracts=3):
     print(f"Symbols: {', '.join(symbols)}")
     print(f"Contracts: {contracts}")
     print(f"Refresh: Every {interval_seconds // 60} minutes")
-    print(f"Strategy: Partial Fill Entry + Hybrid Trailing Stop")
+    print("Strategy: Partial Fill Entry + Hybrid Trailing Stop")
     print("=" * 70)
     print("\nStarting live monitoring... (Ctrl+C to stop)")
 

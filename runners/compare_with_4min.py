@@ -4,7 +4,7 @@ Compare 3-min, 4-min (synthetic), 5-min timeframes
 """
 import sys
 sys.path.insert(0, '.')
-from datetime import time as dt_time, timedelta
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
 from collections import namedtuple

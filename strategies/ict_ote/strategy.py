@@ -20,26 +20,26 @@ Exit Logic:
 - T2: Structure trail after configurable R (default 6R, 4-tick buffer)
 - Runner: Structure trail (6-tick buffer, 1st trade only)
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from strategies.ict_ote.signals.impulse import detect_impulse, ImpulseLeg
 from strategies.ict_ote.signals.fibonacci import (
-    calculate_ote_zone, is_price_in_ote, check_ote_tap, check_rejection,
+    calculate_ote_zone, check_ote_tap, check_rejection,
     fvg_overlaps_ote, OTEZone
 )
-from strategies.ict_ote.signals.fvg import FVG, detect_fvg, detect_fvg_in_range
+from strategies.ict_ote.signals.fvg import FVG, detect_fvg_in_range
 from strategies.ict_ote.signals.dealing_range import (
     DealingRange, LiquidityTargets, find_dealing_range, find_liquidity_targets, get_runner_target
 )
-from strategies.ict_ote.signals.mmxm import MMXMPhase, MMXMModel, MMXMState, MMXMTracker
+from strategies.ict_ote.signals.mmxm import MMXMTracker
 from strategies.ict_ote.signals.smt import SMTDivergence, detect_smt_divergence
 from strategies.ict_ote.filters.premium_discount import (
     DealingRangeZone, calculate_dealing_range, check_premium_discount_filter
 )
-from strategies.ict_sweep.filters.displacement import calculate_avg_body, get_displacement_ratio
-from strategies.ict_sweep.filters.session import should_trade, get_session_name
+from strategies.ict_sweep.filters.displacement import calculate_avg_body
+from strategies.ict_sweep.filters.session import should_trade
 from strategies.ict_sweep.signals.liquidity import find_liquidity_levels
 
 
@@ -631,7 +631,6 @@ class ICTOTEStrategy:
         """Check if we're in post-loss cooldown period."""
         if self.loss_cooldown_minutes <= 0 or self.last_loss_time is None:
             return False
-        from datetime import timedelta
         elapsed = (current_time - self.last_loss_time).total_seconds() / 60
         return elapsed < self.loss_cooldown_minutes
 

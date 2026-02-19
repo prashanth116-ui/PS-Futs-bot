@@ -154,7 +154,7 @@ def plot_trade(trade_date, direction='LONG', symbol='ES'):
                 exit_opp_fvg_idx = i
                 exit_opp_fvg_price = bar.close
                 # Find the opposing FVG that triggered the exit
-                triggering_fvg = opposing_fvgs[-1]
+                opposing_fvgs[-1]
                 break
 
     # Calculate P/L

@@ -8,7 +8,7 @@ sys.path.insert(0, '.')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.dates as mdates
-from datetime import date, time as dt_time, timedelta
+from datetime import date, time as dt_time
 
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.sweep import find_swing_highs, find_swing_lows
@@ -235,7 +235,6 @@ def plot_trade_plan(
 
     exits = []  # List of (time, price, contracts, exit_type, pnl)
     remaining_contracts = contracts
-    stopped_out = False
 
     # Add 4R target to the list
     if is_long:
@@ -269,7 +268,6 @@ def plot_trade_plan(
                     'bar_idx': i,
                 })
                 remaining_contracts = 0
-                stopped_out = True
                 break
 
             # Check 2R target - exit 1 contract
@@ -376,9 +374,9 @@ def plot_trade_plan(
         print(f"{'='*70}")
 
     # For backward compatibility
-    exit_type = exits[-1]['type'] if exits else None
-    exit_price = exits[-1]['price'] if exits else None
-    exit_time = exits[-1]['time'] if exits else None
+    exits[-1]['type'] if exits else None
+    exits[-1]['price'] if exits else None
+    exits[-1]['time'] if exits else None
     pnl = total_pnl
 
     # =========================================================================
@@ -409,18 +407,18 @@ def plot_trade_plan(
 
         # Plot EMA lines
         ax.plot(cloud_times, cloud_ema34, color='#2196F3', linewidth=1.5,
-                label=f'EMA 34', alpha=0.8, zorder=2)
+                label='EMA 34', alpha=0.8, zorder=2)
         ax.plot(cloud_times, cloud_ema50, color='#FF9800', linewidth=1.5,
-                label=f'EMA 50', alpha=0.8, zorder=2)
+                label='EMA 50', alpha=0.8, zorder=2)
 
         # Plot EMA 9 and 12 if stack filter is enabled
         if require_ema_stack:
             cloud_ema9 = [ema_9[i] for i in valid_indices]
             cloud_ema12 = [ema_12[i] for i in valid_indices]
             ax.plot(cloud_times, cloud_ema9, color='#4CAF50', linewidth=1.2,
-                    label=f'EMA 9', alpha=0.7, zorder=2, linestyle='-')
+                    label='EMA 9', alpha=0.7, zorder=2, linestyle='-')
             ax.plot(cloud_times, cloud_ema12, color='#8BC34A', linewidth=1.2,
-                    label=f'EMA 12', alpha=0.7, zorder=2, linestyle='-')
+                    label='EMA 12', alpha=0.7, zorder=2, linestyle='-')
 
     # Plot candlesticks
     for i, bar in enumerate(session_bars):
@@ -538,7 +536,7 @@ def plot_trade_plan(
 
         # Calculate P/L for this exit
         exit_pnl = exit['pnl']
-        exit_pnl_ticks = exit_pnl / tick_size
+        exit_pnl / tick_size
 
         offset = exit_offsets[i % len(exit_offsets)]
         ax.annotate(
@@ -808,7 +806,7 @@ def run_reentry_backtest(
                     if result1.get('entry_triggered') and result1.get('exits'):
                         was_stopped = any(e['type'] == 'STOP' for e in result1['exits'])
                         if was_stopped:
-                            print(f"\n>>> STOPPED on 1st FVG, trying 2nd FVG re-entry...")
+                            print("\n>>> STOPPED on 1st FVG, trying 2nd FVG re-entry...")
                             try:
                                 result2 = plot_trade_plan(
                                     symbol=symbol,

@@ -4,7 +4,7 @@ Debug why no entries occurred in a specific time window.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
@@ -157,7 +157,7 @@ def debug_entries(symbol='ES', start_time='08:00', end_time='09:40'):
     print()
 
     # Check for potential entries (price touching FVGs) in the window
-    print(f'POTENTIAL ENTRY ANALYSIS:')
+    print('POTENTIAL ENTRY ANALYSIS:')
     print('-' * 80)
 
     # Get all FVGs that could have been entered in the window
@@ -245,13 +245,13 @@ def debug_entries(symbol='ES', start_time='08:00', end_time='09:40'):
 
                 print(f'{direction} FVG (created {fvg_time}) touched @ {touch_time}')
                 print(f'  Edge: {edge_price:.2f}')
-                print(f'  Filters:')
+                print('  Filters:')
                 print(f'    EMA 20/50: {"PASS" if ema_ok else "FAIL"} - {ema_reason}')
                 print(f'    ADX > 17:  {"PASS" if adx_ok else "FAIL"} - {adx_reason}')
                 print(f'    DI Dir:    {"PASS" if di_ok else "FAIL"} - {di_reason}')
 
                 if ema_ok and adx_ok and di_ok:
-                    print(f'  >>> ENTRY WOULD BE TAKEN')
+                    print('  >>> ENTRY WOULD BE TAKEN')
                 else:
                     failed = []
                     if not ema_ok: failed.append("EMA")

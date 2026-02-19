@@ -5,7 +5,6 @@ import sys
 sys.path.insert(0, '.')
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from datetime import date
 
 def plot_ema_comparison():
@@ -123,9 +122,9 @@ def plot_ema_comparison():
 
     x_runner = range(len(runner_labels))
 
-    bars_r1 = ax3.bar([i - width/2 for i in x_runner], runner_ema50, width, label='EMA50 Runner',
+    ax3.bar([i - width/2 for i in x_runner], runner_ema50, width, label='EMA50 Runner',
                       color='#673AB7', alpha=0.8)
-    bars_r2 = ax3.bar([i + width/2 for i in x_runner], runner_ema12, width, label='EMA12 Runner',
+    ax3.bar([i + width/2 for i in x_runner], runner_ema12, width, label='EMA12 Runner',
                       color='#E91E63', alpha=0.8)
 
     ax3.set_xlabel('Trade', fontsize=12)

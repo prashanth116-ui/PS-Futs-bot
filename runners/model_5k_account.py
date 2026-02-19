@@ -80,7 +80,7 @@ def model_5k_account():
         print(f'   Margin required:    ${margin:.0f} ({margin_pct:.1f}% of account)')
         print(f'   Max drawdown (3L):  ${max_dd:.0f} ({max_dd_pct:.1f}% of account)')
         print()
-        print(f'   EXPECTED RETURNS (based on 15-day backtest):')
+        print('   EXPECTED RETURNS (based on 15-day backtest):')
         print(f'   - Daily avg:        ${daily_pnl:+.2f}')
         print(f'   - Weekly avg:       ${weekly_pnl:+.2f}')
         print(f'   - Monthly avg:      ${monthly_pnl:+.2f}')
@@ -88,7 +88,7 @@ def model_5k_account():
         print()
 
         # Account growth projection
-        print(f'   ACCOUNT GROWTH PROJECTION:')
+        print('   ACCOUNT GROWTH PROJECTION:')
         balance = capital
         for month in range(1, 7):
             balance += monthly_pnl

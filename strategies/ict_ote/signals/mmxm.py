@@ -10,7 +10,7 @@ Tracks the 4-phase MMXM cycle:
 A valid BUY model: sweep lows -> bullish displacement -> long OTE
 A valid SELL model: sweep highs -> bearish displacement -> short OTE
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 

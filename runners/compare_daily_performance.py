@@ -168,7 +168,7 @@ def main():
 
     # Sort by P/L
     baseline_sorted = sorted(baseline_days, key=lambda x: x[1]['pnl'], reverse=True)
-    optimal_sorted = sorted(optimal_days, key=lambda x: x[1]['pnl'], reverse=True)
+    sorted(optimal_days, key=lambda x: x[1]['pnl'], reverse=True)
 
     print('\n' + '=' * 90)
     print('DAILY PERFORMANCE COMPARISON (30 days)')
@@ -315,7 +315,7 @@ def main():
     print('CONCLUSION')
     print('=' * 90)
 
-    print(f"\nOptimal (V10.6) vs Baseline (V10.5):")
+    print("\nOptimal (V10.6) vs Baseline (V10.5):")
     print(f"  P/L Improvement: ${optimal_total - baseline_total:+,.0f}")
     print(f"  Winning Days: {optimal_win_days} vs {baseline_win_days}")
     print(f"  Days Optimal Won: {optimal_wins}/{len(recent_dates)}")

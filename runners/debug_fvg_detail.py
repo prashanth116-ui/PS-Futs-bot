@@ -4,9 +4,9 @@ Detailed FVG analysis for a specific time window.
 import sys
 sys.path.insert(0, '.')
 
-from datetime import date, time as dt_time
+from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
-from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.fvg import detect_fvgs
 
 
 def calculate_ema(bars, period):
@@ -149,7 +149,7 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
 
     print()
     print('=' * 80)
-    print(f'ALL BULLISH FVGs (could enter LONG):')
+    print('ALL BULLISH FVGs (could enter LONG):')
     print('=' * 80)
 
     bullish_fvgs = [f for f in all_fvgs if f.direction == 'BULLISH']
@@ -172,7 +172,7 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
         print(f'  Displacement: {"YES" if is_disp else "NO"} (body={body:.2f}, need={avg_body_size*1.2:.2f})')
 
         if not is_disp:
-            print(f'  >>> SKIPPED (no displacement)')
+            print('  >>> SKIPPED (no displacement)')
             continue
 
         # Check if touched in window
@@ -200,7 +200,7 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
             ema_slow = calculate_ema(bars_to_entry, 50)
             adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
 
-            print(f'  Filters at touch:')
+            print('  Filters at touch:')
             ema_ok = True
             adx_ok = True
             di_ok = True
@@ -209,7 +209,7 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
                 ema_ok = ema_fast > ema_slow
                 print(f'    EMA 20/50: {ema_fast:.2f} / {ema_slow:.2f} -> {"PASS" if ema_ok else "FAIL (need EMA20 > EMA50 for LONG)"}')
             else:
-                print(f'    EMA 20/50: Not enough data')
+                print('    EMA 20/50: Not enough data')
 
             if adx:
                 adx_ok = adx >= 17
@@ -217,10 +217,10 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
                 print(f'    ADX: {adx:.1f} -> {"PASS" if adx_ok else "FAIL (need >= 17)"}')
                 print(f'    DI: +{plus_di:.1f} / -{minus_di:.1f} -> {"PASS" if di_ok else "FAIL (need +DI > -DI for LONG)"}')
             else:
-                print(f'    ADX/DI: Not enough data')
+                print('    ADX/DI: Not enough data')
 
             if ema_ok and adx_ok and di_ok:
-                print(f'  >>> ENTRY SHOULD BE TAKEN!')
+                print('  >>> ENTRY SHOULD BE TAKEN!')
             else:
                 failed = []
                 if not ema_ok: failed.append("EMA")

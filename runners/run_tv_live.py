@@ -155,7 +155,7 @@ def main():
     print("ICT Strategy - TradingView Live Runner")
     print("=" * 60)
     print(f"Symbols: {', '.join(s['name'] for s in SYMBOLS)}")
-    print(f"Interval: 5 minutes")
+    print("Interval: 5 minutes")
     print(f"Loop: Every {LOOP_INTERVAL_SECONDS // 60} minutes")
     print("-" * 60)
 
@@ -185,7 +185,7 @@ def main():
     strategies = {}
 
     # Run continuous loop
-    print(f"\nStarting continuous monitoring (Ctrl+C to stop)...")
+    print("\nStarting continuous monitoring (Ctrl+C to stop)...")
 
     try:
         while True:
