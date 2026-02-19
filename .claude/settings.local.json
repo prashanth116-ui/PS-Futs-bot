@@ -202,7 +202,8 @@
       "WebFetch(domain:yourpractice.withtandem.com)",
       "Bash(git -C \"C:\\\\Users\\\\vkudu\\\\claude-projects\\\\tradovate-futures-bot\" diff --stat strategies/ict_ote/signals/fibonacci.py strategies/ict_ote/strategy.py runners/run_ict_ote.py)",
       "Bash(git check-ignore:*)",
-      "Bash(git -C \"C:\\\\Users\\\\vkudu\\\\claude-projects\\\\tradovate-futures-bot\" diff strategies/ict_ote/signals/fibonacci.py)"
+      "Bash(git -C \"C:\\\\Users\\\\vkudu\\\\claude-projects\\\\tradovate-futures-bot\" diff strategies/ict_ote/signals/fibonacci.py)",
+      "Bash(git -C \"C:\\\\Users\\\\vkudu\\\\claude-projects\\\\tradovate-futures-bot\" show --stat 9e248af)"
     ]
   }
 }
