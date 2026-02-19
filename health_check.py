@@ -71,47 +71,68 @@ def main():
             print(f"  Connection: FAILED - {e}")
             errors.append(f"TradingView: {e}")
 
-    # Check paper trading service
-    print("\nPaper Trading Service:")
-    try:
-        import subprocess
-        import platform
-        is_droplet = platform.system() == "Linux" and Path("/opt/tradovate-bot").exists()
-        if is_droplet:
-            cmd = ["systemctl", "is-active", "paper-trading"]
-            detail_cmd = ["systemctl", "show", "paper-trading", "--property=ActiveEnterTimestamp,MemoryCurrent"]
-        else:
-            cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                   "root@107.170.74.154", "systemctl is-active paper-trading"]
-            detail_cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                          "root@107.170.74.154", "systemctl show paper-trading --property=ActiveEnterTimestamp,MemoryCurrent"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        status = result.stdout.strip()
-        if result.returncode == 0 and status == "active":
-            print("  Service: ACTIVE")
-            detail = subprocess.run(detail_cmd, capture_output=True, text=True, timeout=15)
-            for line in detail.stdout.strip().split("\n"):
-                if "ActiveEnterTimestamp=" in line:
-                    ts = line.split("=", 1)[1].strip()
-                    print(f"  Started: {ts}")
-                elif "MemoryCurrent=" in line:
-                    mem_bytes = line.split("=", 1)[1].strip()
-                    try:
-                        mem_mb = int(mem_bytes) / (1024 * 1024)
-                        print(f"  Memory: {mem_mb:.1f} MB")
-                    except ValueError:
-                        pass
-        else:
-            print(f"  Service: {status.upper() if status else 'UNKNOWN'}")
-            errors.append(f"Paper trading service: {status or 'unknown'}")
-    except subprocess.TimeoutExpired:
-        print("  Service: UNREACHABLE (SSH timeout)")
-        errors.append("Droplet unreachable")
-    except FileNotFoundError:
-        print("  Service: SKIPPED (no SSH client)")
-    except Exception as e:
-        print(f"  Service: ERROR - {e}")
-        errors.append(f"Droplet check: {e}")
+    # Check droplet
+    import subprocess
+    import platform
+    is_droplet = platform.system() == "Linux" and Path("/opt/tradovate-bot").exists()
+
+    if is_droplet:
+        # Running on the droplet - check service locally
+        print("\nPaper Trading Service:")
+        try:
+            result = subprocess.run(["systemctl", "is-active", "paper-trading"],
+                                    capture_output=True, text=True, timeout=15)
+            status = result.stdout.strip()
+            if result.returncode == 0 and status == "active":
+                print("  Service: ACTIVE")
+                detail = subprocess.run(
+                    ["systemctl", "show", "paper-trading", "--property=ActiveEnterTimestamp,MemoryCurrent"],
+                    capture_output=True, text=True, timeout=15)
+                for line in detail.stdout.strip().split("\n"):
+                    if "ActiveEnterTimestamp=" in line:
+                        print(f"  Started: {line.split('=', 1)[1].strip()}")
+                    elif "MemoryCurrent=" in line:
+                        try:
+                            mem_mb = int(line.split("=", 1)[1].strip()) / (1024 * 1024)
+                            print(f"  Memory: {mem_mb:.1f} MB")
+                        except ValueError:
+                            pass
+            else:
+                print(f"  Service: {status.upper() if status else 'UNKNOWN'}")
+                errors.append(f"Paper trading service: {status or 'unknown'}")
+        except Exception as e:
+            print(f"  Service: ERROR - {e}")
+            errors.append(f"Service check: {e}")
+    else:
+        # Running locally - SSH into droplet for full health check
+        DROPLET = "root@107.170.74.154"
+        SSH_OPTS = ["-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
+
+        print("\n" + "=" * 40)
+        print("DROPLET (107.170.74.154)")
+        print("=" * 40)
+
+        try:
+            result = subprocess.run(
+                ["ssh"] + SSH_OPTS + [DROPLET,
+                 "cd /opt/tradovate-bot && source venv/bin/activate && python health_check.py"],
+                capture_output=True, text=True, timeout=120
+            )
+            # Indent droplet output
+            for line in result.stdout.strip().split("\n"):
+                print(f"  {line}")
+            if result.returncode != 0:
+                errors.append("Droplet health check failed")
+                if result.stderr.strip():
+                    print(f"  STDERR: {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            print("  UNREACHABLE (SSH timeout)")
+            errors.append("Droplet unreachable")
+        except FileNotFoundError:
+            print("  SKIPPED (no SSH client)")
+        except Exception as e:
+            print(f"  ERROR - {e}")
+            errors.append(f"Droplet check: {e}")
 
     # Run tests
     print("\nTests:")
