@@ -194,9 +194,12 @@ def debug_v6_window(symbol='ES', start_time='08:50', end_time='09:40'):
                     print('\n  >>> V6-AGGRESSIVE WOULD ENTER HERE!')
                 else:
                     failed = []
-                    if not ema_ok: failed.append("EMA")
-                    if not adx_ok: failed.append("ADX")
-                    if not di_ok: failed.append("DI")
+                    if not ema_ok:
+                        failed.append("EMA")
+                    if not adx_ok:
+                        failed.append("ADX")
+                    if not di_ok:
+                        failed.append("DI")
                     print(f'\n  >>> FILTERED OUT by: {", ".join(failed)}')
             else:
                 print('  >>> SKIPPED (displacement too small)')

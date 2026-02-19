@@ -20,10 +20,10 @@ from pathlib import Path
 from datetime import time as dt_time, timedelta
 from runners.tradingview_loader import fetch_futures_bars
 from strategies.ict_sweep.strategy import ICTSweepStrategy, TradeSetup
+from strategies.ict_sweep.filters.session import get_session_name
 
 CACHE_DIR = Path('.cache')
 CACHE_DIR.mkdir(exist_ok=True)
-from strategies.ict_sweep.filters.session import get_session_name
 
 
 def format_et(ts):

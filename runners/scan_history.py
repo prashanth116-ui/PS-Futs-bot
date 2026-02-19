@@ -187,8 +187,8 @@ def main():
             dirs_str = ', '.join(f'{d}:{c}' for d, c in sorted(st['dirs'].items()))
             last_str = ''
             if st['last']:
-                l = st['last']
-                last_str = f'{l["date"]} {l["time"]} {l["direction"]} @{l["entry"]:.2f}'
+                last = st['last']
+                last_str = f'{last["date"]} {last["time"]} {last["direction"]} @{last["entry"]:.2f}'
             print(f'{sym:<8} {htf_tf:<5} {st["setups"]:>7} {st["entries"]:>8} {len(st["days"]):>5} | {dirs_str:<30} | {last_str}')
 
     print('-' * 110)

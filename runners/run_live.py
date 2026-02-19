@@ -22,8 +22,19 @@ sys.path.insert(0, '.')
 import argparse
 import time
 import signal
+from dataclasses import dataclass
 from datetime import datetime, time as dt_time
+from enum import Enum
+from typing import Optional, Dict, List
 from zoneinfo import ZoneInfo
+
+from runners.tradingview_loader import fetch_futures_bars
+from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
+from runners.run_v10_equity import run_session_v10_equity
+from runners.tradovate_client import TradovateClient, create_client
+from runners.order_manager import OrderManager
+from runners.risk_manager import RiskManager, create_default_risk_manager
+from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -63,18 +74,6 @@ def log(msg: str):
     """Print with explicit flush for reliable output."""
     print(msg)
     sys.stdout.flush()
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional, Dict, List
-
-from runners.tradingview_loader import fetch_futures_bars
-from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
-from runners.run_v10_equity import run_session_v10_equity
-from runners.tradovate_client import TradovateClient, create_client
-from runners.order_manager import OrderManager
-from runners.risk_manager import RiskManager, create_default_risk_manager
-from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status
 
 
 class PaperTradeStatus(Enum):
@@ -739,7 +738,7 @@ class LiveTrader:
 
         self.paper_trades[trade_id] = paper_trade
 
-        sizing_note = f" (no runner)" if not has_runner else ""
+        sizing_note = " (no runner)" if not has_runner else ""
         log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
         log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | T1: {target_4r:.2f} | Trail: {target_8r:.2f}")
         log(f"    Trade ID: {trade_id}")
@@ -874,7 +873,6 @@ class LiveTrader:
                 trail_hit = (current_low <= trade.t1_trail_stop) if trade.is_long else (current_high >= trade.t1_trail_stop)
                 if trail_hit:
                     # All remaining contracts exit at t1_trail_stop
-                    remaining_cts = trade.contracts - cts_t1  # T1 already exited
                     trade.t2_pnl = trade.calculate_pnl(trade.t1_trail_stop, cts_t2)
                     trade.t2_hit = True
                     if trade.has_runner and cts_runner > 0:

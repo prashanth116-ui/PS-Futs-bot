@@ -171,9 +171,9 @@ def main():
             return 0, 0, 0, 0, 0
         pnl = sum(t['result']['pnl'] for t in trades)
         w = sum(1 for t in trades if t['result']['pnl'] > 0)
-        l = sum(1 for t in trades if t['result']['pnl'] < 0)
+        losses = sum(1 for t in trades if t['result']['pnl'] < 0)
         wr = (w / len(trades) * 100)
-        return len(trades), w, l, wr, pnl
+        return len(trades), w, losses, wr, pnl
 
     s1, s2 = stats(trades_no), stats(trades_with)
 

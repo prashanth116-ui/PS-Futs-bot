@@ -223,9 +223,12 @@ def debug_fvg_detail(symbol='ES', start_time='09:00', end_time='09:38'):
                 print('  >>> ENTRY SHOULD BE TAKEN!')
             else:
                 failed = []
-                if not ema_ok: failed.append("EMA")
-                if not adx_ok: failed.append("ADX")
-                if not di_ok: failed.append("DI")
+                if not ema_ok:
+                    failed.append("EMA")
+                if not adx_ok:
+                    failed.append("ADX")
+                if not di_ok:
+                    failed.append("DI")
                 print(f'  >>> FILTERED by: {", ".join(failed)}')
 
             # Check if in window

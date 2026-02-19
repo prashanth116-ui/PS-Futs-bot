@@ -22,11 +22,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tvDatafeed import TvDatafeed, Interval
 
+from core.types import Bar
+
 # Load environment variables from config/.env
 _env_path = Path(__file__).parent.parent / "config" / ".env"
 load_dotenv(_env_path)
-
-from core.types import Bar
 
 warnings.filterwarnings('ignore')
 

@@ -95,9 +95,12 @@ def run_trade_with_runner_strategy(session_bars, direction, fvg_num, runner_stra
     cts_t1 = contracts // 3
     cts_t2 = contracts // 3
     cts_runner = contracts - cts_t1 - cts_t2
-    if cts_t1 == 0: cts_t1 = 1
-    if cts_t2 == 0: cts_t2 = 1
-    if cts_runner == 0: cts_runner = 1
+    if cts_t1 == 0:
+        cts_t1 = 1
+    if cts_t2 == 0:
+        cts_t2 = 1
+    if cts_runner == 0:
+        cts_runner = 1
 
     exits = []
     remaining = contracts

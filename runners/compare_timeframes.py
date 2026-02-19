@@ -243,19 +243,19 @@ def main():
     all_losses_5 = sorted(es_5m_f['losses'] + nq_5m_f['losses'], key=lambda x: x['total_dollars'])[:5]
 
     print('\n3-MIN Biggest Losses:')
-    for l in all_losses_3:
-        sym = 'ES' if l in es_3m_f['losses'] else 'NQ'
-        print(f"  {l['date']} {l['entry_time'].strftime('%H:%M')} {sym} {l['entry_type']}: ${l['total_dollars']:+,.0f} (Risk: {l['risk']:.1f} pts)")
+    for loss in all_losses_3:
+        sym = 'ES' if loss in es_3m_f['losses'] else 'NQ'
+        print(f"  {loss['date']} {loss['entry_time'].strftime('%H:%M')} {sym} {loss['entry_type']}: ${loss['total_dollars']:+,.0f} (Risk: {loss['risk']:.1f} pts)")
 
     print('\n2-MIN Biggest Losses:')
-    for l in all_losses_4:
-        sym = 'ES' if l in es_2m_f['losses'] else 'NQ'
-        print(f"  {l['date']} {l['entry_time'].strftime('%H:%M')} {sym} {l['entry_type']}: ${l['total_dollars']:+,.0f} (Risk: {l['risk']:.1f} pts)")
+    for loss in all_losses_4:
+        sym = 'ES' if loss in es_2m_f['losses'] else 'NQ'
+        print(f"  {loss['date']} {loss['entry_time'].strftime('%H:%M')} {sym} {loss['entry_type']}: ${loss['total_dollars']:+,.0f} (Risk: {loss['risk']:.1f} pts)")
 
     print('\n5-MIN Biggest Losses:')
-    for l in all_losses_5:
-        sym = 'ES' if l in es_5m_f['losses'] else 'NQ'
-        print(f"  {l['date']} {l['entry_time'].strftime('%H:%M')} {sym} {l['entry_type']}: ${l['total_dollars']:+,.0f} (Risk: {l['risk']:.1f} pts)")
+    for loss in all_losses_5:
+        sym = 'ES' if loss in es_5m_f['losses'] else 'NQ'
+        print(f"  {loss['date']} {loss['entry_time'].strftime('%H:%M')} {sym} {loss['entry_type']}: ${loss['total_dollars']:+,.0f} (Risk: {loss['risk']:.1f} pts)")
 
 
 if __name__ == "__main__":

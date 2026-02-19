@@ -217,9 +217,12 @@ def debug_9am(symbol='ES'):
                     print('  >>> ALL FILTERS PASS - ENTRY SHOULD HAPPEN!')
                 else:
                     failed = []
-                    if not ema_ok: failed.append("EMA")
-                    if not adx_ok: failed.append("ADX")
-                    if not di_ok: failed.append("DI")
+                    if not ema_ok:
+                        failed.append("EMA")
+                    if not adx_ok:
+                        failed.append("ADX")
+                    if not di_ok:
+                        failed.append("DI")
                     print(f'  >>> FILTERED OUT by: {", ".join(failed)}')
             else:
                 print('  --> No entry (failed displacement)')
