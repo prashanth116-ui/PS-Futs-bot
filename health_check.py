@@ -71,19 +71,26 @@ def main():
             print(f"  Connection: FAILED - {e}")
             errors.append(f"TradingView: {e}")
 
-    # Check droplet paper trading service
-    print("\nDroplet Paper Trading:")
+    # Check paper trading service
+    print("\nPaper Trading Service:")
     try:
         import subprocess
-        result = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-             "root@107.170.74.154", "systemctl is-active paper-trading && systemctl show paper-trading --property=ActiveEnterTimestamp,MemoryCurrent"],
-            capture_output=True, text=True, timeout=15
-        )
-        lines = result.stdout.strip().split("\n")
-        if result.returncode == 0 and lines and lines[0] == "active":
+        import platform
+        is_droplet = platform.system() == "Linux" and Path("/opt/tradovate-bot").exists()
+        if is_droplet:
+            cmd = ["systemctl", "is-active", "paper-trading"]
+            detail_cmd = ["systemctl", "show", "paper-trading", "--property=ActiveEnterTimestamp,MemoryCurrent"]
+        else:
+            cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                   "root@107.170.74.154", "systemctl is-active paper-trading"]
+            detail_cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                          "root@107.170.74.154", "systemctl show paper-trading --property=ActiveEnterTimestamp,MemoryCurrent"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        status = result.stdout.strip()
+        if result.returncode == 0 and status == "active":
             print("  Service: ACTIVE")
-            for line in lines[1:]:
+            detail = subprocess.run(detail_cmd, capture_output=True, text=True, timeout=15)
+            for line in detail.stdout.strip().split("\n"):
                 if "ActiveEnterTimestamp=" in line:
                     ts = line.split("=", 1)[1].strip()
                     print(f"  Started: {ts}")
@@ -95,9 +102,8 @@ def main():
                     except ValueError:
                         pass
         else:
-            status = lines[0] if lines else "unknown"
-            print(f"  Service: {status.upper()}")
-            errors.append(f"Paper trading service: {status}")
+            print(f"  Service: {status.upper() if status else 'UNKNOWN'}")
+            errors.append(f"Paper trading service: {status or 'unknown'}")
     except subprocess.TimeoutExpired:
         print("  Service: UNREACHABLE (SSH timeout)")
         errors.append("Droplet unreachable")
