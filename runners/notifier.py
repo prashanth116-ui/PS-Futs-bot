@@ -8,6 +8,7 @@ Sends real-time alerts for:
 - Errors/warnings
 """
 import os
+import html
 import requests
 from datetime import datetime
 from typing import Optional
@@ -54,7 +55,7 @@ class TelegramNotifier:
         """Send trade entry notification."""
         emoji = "🟢" if direction == "LONG" else "🔴"
         msg = f"""
-{emoji} <b>ICT V10.9 | NEW TRADE - {symbol}</b>
+{emoji} <b>ICT V10.10 | NEW TRADE - {symbol}</b>
 
 <b>Direction:</b> {direction}
 <b>Type:</b> {entry_type}
@@ -73,7 +74,7 @@ class TelegramNotifier:
         emoji = "✅" if pnl > 0 else "❌"
         pnl_emoji = "💰" if pnl > 0 else "📉"
         msg = f"""
-{emoji} <b>ICT V10.9 | TRADE EXIT - {symbol}</b>
+{emoji} <b>ICT V10.10 | TRADE EXIT - {symbol}</b>
 
 <b>Direction:</b> {direction}
 <b>Exit Type:</b> {exit_type}
@@ -91,7 +92,7 @@ class TelegramNotifier:
         win_rate = (wins / trades * 100) if trades > 0 else 0
         emoji = "🎉" if total_pnl > 0 else "😔"
         msg = f"""
-{emoji} <b>ICT V10.9 | DAILY SUMMARY</b>
+{emoji} <b>ICT V10.10 | DAILY SUMMARY</b>
 
 <b>Trades:</b> {trades}
 <b>Wins:</b> {wins} | <b>Losses:</b> {losses}
@@ -107,7 +108,7 @@ class TelegramNotifier:
     def notify_error(self, error_msg: str) -> bool:
         """Send error notification."""
         msg = f"""
-⚠️ <b>ICT V10.9 | ERROR</b>
+⚠️ <b>ICT V10.10 | ERROR</b>
 
 {error_msg}
 
@@ -115,10 +116,46 @@ class TelegramNotifier:
 """
         return self.send(msg.strip())
 
+    def notify_next_day_outlook(
+        self,
+        symbol: str,
+        conviction: str,
+        volume_context: str,
+        pivot: float,
+        tc: float,
+        bc: float,
+        cpr_width: float,
+        cpr_context: str,
+        r1: float,
+        s1: float,
+        atr_5d: float,
+        prior_range: float,
+        prior_range_pct: float,
+        today_high: float,
+        today_low: float,
+        today_close: float,
+        next_date: str,
+    ) -> bool:
+        """Send next-day outlook: conviction, volume, CPR, ATR, key levels."""
+        fmt = ",.2f"
+
+        msg = f"""📊 <b>NEXT DAY OUTLOOK — {symbol} | {next_date}</b>
+
+<b>{html.escape(conviction)}</b>
+{html.escape(volume_context)}
+
+📐 Pivot: {pivot:{fmt}}  |  TC: {tc:{fmt}}  |  BC: {bc:{fmt}}
+Width: {cpr_width:.2f} pts ({html.escape(cpr_context)})
+R1: {r1:{fmt}}  |  S1: {s1:{fmt}}
+
+📈 ATR: {atr_5d:.1f} pts  |  Prior Day: {prior_range:.2f} ({prior_range_pct:.0f}%)
+🎯 H={today_high:{fmt}}  L={today_low:{fmt}}  C={today_close:{fmt}}"""
+        return self.send(msg.strip())
+
     def notify_status(self, status: str) -> bool:
         """Send status update."""
         msg = f"""
-ℹ️ <b>ICT V10.9 | STATUS</b>
+ℹ️ <b>ICT V10.10 | STATUS</b>
 
 {status}
 
@@ -191,6 +228,11 @@ def notify_daily_summary(trades: int, wins: int, losses: int,
 def notify_error(error_msg: str) -> bool:
     """Convenience function for error notification."""
     return get_notifier().notify_error(error_msg)
+
+
+def notify_next_day_outlook(**kwargs) -> bool:
+    """Convenience function for next-day outlook notification."""
+    return get_notifier().notify_next_day_outlook(**kwargs)
 
 
 def notify_status(status: str) -> bool:

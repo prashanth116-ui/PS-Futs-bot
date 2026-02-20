@@ -34,7 +34,7 @@ from runners.run_v10_equity import run_session_v10_equity
 from runners.tradovate_client import TradovateClient, create_client
 from runners.order_manager import OrderManager
 from runners.risk_manager import RiskManager, create_default_risk_manager
-from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status
+from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_next_day_outlook
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -1079,6 +1079,155 @@ class LiveTrader:
             except Exception:
                 pass  # Don't let Telegram failures break the loop
 
+    def _calculate_next_day_outlook(self):
+        """Calculate and send next-day outlook for each symbol.
+
+        Fetches daily bars, computes CPR, standard pivots, ATR, and
+        sends a Telegram alert per symbol.
+        """
+        from datetime import timedelta
+
+        now = get_est_now()
+        # Next trading day (skip weekends)
+        next_day = now + timedelta(days=1)
+        while next_day.weekday() >= 5:  # 5=Sat, 6=Sun
+            next_day += timedelta(days=1)
+        next_date_str = next_day.strftime('%b %d, %Y')
+
+        # CPR narrow thresholds per symbol family
+        narrow_thresholds = {
+            'ES': 5.0, 'MES': 5.0, 'SPY': 1.0,
+            'NQ': 15.0, 'MNQ': 15.0, 'QQQ': 3.0,
+        }
+
+        # Only ES outlook for now (NQ to be enabled later)
+        outlook_symbols = [s for s in self.symbols if s in ('ES', 'MES')]
+        if not outlook_symbols:
+            return
+
+        for symbol in outlook_symbols[:1]:  # One alert (ES or MES, not both)
+            try:
+                # Fetch last 15 daily bars
+                daily_bars = fetch_futures_bars(symbol, interval='1d', n_bars=15, timeout=30)
+                if not daily_bars or len(daily_bars) < 2:
+                    log(f"  [OUTLOOK] Not enough daily data for {symbol}")
+                    continue
+
+                # Today = last bar (use today's H/L/C for tomorrow's CPR)
+                today_bar = daily_bars[-1]
+
+                # CPR for next day uses today's H/L/C
+                pivot = (today_bar.high + today_bar.low + today_bar.close) / 3
+                bc = (today_bar.high + today_bar.low) / 2
+                tc = (2 * pivot) - bc
+                cpr_width = abs(tc - bc)
+
+                # R1/S1 for next day
+                r1 = (2 * pivot) - today_bar.low
+                s1 = (2 * pivot) - today_bar.high
+
+                # ATR (5-day) and prior day range
+                ranges = [b.high - b.low for b in daily_bars]
+                atr_5d = sum(ranges[-5:]) / min(5, len(ranges[-5:])) if len(ranges) >= 1 else 0
+                prior_range = today_bar.high - today_bar.low
+                prior_range_pct = (prior_range / atr_5d * 100) if atr_5d > 0 else 0
+
+                # Narrow CPR check
+                threshold = narrow_thresholds.get(symbol, 5.0)
+                is_narrow = cpr_width < threshold
+
+                # CPR context
+                if is_narrow:
+                    if prior_range_pct < 80:
+                        cpr_context = f"NARROW -- coiling ({prior_range_pct:.0f}% ATR prior day)"
+                    else:
+                        cpr_context = f"NARROW -- prior day expanded ({prior_range_pct:.0f}% ATR)"
+                else:
+                    cpr_context = "WIDE -- expect range/chop"
+
+                # Bias signals
+                bearish_bias = today_bar.close < pivot
+                bullish_bias = today_bar.close > pivot
+
+                # Close position
+                close_pct = (today_bar.close - today_bar.low) / prior_range * 100 if prior_range > 0 else 50
+                weak_close = close_pct < 25
+                strong_close = close_pct >= 75
+
+                # Volume vs 5-day average
+                volumes = [b.volume for b in daily_bars if b.volume > 0]
+                if len(volumes) >= 5:
+                    avg_vol = sum(volumes[-5:]) / 5
+                    today_vol = today_bar.volume
+                    vol_ratio = today_vol / avg_vol if avg_vol > 0 else 1.0
+                    if vol_ratio >= 1.2:
+                        volume_context = f"Vol: {today_vol/1e6:.1f}M (above avg -- confirms move)"
+                    elif vol_ratio <= 0.8:
+                        volume_context = f"Vol: {today_vol/1e6:.1f}M (below avg -- weak conviction)"
+                    else:
+                        volume_context = f"Vol: {today_vol/1e6:.1f}M (avg)"
+                    high_volume = vol_ratio >= 1.2
+                else:
+                    volume_context = "Vol: n/a"
+                    high_volume = False
+
+                # Conviction summary
+                if bearish_bias:
+                    signals = []
+                    if weak_close:
+                        signals.append("weak close")
+                    if is_narrow:
+                        signals.append("narrow CPR")
+                    if high_volume:
+                        signals.append("high volume")
+                    if len(signals) >= 2:
+                        conviction = f"HIGH CONVICTION BEARISH -- {' + '.join(signals)}"
+                    elif signals:
+                        conviction = f"LEAN BEARISH -- bias + {signals[0]}"
+                    elif strong_close:
+                        conviction = "MIXED -- bearish bias vs strong close"
+                    else:
+                        conviction = "LEAN BEARISH -- bias bearish"
+                elif bullish_bias:
+                    signals = []
+                    if strong_close:
+                        signals.append("strong close")
+                    if is_narrow:
+                        signals.append("narrow CPR")
+                    if high_volume:
+                        signals.append("high volume")
+                    if len(signals) >= 2:
+                        conviction = f"HIGH CONVICTION BULLISH -- {' + '.join(signals)}"
+                    elif signals:
+                        conviction = f"LEAN BULLISH -- bias + {signals[0]}"
+                    elif weak_close:
+                        conviction = "MIXED -- bullish bias vs weak close"
+                    else:
+                        conviction = "LEAN BULLISH -- bias bullish"
+                else:
+                    conviction = "NEUTRAL -- close at pivot, wait for direction"
+
+                log(f"\n  [OUTLOOK] {symbol}: Pivot={pivot:.2f} CPR={cpr_width:.2f} ATR={atr_5d:.1f}")
+
+                notify_next_day_outlook(
+                    symbol=symbol,
+                    conviction=conviction,
+                    volume_context=volume_context,
+                    pivot=pivot, tc=tc, bc=bc, cpr_width=cpr_width,
+                    cpr_context=cpr_context,
+                    r1=r1, s1=s1,
+                    atr_5d=atr_5d,
+                    prior_range=prior_range,
+                    prior_range_pct=prior_range_pct,
+                    today_high=today_bar.high,
+                    today_low=today_bar.low,
+                    today_close=today_bar.close,
+                    next_date=next_date_str,
+                )
+
+            except Exception as e:
+                log(f"  [OUTLOOK] Error for {symbol}: {e}")
+
     def _print_summary(self):
         """Print end-of-session summary."""
         print("\n" + "=" * 70)
@@ -1128,6 +1277,12 @@ class LiveTrader:
                 total_pnl=risk_summary['daily_pnl'],
                 symbols_traded=self.symbols,
             )
+
+        # Send next-day outlook after daily summary
+        try:
+            self._calculate_next_day_outlook()
+        except Exception as e:
+            log(f"  [OUTLOOK] Error calculating outlook: {e}")
 
         print("=" * 70)
 
