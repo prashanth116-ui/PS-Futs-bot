@@ -148,7 +148,33 @@ Lowered T1 exit from 4R to 3R and trail activation from 8R to 6R.
 
 **Why it works**: Lower 3R T1 locks profit before most pullbacks. Narrower gap between T1 (3R) and trail activation (6R) means fewer trades get caught in the dead zone where they gave back gains.
 
+### EOD Next-Day Outlook Alert (Feb 20, 2026)
+Telegram alert sent at market close (ES only, NQ to be enabled later).
+
+**Conviction scoring** synthesizes 4 signals into one line:
+| Signal | Bearish | Bullish |
+|--------|---------|---------|
+| Pivot Bias | Close < next day pivot | Close > next day pivot |
+| Close Position | Lower quartile (<25%) | Upper quartile (>=75%) |
+| CPR Width | Narrow (<5 pts ES) | Narrow (<5 pts ES) |
+| Volume | Above 5-day avg (>=1.2x) | Above 5-day avg (>=1.2x) |
+
+**Conviction levels**: 2+ signals = HIGH CONVICTION, 1 signal = LEAN, conflicting = MIXED
+
+**CPR context**: Narrow CPR + prior day <80% ATR = "coiling" (breakout likely). Narrow + expanded prior day = less reliable.
+
+**Alert contents**:
+- Conviction summary (HIGH/LEAN/MIXED + direction + reasons)
+- Volume vs 5-day average (confirms/denies move)
+- CPR: Pivot, TC, BC, width with coiling context
+- R1/S1 pivot levels
+- 5-day ATR + prior day range as % of ATR
+- Key levels: prior day H/L/C
+
+**Implementation**: `_calculate_next_day_outlook()` in `LiveTrader`, called from `_print_summary()` after daily summary. Uses `fetch_futures_bars(symbol, interval='1d', n_bars=15)` for daily data.
+
 ### Strategy Features
+- **EOD Next-Day Outlook**: Conviction-scored Telegram alert with CPR, pivots, ATR, volume (ES only)
 - **Direction-Aware Circuit Breaker (V10.10)**: 3 losses/direction/day (short losses don't block longs)
 - **Entry Cap Fix (V10.10)**: Removed lifetime entries_taken counter; only concurrent open positions limited
 - **Equity FVG Date Filter (V10.10)**: Skip stale FVGs from previous sessions
@@ -396,12 +422,12 @@ sudo systemctl stop paper-trading
 - Auto-restarts on crash (up to 5 times per day)
 - Graceful shutdown at market close (4:30 PM ET)
 - Skips weekends automatically
-- Telegram alerts: entry/exit events + hourly heartbeat + daily summary
+- Telegram alerts: entry/exit events + hourly heartbeat + daily summary + EOD next-day outlook
 
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity - **+$350k/12d** |
+| V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity + **EOD outlook alert** - **+$350k/12d** |
 | V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
 | V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |
 | V10.7 | Dynamic sizing (1st:3cts, 2nd+:2cts) + ADX>=11 + 3 trades/dir + FVG mitigation fix |
