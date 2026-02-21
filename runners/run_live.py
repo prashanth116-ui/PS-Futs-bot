@@ -291,7 +291,7 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.10 LIVE TRADER - Combined Futures + Equities")
+        print("V10.11 LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.futures_symbols:
@@ -1322,7 +1322,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print("Starting V10.10 Live Trader...")
+    print("Starting V10.11 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:

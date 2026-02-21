@@ -1134,7 +1134,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V10 (Quad Entry Mode)')
+    print('Strategy: ICT FVG V10.11 (Quad Entry Mode)')
     print(f'  - Entry Type A (Creation): {"ENABLED" if enable_creation else "DISABLED"}')
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:

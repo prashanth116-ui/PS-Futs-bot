@@ -51,7 +51,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print(f'Strategy: V10.7 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
+    print(f'Strategy: V10.11 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: YES')
     print(f'  - Min risk: {min_risk_pts} pts')
