@@ -1149,10 +1149,13 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print(f'  - Max open trades: {max_open_trades}')
     # Max BOS risk in points (same for micro and mini contracts)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
+    # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only)
+    max_retrace_risk_pts = 8.0 if symbol in ['ES', 'MES'] else None
     # V10.6: Per-symbol BOS control - ES/MES disabled, NQ/MNQ enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
+    print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
     print(f'  - BOS: {"OFF" if disable_bos else "ON (1 loss limit)"}')
     print(f'  - T1 Exit: {t1_r}R FIXED (Hybrid)' if t1_fixed_4r else '  - T1 Exit: Structure Trail')
     print(f'  - Trail Activation: {trail_r}R')
@@ -1185,6 +1188,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         disable_bos_retrace=disable_bos,
         bos_daily_loss_limit=1,
         high_displacement_override=3.0,
+        max_retrace_risk_pts=max_retrace_risk_pts,
     )
 
     total_pnl = 0
