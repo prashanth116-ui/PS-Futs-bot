@@ -170,7 +170,7 @@ def run_paper_trading():
 def main():
     """Main entry point with auto-restart logic."""
     log("=" * 60)
-    log("Paper Trading Wrapper Started")
+    log("Paper Trading Wrapper V10.11 Started")
     log("=" * 60)
 
     # Check if it's a weekday
