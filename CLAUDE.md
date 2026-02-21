@@ -16,17 +16,17 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.10 (Entry & Circuit Breaker Fixes) - Feb 17, 2026
+## Current Strategy: V10.11 (Retrace Risk Cap) - Feb 20, 2026
 
 ### Supported Instruments
-| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | BOS Enabled |
-|--------|------|------------|----------|--------------|-------------|
-| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **OFF** |
-| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | ON (loss limit) |
-| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **OFF** |
-| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | ON (loss limit) |
-| SPY | S&P 500 ETF | per share | $0.30 | - | **OFF** |
-| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | ON (loss limit) |
+| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled |
+|--------|------|------------|----------|--------------|------------------|-------------|
+| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** |
+| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | None | ON (loss limit) |
+| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** |
+| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | None | ON (loss limit) |
+| SPY | S&P 500 ETF | per share | $0.30 | - | - | **OFF** |
+| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | - | ON (loss limit) |
 
 **Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
@@ -47,6 +47,22 @@ Per-symbol BOS optimization with daily loss limit:
 | ES BOS ON | 135 | 111 | 24 | 82.2% | +$118,406 |
 
 BOS ON added 15 BOS trades — net -$6,475 drag. BOS OFF confirmed superior for ES.
+
+### V10.11 Retrace Risk Cap (Feb 20, 2026)
+When retrace entries (B1/B2) exceed `max_retrace_risk_pts`, force contracts to 1 instead of skipping entirely. Preserves optionality while capping damage on oversized retraces.
+
+- **ES/MES**: Cap at 8.0 pts — retrace risk above this → 1 contract (instead of 3 or 2)
+- **NQ/MNQ**: No cap — NQ retraces with wide risk catch big trend moves and win big
+
+**15-Day A/B Validation (ES):**
+| Config | Trades | WR | Total P/L | Retrace P/L |
+|--------|--------|-----|-----------|-------------|
+| **WITH cap (8.0)** | **154** | **86.4%** | **$+145,825** | **$+963** |
+| WITHOUT cap | 154 | 86.4% | $+144,613 | $-250 |
+
+The 24.25pt intraday retrace loss was cut from -$2,425 to -$1,212.50 (1 contract instead of 2).
+
+**Why NQ has no cap**: 15-day A/B showed cap costs -$18,590 on NQ — 5 of 6 retraces exceeded 20pts, but 3 were big winners (one Feb 4 trade: +$21,540 uncapped vs +$3,600 capped).
 
 ### V10.10 Bug Fixes (Feb 17, 2026)
 
@@ -174,6 +190,7 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 **Implementation**: `_calculate_next_day_outlook()` in `LiveTrader`, called from `_print_summary()` after daily summary. Uses `fetch_futures_bars(symbol, interval='1d', n_bars=15)` for daily data.
 
 ### Strategy Features
+- **Retrace Risk Cap (V10.11)**: ES/MES retrace risk > 8pts → force 1 contract (NQ/MNQ uncapped)
 - **EOD Next-Day Outlook**: Conviction-scored Telegram alert with CPR, pivots, ATR, volume (ES only)
 - **Direction-Aware Circuit Breaker (V10.10)**: 3 losses/direction/day (short losses don't block longs)
 - **Entry Cap Fix (V10.10)**: Removed lifetime entries_taken counter; only concurrent open positions limited
@@ -196,6 +213,7 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 | Min FVG | 5 ticks | Filter tiny gaps |
 | Min Risk | ES:1.5, NQ:6.0 pts | Skip small FVGs with tight targets |
 | **Max BOS Risk** | **ES:8, NQ:20 pts** | **Cap oversized BOS entries** |
+| **Max Retrace Risk** | **ES/MES:8 pts** | **V10.11: Force 1 ct on oversized retrace (NQ/MNQ uncapped)** |
 | Displacement | 1.0x avg body | Lower threshold for more setups |
 | **3x Displacement** | **>= 3.0x avg body** | **Reduce ADX to >= 10 for high-momentum Creation entries** |
 | HTF Bias | EMA 20/50 | Trade with trend |
@@ -241,7 +259,9 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 | Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights (V10.10)
+### Key Insights (V10.11)
+- ES retrace risk cap (8pts) cuts oversized retrace losses by ~50% with 1-ct sizing
+- NQ retrace cap is counterproductive — wide retraces catch big trends (+$18.6k difference uncapped)
 - Direction-aware circuit breaker prevents short losses from blocking long entries (and vice versa)
 - Removing entries_taken lifetime cap allows more trades to fire after early positions close
 - ES BOS OFF validated: 15 BOS trades over 12 days were net -$6,475 drag
@@ -427,6 +447,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.11 | Retrace risk cap: ES/MES >8pts → 1 ct (NQ uncapped) - **+$1.2k ES, preserves NQ upside** |
 | V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity + **EOD outlook alert** - **+$350k/12d** |
 | V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
 | V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |

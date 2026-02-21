@@ -19,6 +19,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
     # V10.4: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
+    # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only — NQ retraces win big)
+    max_retrace_risk_pts = 8.0 if symbol in ['ES', 'MES'] else None
 
     print(f'Fetching {symbol} 3m data for {days}-day backtest...')
     # Fetch enough bars for 30+ trading days
@@ -54,6 +56,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     print('  - Morning only filter: YES')
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
+    print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
     print(f'  - T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R')
     print('='*80)
     print()
@@ -111,6 +114,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
             disable_bos_retrace=disable_bos,      # V10.6: ES/MES BOS off
             bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
+            max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
         )
 
         # Tally results

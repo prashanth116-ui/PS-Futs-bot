@@ -35,7 +35,7 @@ def calculate_ema(closes, period):
     return ema
 
 
-def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50):
+def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50, losses_only=False):
     """Plot today's trades with V10.7 Quad Entry strategy. Supports futures and equities."""
 
     is_equity = symbol.upper() in ['SPY', 'QQQ']
@@ -48,6 +48,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
         tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
     min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
     max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
+    max_retrace_risk = 8.0 if symbol in ['ES', 'MES'] else None
     # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
     disable_bos = symbol in ['ES', 'MES']
 
@@ -111,7 +112,11 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             high_displacement_override=3.0,
             disable_bos_retrace=disable_bos,
             bos_daily_loss_limit=1,
+            max_retrace_risk_pts=max_retrace_risk,  # V10.11: Reduce retrace cts if high risk
         )
+
+    if losses_only:
+        all_results = [r for r in all_results if r['total_dollars'] < 0]
 
     if not all_results:
         print('No trades found')
@@ -402,4 +407,5 @@ if __name__ == '__main__':
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     interval = sys.argv[3] if len(sys.argv) > 3 else '3m'
     risk = int(sys.argv[4]) if len(sys.argv) > 4 else 50
-    plot_v10(symbol=symbol, contracts=contracts, interval=interval, risk_per_trade=risk)
+    losses = '--losses' in sys.argv
+    plot_v10(symbol=symbol, contracts=contracts, interval=interval, risk_per_trade=risk, losses_only=losses)

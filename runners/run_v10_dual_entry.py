@@ -329,6 +329,8 @@ def run_session_v10(
     symbol='ES',         # Symbol for PM cutoff logic
     # V10.4 risk caps for BOS entries
     max_bos_risk_pts=None,  # Max risk for BOS entries (ES: 8, NQ: 20)
+    # V10.11: Reduce contracts for high-risk retrace entries
+    max_retrace_risk_pts=None,  # If retrace risk > this, force 1 contract (ES: 8, NQ: 20)
     # V10.5 high displacement override
     high_displacement_override=3.0,  # Skip ADX check if displacement >= 3x avg body
     # V10.6 BOS controls
@@ -987,6 +989,10 @@ def run_session_v10(
             # 0 trades open: 3 contracts, 1+ trades open: 2 contracts
             # This keeps max exposure at 6 contracts (vs 9 with fixed 3)
             trade_contracts = contracts if current_open == 0 else max(2, contracts - 1)
+
+            # V10.11: Reduce to 1 contract if retrace entry exceeds max risk
+            if entry_type in ('RETRACEMENT', 'INTRADAY_RETRACE') and max_retrace_risk_pts and risk > max_retrace_risk_pts:
+                trade_contracts = 1
 
             target_4r = entry_price + (t1_r_target * risk) if is_long else entry_price - (t1_r_target * risk)
             target_8r = entry_price + (trail_r_trigger * risk) if is_long else entry_price - (trail_r_trigger * risk)

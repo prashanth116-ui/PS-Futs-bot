@@ -169,6 +169,7 @@ class LiveTrader:
             'tick_value': 12.50,
             'min_risk': 1.5,
             'max_bos_risk': 8.0,
+            'max_retrace_risk': 8.0,
             'contracts': 3,
             'type': 'futures',
         },
@@ -178,6 +179,7 @@ class LiveTrader:
             'tick_value': 5.00,
             'min_risk': 6.0,
             'max_bos_risk': 20.0,
+            'max_retrace_risk': None,
             'contracts': 3,
             'type': 'futures',
         },
@@ -187,6 +189,7 @@ class LiveTrader:
             'tick_value': 1.25,
             'min_risk': 1.5,
             'max_bos_risk': 8.0,
+            'max_retrace_risk': 8.0,
             'contracts': 3,
             'type': 'futures',
         },
@@ -196,6 +199,7 @@ class LiveTrader:
             'tick_value': 0.50,
             'min_risk': 6.0,
             'max_bos_risk': 20.0,
+            'max_retrace_risk': None,
             'contracts': 3,
             'type': 'futures',
         },
@@ -490,6 +494,7 @@ class LiveTrader:
             midday_cutoff=True,
             pm_cutoff_nq=True,
             max_bos_risk_pts=config['max_bos_risk'],
+            max_retrace_risk_pts=config['max_retrace_risk'],  # V10.11: Reduce retrace cts if high risk
             symbol=symbol,
             # V10.10 BOS controls
             disable_bos_retrace=disable_bos,  # ES/MES: off, NQ/MNQ: on
