@@ -190,6 +190,7 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 **Implementation**: `_calculate_next_day_outlook()` in `LiveTrader`, called from `_print_summary()` after daily summary. Uses `fetch_futures_bars(symbol, interval='1d', n_bars=15)` for daily data.
 
 ### Strategy Features
+- **Local Bar Storage**: Saves 3m bars to CSV daily, merges with live TradingView data for 30+ day backtests (90-day retention)
 - **Retrace Risk Cap (V10.11)**: ES/MES retrace risk > 8pts → force 1 contract (NQ/MNQ uncapped)
 - **EOD Next-Day Outlook**: Conviction-scored Telegram alert with CPR, pivots, ATR, volume (ES only)
 - **Direction-Aware Circuit Breaker (V10.10)**: 3 losses/direction/day (short losses don't block longs)
@@ -302,6 +303,16 @@ python -m runners.run_v10_equity SPY 500 --t1-r=3 --trail-r=6
 python -m runners.analyze_win_loss ES
 ```
 
+### Bar Storage
+```bash
+# Seed local storage with current TradingView data (run once)
+python -m runners.save_bars ES NQ MES MNQ
+
+# Bars auto-save at EOD on the droplet via run_live.py
+# Stored at data/bars/{symbol}/YYYY-MM-DD.csv (90-day retention)
+# Multi-day backtest automatically merges local + live bars
+```
+
 ### Plotting
 ```bash
 # Plot V10 today (futures)
@@ -359,7 +370,9 @@ python -m runners.run_replay
 | `runners/run_live.py` | **Combined live trader** - futures + equities |
 | `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ/MES/MNQ) |
 | `runners/run_v10_equity.py` | V10 Quad Entry strategy - equities (SPY/QQQ) |
-| `runners/backtest_v10_multiday.py` | V10 multi-day backtest |
+| `runners/bar_storage.py` | Local bar save/load/merge (90-day retention) |
+| `runners/save_bars.py` | CLI backfill script for bar storage |
+| `runners/backtest_v10_multiday.py` | V10 multi-day backtest (uses local + live bars) |
 | `runners/plot_v10.py` | V10 trade visualization |
 | `runners/plot_v10_date.py` | V10 date-specific plotting |
 | `runners/analyze_win_loss.py` | Win/loss day analysis |
