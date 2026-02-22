@@ -6,6 +6,7 @@ sys.path.insert(0, '.')
 
 from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
+from runners.bar_storage import load_bars_with_history
 from runners.run_v10_dual_entry import run_session_v10
 
 
@@ -22,9 +23,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only — NQ retraces win big)
     max_retrace_risk_pts = 8.0 if symbol in ['ES', 'MES'] else None
 
-    print(f'Fetching {symbol} 3m data for {days}-day backtest...')
-    # Fetch enough bars for 30+ trading days
-    all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=10000)
+    print(f'Loading {symbol} 3m data for {days}-day backtest (local + live)...')
+    # Load local stored bars + live TradingView bars for deeper history
+    all_bars = load_bars_with_history(symbol=symbol, interval='3m', n_bars=10000)
 
     if not all_bars:
         print('No data available')

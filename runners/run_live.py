@@ -35,6 +35,7 @@ from runners.tradovate_client import TradovateClient, create_client
 from runners.order_manager import OrderManager
 from runners.risk_manager import RiskManager, create_default_risk_manager
 from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_next_day_outlook
+from runners.bar_storage import save_daily_bars
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -1288,6 +1289,18 @@ class LiveTrader:
             self._calculate_next_day_outlook()
         except Exception as e:
             log(f"  [OUTLOOK] Error calculating outlook: {e}")
+
+        # Save today's bars to local storage for deeper backtests
+        valid_futures = ['ES', 'NQ', 'MES', 'MNQ']
+        for sym in self.symbols:
+            if sym in valid_futures:
+                try:
+                    bars = fetch_futures_bars(sym, interval='3m', n_bars=500, timeout=30)
+                    created = save_daily_bars(sym, bars)
+                    if created:
+                        log(f"  [BARS] Saved {len(created)} CSV(s) for {sym}")
+                except Exception as e:
+                    log(f"  [BARS] Error saving {sym} bars: {e}")
 
         print("=" * 70)
 
