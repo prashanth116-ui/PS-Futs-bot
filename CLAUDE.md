@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.11 (Retrace Risk Cap) - Feb 20, 2026
+## Current Strategy: V10.11 (Retrace Risk Cap + Startup Fix) - Feb 23, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled |
@@ -189,7 +189,19 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 
 **Implementation**: `_calculate_next_day_outlook()` in `LiveTrader`, called from `_print_summary()` after daily summary. Uses `fetch_futures_bars(symbol, interval='1d', n_bars=15)` for daily data.
 
+### V10.11 Startup Data Lag Fix (Feb 23, 2026)
+Live bot had a 57-minute data lag at market open — waited for 20 session bars (20 × 3min = 60min) before trading because it discarded yesterday's data.
+
+**Root cause**: `_scan_futures_symbol()` and `_scan_equity_symbol()` used `fetch_futures_bars()` (live only) and filtered to today's session bars. At 04:00 ET, session bars = 0. Indicators (EMA 20/50, ADX 14) couldn't calculate until 20+ bars accumulated.
+
+**Fix**: Replaced `fetch_futures_bars()` with `load_bars_with_history()` which merges local stored bars (yesterday's 130+ bars from CSV) with today's live data. Lowered session bar gate from 20 to 1.
+
+**Result**: Bot starts trading at 04:03 ET (first candle close) instead of ~05:00 ET. On Feb 23, this would have captured 3 early winning trades worth +$1,537.50 that the old bot missed.
+
+**Note**: Backtest and live bot will still diverge due to real-time vs post-session bar construction, but the 57-min blind spot is eliminated.
+
 ### Strategy Features
+- **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
 - **Local Bar Storage**: Saves 3m bars to CSV daily, merges with live TradingView data for 30+ day backtests (90-day retention)
 - **Retrace Risk Cap (V10.11)**: ES/MES retrace risk > 8pts → force 1 contract (NQ/MNQ uncapped)
 - **EOD Next-Day Outlook**: Conviction-scored Telegram alert with CPR, pivots, ATR, volume (ES only)
@@ -261,6 +273,9 @@ Telegram alert sent at market close (ES only, NQ to be enabled later).
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
 ### Key Insights (V10.11)
+- Live bot startup fix eliminates 57-min data lag — trades from 04:03 instead of ~05:00
+- Feb 23 analysis: old bot missed 3 early winners (+$1,537.50) due to data lag
+- Backtest vs live will still diverge (real-time vs post-session bars) but gap is much smaller
 - ES retrace risk cap (8pts) cuts oversized retrace losses by ~50% with 1-ct sizing
 - NQ retrace cap is counterproductive — wide retraces catch big trends (+$18.6k difference uncapped)
 - Direction-aware circuit breaker prevents short losses from blocking long entries (and vice versa)
@@ -460,7 +475,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
-| V10.11 | Retrace risk cap: ES/MES >8pts → 1 ct (NQ uncapped) - **+$1.2k ES, preserves NQ upside** |
+| V10.11 | Retrace risk cap: ES/MES >8pts → 1 ct (NQ uncapped) + **startup data lag fix (57min → instant)** |
 | V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity + **EOD outlook alert** - **+$350k/12d** |
 | V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
 | V10.8 | Hybrid filter system (2 mandatory + 2/3 optional) - **+$90k/30d, +71% trades** |
