@@ -158,6 +158,18 @@ def get_session_name(timestamp: datetime) -> str:
         return "OVERNIGHT"
 
 
+def is_midday_cutoff(timestamp: datetime) -> bool:
+    """Check if timestamp is during midday cutoff (12:00-14:00 ET)."""
+    bar_time = get_et_time(timestamp)
+    return dt_time(12, 0) <= bar_time < dt_time(14, 0)
+
+
+def is_pm_cutoff(timestamp: datetime) -> bool:
+    """Check if timestamp is after PM cutoff (14:00 ET)."""
+    bar_time = get_et_time(timestamp)
+    return bar_time >= dt_time(14, 0)
+
+
 def should_trade(
     timestamp: datetime,
     allow_lunch: bool = False,

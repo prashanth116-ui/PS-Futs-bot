@@ -1,95 +1,105 @@
 # ICT Liquidity Sweep Strategy Configuration
-#
-# Entry Logic:
-# 1. Liquidity Sweep - Price sweeps swing high/low (stop hunt)
-# 2. Displacement - Strong rejection candle (2x+ avg body)
-# 3. FVG Forms - Fair Value Gap created during displacement
-# 4. FVG Mitigation - Price retraces into FVG zone
-# 5. LTF MSS Confirms - Market Structure Shift on 1m
+# Single source of truth. Base config + per-symbol overrides.
 
-# ===== INSTRUMENT SETTINGS =====
-symbol: "ES"
-tick_size: 0.25
-tick_value: 12.50  # ES=$12.50, NQ=$5.00, MES=$1.25, MNQ=$0.50
+timeframe: "5m"
+
+# Liquidity / Sweep
+swing_lookback: 20
+swing_strength: 3
+min_sweep_ticks: 2
+max_sweep_ticks: 70
+sweep_check_bars: 3
+
+# Displacement
+displacement_multiplier: 1.35
+avg_body_lookback: 20
+high_displacement_override: 3.0
+
+# FVG
+min_fvg_ticks: 5
+min_fvg_ticks_mtf: 3          # Min FVG size on 3m (smaller gaps valid on lower TF)
+max_fvg_age_bars: 50
+max_fvg_wait_bars: 15
+use_mtf_fvg: true             # Also search 3m bars for FVGs
+mtf_timeframe: "3m"
+
+# Mitigation
+mitigation_retry_bars: 3      # Bars to retry after first FVG touch before consuming
+
+# Stop / Risk
+stop_buffer_ticks: 2
+min_risk_ticks: 5
+max_risk_ticks: 40
+
+# Targets
+t1_r: 3
+trail_r: 6
+t2_buffer_ticks: 4
+runner_buffer_ticks: 6
+
+# Session
+session_start: "08:00"
+session_end: "16:00"
+allow_lunch: false
+
+# Risk management
+max_daily_trades: 5
+max_daily_losses: 3
+loss_cooldown_minutes: 0
+
+# Position sizing
 contracts: 3
+contracts_subsequent: 2
 
-# ===== TIMEFRAME SETTINGS =====
-timeframes:
-  htf: "5m"   # Higher timeframe for setup detection
-  ltf: "1m"   # Lower timeframe for MSS confirmation
+# Hybrid filters
+filters:
+  use_hybrid: true
+  use_di_filter: true
+  min_adx: 11
+  ema_fast: 20
+  ema_slow: 50
 
-# ===== LIQUIDITY DETECTION =====
-liquidity:
-  # Swing point detection
-  swing_lookback: 20        # Bars to search for swing points
-  swing_strength: 3         # Bars on each side to confirm swing
-  max_levels: 5             # Max liquidity levels to track
-
-# ===== SWEEP DETECTION =====
-sweep:
-  min_sweep_ticks: 2        # Minimum ticks beyond swing level
-  max_sweep_ticks: 20       # Maximum sweep depth (too deep = not a sweep)
-  check_bars: 3             # Recent bars to check for sweep
-
-# ===== DISPLACEMENT =====
-displacement:
-  multiplier: 2.0           # Body must be >= 2x average body
-  avg_body_lookback: 20     # Bars to calculate average body
-
-# ===== FVG (Fair Value Gap) =====
-fvg:
-  min_size_ticks:
-    ES: 5                   # Minimum FVG size for ES
-    NQ: 15                  # Minimum FVG size for NQ
-    MES: 5
-    MNQ: 15
-  max_age_bars: 50          # Remove FVGs older than this
-
-# ===== MSS (Market Structure Shift) =====
-mss:
-  lookback: 10              # Bars to find swing for MSS
-  swing_strength: 2         # Bars on each side for LTF swing
-
-# ===== STOP LOSS =====
-stop:
-  buffer_ticks: 2           # Ticks beyond sweep point
-  max_risk_ticks: 40        # Maximum allowed risk in ticks
-
-# ===== TARGETS =====
-targets:
-  t1_r: 3                      # T1 fixed exit at 3R (1 contract)
-  trail_r: 6                   # Structure trail activation at 6R
-  t2_buffer_ticks: 4           # T2 trail buffer from swing
-  runner_buffer_ticks: 6       # Runner trail buffer (wider)
-  use_opposing_liquidity: true
-
-# ===== SESSION FILTER =====
-session:
-  start: "08:00"            # Start at 08:00 UTC to include premarket swing highs
-  end: "16:00"              # Session end (UTC)
-  allow_lunch: false        # Skip 12:00-13:00 lunch lull
-  require_killzone: false   # Only trade NY Open/PM killzones
-
-  # Killzones (for reference)
-  killzones:
-    NY_OPEN:
-      start: "09:30"
-      end: "11:00"
-    NY_PM:
-      start: "13:30"
-      end: "16:00"
-    LONDON:
-      start: "02:00"
-      end: "05:00"
-
-# ===== RISK MANAGEMENT =====
-risk:
-  max_daily_trades: 5       # Maximum trades per day
-  max_daily_losses: 2       # Stop after N losses
-  max_position_size: 3      # Max contracts per trade
-
-# ===== BACKTEST SETTINGS =====
-backtest:
-  days: 14
-  initial_capital: 50000
-  commission_per_contract: 2.50
+# Per-symbol overrides
+symbols:
+  ES:
+    tick_size: 0.25
+    tick_value: 12.50
+    min_fvg_ticks: 3
+    min_risk_ticks: 5
+    max_risk_ticks: 40
+  NQ:
+    tick_size: 0.25
+    tick_value: 5.00
+    min_fvg_ticks: 8
+    min_risk_ticks: 24
+    max_risk_ticks: 160
+    max_sweep_ticks: 300
+    high_displacement_override: 0
+    trail_r: 4
+  MES:
+    tick_size: 0.25
+    tick_value: 1.25
+    min_fvg_ticks: 3
+    min_risk_ticks: 5
+    max_risk_ticks: 40
+  MNQ:
+    tick_size: 0.25
+    tick_value: 0.50
+    min_fvg_ticks: 8
+    min_risk_ticks: 24
+    max_risk_ticks: 160
+    max_sweep_ticks: 300
+    high_displacement_override: 0
+    trail_r: 4
+  SPY:
+    tick_size: 0.01
+    tick_value: 0.01
+    min_fvg_ticks: 20
+    min_risk_ticks: 30
+    max_risk_ticks: 500
+  QQQ:
+    tick_size: 0.01
+    tick_value: 0.01
+    min_fvg_ticks: 40
+    min_risk_ticks: 50
+    max_risk_ticks: 500

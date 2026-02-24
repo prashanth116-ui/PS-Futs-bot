@@ -24,6 +24,7 @@ class FVG:
     size_ticks: float  # Size of gap in ticks
     mitigated: bool = False  # Has price filled the gap?
     mitigation_bar_index: Optional[int] = None
+    consumed: bool = False  # One-shot: True after mitigation attempt (accept or reject)
 
 
 def detect_fvg(
