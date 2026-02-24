@@ -15,6 +15,7 @@ Thumbs.db
 # Credentials - NEVER commit these
 config/.env
 config/tradingview.env
+config/pickmytrade_accounts.json
 .env
 *.pem
 *.key

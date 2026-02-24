@@ -115,13 +115,15 @@ def run_health_check():
         return True, "All checks passed"
 
 
-def run_paper_trading():
+def run_paper_trading(use_webhook=False):
     """Run the paper trading script and capture output."""
     cmd = [
         sys.executable, "-m", "runners.run_live",
         "--paper",
         "--symbols", "ES"
     ]
+    if use_webhook:
+        cmd.append("--webhook")
 
     log_file = get_log_file()
     start_time = datetime.now()
@@ -169,8 +171,10 @@ def run_paper_trading():
 
 def main():
     """Main entry point with auto-restart logic."""
+    use_webhook = "--webhook" in sys.argv
+
     log("=" * 60)
-    log("Paper Trading Wrapper V10.11 Started")
+    log(f"Paper Trading Wrapper V10.11 Started{' (webhook)' if use_webhook else ''}")
     log("=" * 60)
 
     # Check if it's a weekday
@@ -222,7 +226,7 @@ def main():
         log(f"Starting paper trading (attempt {restart_count + 1}/{MAX_RESTARTS_PER_DAY})")
 
         try:
-            exit_code = run_paper_trading()
+            exit_code = run_paper_trading(use_webhook=use_webhook)
 
             if exit_code == 0:
                 log("Paper trading exited normally")
