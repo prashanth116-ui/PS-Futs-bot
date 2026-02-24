@@ -35,7 +35,7 @@ from runners.tradovate_client import TradovateClient, create_client
 from runners.order_manager import OrderManager
 from runners.risk_manager import RiskManager, create_default_risk_manager
 from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_next_day_outlook
-from runners.bar_storage import save_daily_bars
+from runners.bar_storage import save_daily_bars, load_bars_with_history
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -454,8 +454,8 @@ class LiveTrader:
 
         log(f"\n[{get_est_now().strftime('%H:%M:%S')}] Scanning {symbol} (futures)...")
 
-        # Fetch bars with timeout
-        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
+        # Fetch bars with local history merge for instant indicator warmup
+        bars = load_bars_with_history(symbol, interval='3m', n_bars=500)
         if not bars:
             log(f"  No data for {symbol}")
             return
@@ -468,13 +468,13 @@ class LiveTrader:
         rth_end = dt_time(16, 0)
         session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
-        if len(session_bars) < 20:
-            log(f"  Not enough bars for {symbol}: {len(session_bars)}")
+        if len(session_bars) < 1:
+            log(f"  No session bars yet for {symbol}")
             return
 
         current_price = session_bars[-1].close
         self.last_prices[symbol] = current_price
-        log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} bars)")
+        log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
@@ -513,8 +513,8 @@ class LiveTrader:
 
         log(f"\n[{get_est_now().strftime('%H:%M:%S')}] Scanning {symbol} (equity)...")
 
-        # Fetch bars with timeout
-        bars = fetch_futures_bars(symbol, interval='3m', n_bars=500, timeout=30)
+        # Fetch bars with local history merge for instant indicator warmup
+        bars = load_bars_with_history(symbol, interval='3m', n_bars=500)
         if not bars:
             log(f"  No data for {symbol}")
             return
@@ -527,13 +527,13 @@ class LiveTrader:
         rth_end = dt_time(16, 0)
         session_bars = [b for b in today_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
-        if len(session_bars) < 20:
-            log(f"  Not enough bars for {symbol}: {len(session_bars)}")
+        if len(session_bars) < 1:
+            log(f"  No session bars yet for {symbol}")
             return
 
         current_price = session_bars[-1].close
         self.last_prices[symbol] = current_price
-        log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} bars)")
+        log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
         # V10.10: SPY BOS disabled, QQQ BOS enabled with loss limit
         disable_bos = symbol == 'SPY'
