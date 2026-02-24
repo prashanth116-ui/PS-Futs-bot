@@ -1,5 +1,5 @@
 """
-Plot today's trades with V10.11 Quad Entry Mode.
+Plot today's trades with V10.12 Quad Entry Mode.
 
 V10.7 Entry Types:
 - Type A (Creation): Enter when FVG forms with displacement
@@ -112,7 +112,8 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             high_displacement_override=3.0,
             disable_bos_retrace=disable_bos,
             bos_daily_loss_limit=1,
-            max_retrace_risk_pts=max_retrace_risk,  # V10.11: Reduce retrace cts if high risk
+            max_retrace_risk_pts=max_retrace_risk,  # V10.12: Reduce retrace cts if high risk
+            consol_threshold=0.0,  # V10.12: Disabled until A/B validated
         )
 
     if losses_only:
@@ -311,7 +312,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
 
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
     bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
-    ax.set_title(f'{symbol} 3-Minute | {today} | V10.11 Quad Entry Mode\n'
+    ax.set_title(f'{symbol} 3-Minute | {today} | V10.12 Quad Entry Mode\n'
                  f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
@@ -394,7 +395,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
                 verticalalignment='bottom', horizontalalignment='left',
                 fontweight='bold', bbox=rth_props, family='monospace')
 
-    filename = f'backtest_{symbol}_V10.11_{today}.png'
+    filename = f'backtest_{symbol}_V10.12_{today}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()

@@ -130,6 +130,11 @@ class PaperTrade:
     touched_8r: bool = False  # Whether 6R has been touched (gates T2/runner trails)
     trail_active: bool = False  # T1 has been hit
 
+    # Last swing tracking (backtest parity — only accept swings beyond previous)
+    t1_last_swing: float = 0.0
+    t2_last_swing: float = 0.0
+    runner_last_swing: float = 0.0
+
     @property
     def is_long(self) -> bool:
         return self.direction == "LONG"
@@ -500,27 +505,33 @@ class LiveTrader:
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
 
-        # Run V10.10 strategy to get signals
+        # Run V10.12 strategy to get signals (all params explicit for backtest parity)
         results = run_session_v10(
             session_bars,
             bars,
             tick_size=config['tick_size'],
             tick_value=config['tick_value'],
             contracts=config['contracts'],
+            max_open_trades=3,
             min_risk_pts=config['min_risk'],
             enable_creation_entry=True,
             enable_retracement_entry=True,
             enable_bos_entry=True,
-            retracement_morning_only=True,
+            retracement_morning_only=False,  # Backtest parity: allow overnight retrace all day
+            overnight_retrace_min_adx=22,
             t1_fixed_4r=True,
             midday_cutoff=True,
             pm_cutoff_nq=True,
             max_bos_risk_pts=config['max_bos_risk'],
             max_retrace_risk_pts=config['max_retrace_risk'],  # V10.11: Reduce retrace cts if high risk
             symbol=symbol,
+            high_displacement_override=3.0,
             # V10.10 BOS controls
             disable_bos_retrace=disable_bos,  # ES/MES: off, NQ/MNQ: on
             bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
+            # V10.9 R-targets (explicit)
+            t1_r_target=3,
+            trail_r_trigger=6,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
         )
 
@@ -762,9 +773,16 @@ class LiveTrader:
             tick_value=tick_value,
             asset_type=asset_type,
             entry_time=get_est_now(),
+            # Initialize last_swing at entry price (matches backtest)
+            t1_last_swing=entry_price,
+            t2_last_swing=entry_price,
+            runner_last_swing=entry_price,
         )
 
         self.paper_trades[trade_id] = paper_trade
+
+        # Track in risk manager (paper mode parity with live execution)
+        self.risk_manager.record_trade_entry(symbol, contracts)
 
         sizing_note = " (no runner)" if not has_runner else ""
         log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
@@ -803,8 +821,8 @@ class LiveTrader:
             if trade.status != PaperTradeStatus.OPEN:
                 continue
 
-            # Fetch current price
-            bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=10, timeout=15)
+            # Fetch current price (20 bars for swing detection context)
+            bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=20, timeout=15)
             if not bars or len(bars) < 1:
                 continue
 
@@ -819,19 +837,26 @@ class LiveTrader:
             # === STRUCTURE TRAIL UPDATES (before exit checks) ===
 
             # T1 trail: update between 3R and 6R (2-tick buffer)
+            # Match backtest: check single bar at i-2 with last_swing gate
             if trade.t1_hit and not trade.touched_8r and len(bars) >= 5:
                 old_t1_trail = trade.t1_trail_stop
-                for i in range(len(bars) - 4, len(bars) - 1):
-                    if trade.is_long:
-                        if is_swing_low(bars, i, 2):
-                            new_trail = bars[i].low - (2 * trade.tick_size)
+                check_idx = len(bars) - 3  # Equivalent to backtest's i-2
+                if trade.is_long:
+                    if is_swing_low(bars, check_idx, 2):
+                        swing = bars[check_idx].low
+                        if swing > trade.t1_last_swing:
+                            new_trail = swing - (2 * trade.tick_size)
                             if new_trail > trade.t1_trail_stop:
                                 trade.t1_trail_stop = new_trail
-                    else:
-                        if is_swing_high(bars, i, 2):
-                            new_trail = bars[i].high + (2 * trade.tick_size)
+                                trade.t1_last_swing = swing
+                else:
+                    if is_swing_high(bars, check_idx, 2):
+                        swing = bars[check_idx].high
+                        if swing < trade.t1_last_swing:
+                            new_trail = swing + (2 * trade.tick_size)
                             if new_trail < trade.t1_trail_stop:
                                 trade.t1_trail_stop = new_trail
+                                trade.t1_last_swing = swing
                 # Webhook: update broker stop to new t1 trail
                 if self.webhook and trade.asset_type == 'futures' and trade.t1_trail_stop != old_t1_trail:
                     try:
@@ -844,19 +869,26 @@ class LiveTrader:
                         log(f"    [WEBHOOK] T1 trail update failed: {e}")
 
             # T2 trail: update after 6R touch (4-tick buffer)
+            # Match backtest: check single bar at i-2 with last_swing gate
             if trade.touched_8r and not trade.t2_hit and len(bars) >= 5:
                 old_t2_trail = trade.t2_trail_stop
-                for i in range(len(bars) - 4, len(bars) - 1):
-                    if trade.is_long:
-                        if is_swing_low(bars, i, 2):
-                            new_trail = bars[i].low - (4 * trade.tick_size)
+                check_idx = len(bars) - 3  # Equivalent to backtest's i-2
+                if trade.is_long:
+                    if is_swing_low(bars, check_idx, 2):
+                        swing = bars[check_idx].low
+                        if swing > trade.t2_last_swing:
+                            new_trail = swing - (4 * trade.tick_size)
                             if new_trail > trade.t2_trail_stop:
                                 trade.t2_trail_stop = new_trail
-                    else:
-                        if is_swing_high(bars, i, 2):
-                            new_trail = bars[i].high + (4 * trade.tick_size)
+                                trade.t2_last_swing = swing
+                else:
+                    if is_swing_high(bars, check_idx, 2):
+                        swing = bars[check_idx].high
+                        if swing < trade.t2_last_swing:
+                            new_trail = swing + (4 * trade.tick_size)
                             if new_trail < trade.t2_trail_stop:
                                 trade.t2_trail_stop = new_trail
+                                trade.t2_last_swing = swing
                 # Webhook: set broker stop to tighter T2 trail (covers T2+Runner)
                 if self.webhook and trade.asset_type == 'futures' and trade.t2_trail_stop != old_t2_trail:
                     try:
@@ -869,19 +901,26 @@ class LiveTrader:
                         log(f"    [WEBHOOK] T2 trail update failed: {e}")
 
             # Runner trail: update after 6R touch AND T2 exited (6-tick buffer)
+            # Match backtest: check single bar at i-2 with last_swing gate
             if trade.touched_8r and trade.t2_hit and not trade.runner_exit and trade.has_runner and len(bars) >= 5:
                 old_runner_trail = trade.runner_trail_stop
-                for i in range(len(bars) - 4, len(bars) - 1):
-                    if trade.is_long:
-                        if is_swing_low(bars, i, 2):
-                            new_trail = bars[i].low - (6 * trade.tick_size)
+                check_idx = len(bars) - 3  # Equivalent to backtest's i-2
+                if trade.is_long:
+                    if is_swing_low(bars, check_idx, 2):
+                        swing = bars[check_idx].low
+                        if swing > trade.runner_last_swing:
+                            new_trail = swing - (6 * trade.tick_size)
                             if new_trail > trade.runner_trail_stop:
                                 trade.runner_trail_stop = new_trail
-                    else:
-                        if is_swing_high(bars, i, 2):
-                            new_trail = bars[i].high + (6 * trade.tick_size)
+                                trade.runner_last_swing = swing
+                else:
+                    if is_swing_high(bars, check_idx, 2):
+                        swing = bars[check_idx].high
+                        if swing < trade.runner_last_swing:
+                            new_trail = swing + (6 * trade.tick_size)
                             if new_trail < trade.runner_trail_stop:
                                 trade.runner_trail_stop = new_trail
+                                trade.runner_last_swing = swing
                 # Webhook: update broker stop to runner trail (only runner remains)
                 if self.webhook and trade.asset_type == 'futures' and trade.runner_trail_stop != old_runner_trail:
                     try:
@@ -903,6 +942,7 @@ class LiveTrader:
                     trade.t1_pnl = trade.calculate_pnl(trade.target_4r, cts_t1)
                     # Set t1_trail_stop at entry (breakeven floor for remaining cts)
                     trade.t1_trail_stop = trade.entry_price
+                    trade.t1_last_swing = trade.entry_price
                     log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (3R)")
                     log(f"    Breakeven trail active for {trade.contracts - cts_t1} remaining cts")
 
@@ -929,6 +969,9 @@ class LiveTrader:
                     # Set T2 and runner floors at plus_4r (3R guaranteed profit)
                     trade.t2_trail_stop = trade.plus_4r
                     trade.runner_trail_stop = trade.plus_4r
+                    # Initialize last_swing at current bar high/low (matches backtest)
+                    trade.t2_last_swing = current_high if trade.is_long else current_low
+                    trade.runner_last_swing = current_high if trade.is_long else current_low
                     log(f"\n  [PAPER] 6R TOUCHED: {trade.symbol} - T2/Runner trails at 3R floor")
 
                     # Webhook: move broker stop to 3R floor
@@ -1125,6 +1168,11 @@ class LiveTrader:
 
         # Remove closed trades from active tracking
         for trade_id in closed_trades:
+            trade = self.paper_trades[trade_id]
+            self.risk_manager.record_trade_exit(
+                trade.symbol, trade.contracts, trade.total_pnl,
+                is_win=trade.total_pnl > 0,
+            )
             del self.paper_trades[trade_id]
 
     def _manage_active_trades(self):

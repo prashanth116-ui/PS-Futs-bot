@@ -1,5 +1,5 @@
 """
-V10.8 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
+V10.12 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
 
 ENTRY TYPES:
 ============
@@ -149,6 +149,59 @@ def calculate_adx(bars, period=14):
 
     adx = sum(dx_list[-period:]) / period
     return adx, plus_di, minus_di
+
+
+def calculate_atr(bars, period=14):
+    """Calculate ATR (Average True Range) using SMA of true ranges."""
+    if len(bars) < period + 1:
+        return None
+
+    tr_list = []
+    for i in range(1, len(bars)):
+        high = bars[i].high
+        low = bars[i].low
+        close_prev = bars[i-1].close
+        tr = max(high - low, abs(high - close_prev), abs(low - close_prev))
+        tr_list.append(tr)
+
+    if len(tr_list) < period:
+        return None
+
+    return sum(tr_list[-period:]) / period
+
+
+def is_consolidating(bars, lookback=10, atr_period=14, threshold=0.0):
+    """Detect consolidation via range compression.
+
+    Compares the range of the last `lookback` bars to ATR(atr_period).
+    If ratio < threshold, the market is consolidating.
+
+    Args:
+        bars: List of bars (needs at least lookback + atr_period bars)
+        lookback: Number of recent bars to measure range over
+        atr_period: ATR calculation period
+        threshold: Ratio below which market is considered consolidating (0=disabled)
+
+    Returns:
+        (is_consolidating, ratio) — bool flag + the compression ratio for logging
+    """
+    if threshold <= 0:
+        return False, 0.0
+
+    if len(bars) < max(lookback, atr_period + 1):
+        return False, 0.0
+
+    atr = calculate_atr(bars, atr_period)
+    if atr is None or atr <= 0:
+        return False, 0.0
+
+    recent = bars[-lookback:]
+    range_high = max(b.high for b in recent)
+    range_low = min(b.low for b in recent)
+    bar_range = range_high - range_low
+
+    ratio = bar_range / atr
+    return ratio < threshold, ratio
 
 
 def is_swing_high(bars, idx, lookback=2):
@@ -343,6 +396,8 @@ def run_session_v10(
     # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L, 90.6% WR in 11-day A/B test)
     t1_r_target=3,      # R-multiple for T1 fixed exit (default: 3R)
     trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
+    # V10.12: Consolidation detection filter
+    consol_threshold=0.0,  # Range/ATR ratio threshold (0=disabled). Skip entries when ratio < threshold.
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -355,6 +410,9 @@ def run_session_v10(
     # Calculate average body size from session bars (today only, like V9)
     body_sizes = [abs(b.close - b.open) for b in session_bars[:50]]
     avg_body_size = sum(body_sizes) / len(body_sizes) if body_sizes else tick_size * 4
+
+    # V10.12: Consolidation skip counter
+    consol_skips = 0
 
     fvg_config = {
         'min_fvg_ticks': 2,  # Lower threshold to catch smaller overnight FVGs
@@ -414,6 +472,15 @@ def run_session_v10(
                 body = abs(creating_bar.close - creating_bar.open)
 
                 bars_to_entry = all_bars[:fvg.created_bar_index + 1]
+
+                # V10.12: Consolidation filter (exempt 3x displacement — breakout candles break consolidation)
+                high_disp_creation = high_displacement_override > 0 and body >= avg_body_size * high_displacement_override
+                if consol_threshold > 0 and not high_disp_creation:
+                    consol, consol_ratio = is_consolidating(bars_to_entry, threshold=consol_threshold)
+                    if consol:
+                        consol_skips += 1
+                        continue
+
                 ema_fast = calculate_ema(bars_to_entry, 20)
                 ema_slow = calculate_ema(bars_to_entry, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
@@ -546,6 +613,14 @@ def run_session_v10(
 
                     # Apply filters at rejection time
                     bars_to_entry = all_bars[:all_bar_idx + 1]
+
+                    # V10.12: Consolidation filter (no exemption for retrace entries)
+                    if consol_threshold > 0:
+                        consol, consol_ratio = is_consolidating(bars_to_entry, threshold=consol_threshold)
+                        if consol:
+                            consol_skips += 1
+                            continue
+
                     ema_fast = calculate_ema(bars_to_entry, 20)
                     ema_slow = calculate_ema(bars_to_entry, 50)
                     adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
@@ -710,6 +785,14 @@ def run_session_v10(
 
                 # Apply filters
                 bars_to_entry = all_bars[:all_bar_idx + 1]
+
+                # V10.12: Consolidation filter (no exemption for BOS entries)
+                if consol_threshold > 0:
+                    consol, consol_ratio = is_consolidating(bars_to_entry, threshold=consol_threshold)
+                    if consol:
+                        consol_skips += 1
+                        continue
+
                 ema_fast = calculate_ema(bars_to_entry, 20)
                 ema_slow = calculate_ema(bars_to_entry, 50)
                 adx, plus_di, minus_di = calculate_adx(bars_to_entry, 14)
@@ -1075,6 +1158,10 @@ def run_session_v10(
             'contracts': trade.get('contracts', contracts),  # V10.7: Actual contracts used
         })
 
+    # V10.12: Report consolidation filter skips
+    if consol_skips > 0:
+        print(f'  [V10.12] Consolidation filter: {consol_skips} entries skipped (threshold={consol_threshold})')
+
     return final_results
 
 
@@ -1083,7 +1170,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
                   interval='3m', retracement_morning_only=False, retracement_trend_aligned=False,
                   overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
                   t1_fixed_4r=True,  # HYBRID default: T1 takes profit at 4R
-                  t1_r=3, trail_r=6):  # R-target tuning (V10.9)
+                  t1_r=3, trail_r=6,  # R-target tuning (V10.9)
+                  consol_threshold=0.0):  # V10.12: Consolidation filter (0=disabled)
     """Run V10 backtest for today.
 
     Args:
@@ -1134,7 +1222,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V10.11 (Quad Entry Mode)')
+    print('Strategy: ICT FVG V10.12 (Quad Entry Mode)')
     print(f'  - Entry Type A (Creation): {"ENABLED" if enable_creation else "DISABLED"}')
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:
@@ -1162,6 +1250,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print(f'  - Trail Floor: {t1_r}R')
     print('  - Midday cutoff (12-14): YES')
     print(f'  - PM cutoff (NQ/MNQ): {"YES" if symbol in ["NQ", "MNQ"] else "NO"}')
+    if consol_threshold > 0:
+        print(f'  - Consolidation filter: ratio < {consol_threshold} (V10.12)')
     print('='*70)
 
     all_results = run_session_v10(
@@ -1189,6 +1279,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         bos_daily_loss_limit=1,
         high_displacement_override=3.0,
         max_retrace_risk_pts=max_retrace_risk_pts,
+        consol_threshold=consol_threshold,
     )
 
     total_pnl = 0
@@ -1248,6 +1339,7 @@ if __name__ == '__main__':
 
     t1_r = 3
     trail_r = 6
+    consol_threshold = 0.0
 
     for arg in sys.argv[3:]:
         if arg == '--creation-only':
@@ -1269,6 +1361,8 @@ if __name__ == '__main__':
             t1_r = int(arg.split('=')[1])
         elif arg.startswith('--trail-r='):
             trail_r = int(arg.split('=')[1])
+        elif arg.startswith('--consol='):
+            consol_threshold = float(arg.split('=')[1])
 
     run_today_v10(
         symbol=symbol,
@@ -1280,4 +1374,5 @@ if __name__ == '__main__':
         retracement_trend_aligned=trend_aligned,
         t1_r=t1_r,
         trail_r=trail_r,
+        consol_threshold=consol_threshold,
     )
