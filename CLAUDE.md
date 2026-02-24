@@ -200,7 +200,38 @@ Live bot had a 57-minute data lag at market open — waited for 20 session bars 
 
 **Note**: Backtest and live bot will still diverge due to real-time vs post-session bar construction, but the 57-min blind spot is eliminated.
 
+### PickMyTrade Webhook Integration (Feb 24, 2026)
+Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + prop firm Tradovate accounts. Tradovate blocks direct API on prop firm accounts; PickMyTrade is an authorized vendor that acts as the execution bridge.
+
+**Architecture**: Paper mode is the "brain" — manages the full trade lifecycle. `WebhookExecutor` fires HTTP calls to PickMyTrade at each lifecycle event for broker execution.
+
+**Why not PickMyTrade's built-in TP/SL**: T2 (4-tick buffer) and Runner (6-tick buffer) need different trail levels, but PickMyTrade's `update_sl` applies to ALL remaining contracts equally. Instead, the bot manages all exits explicitly.
+
+**Trail stop synchronization**: After 6R, broker stop is set to the tighter T2 trail. When T2 exits, broker stop moves to runner trail. If price gaps through both between scans, broker stop fires for all remaining (acceptable — protects capital).
+
+**9 Webhook Lifecycle Events:**
+| # | Event | Webhook Call |
+|---|-------|-------------|
+| 1 | Entry | `open_position()` — market order + initial protective stop |
+| 2 | T1 hit (3R) | `partial_close(1ct)` + `update_stop(breakeven)` |
+| 3 | T1 trail update | `update_stop(t1_trail)` |
+| 4 | 6R touch | `update_stop(plus_4r floor)` |
+| 5 | T2 trail update | `update_stop(t2_trail)` — tighter, covers T2+Runner |
+| 6 | Full stop | `close_position()` |
+| 7 | Trail stop (before 6R) | `close_position()` |
+| 8 | T2/Runner exit | `partial_close()` or `close_position()` |
+| 9 | EOD | `close_position()` for each open trade |
+
+**Config** (`config/pickmytrade_accounts.json` — gitignored):
+- `contract_months`: Updated quarterly at roll (e.g., `ESM6` → `ESU6`)
+- `qty_multiplier`: Per-account sizing (e.g., 0.5 for prop evals with lower limits)
+- `enabled`: Toggle accounts without removing config
+- `strategy_groups`: Route different strategies to different account sets
+
+**Error handling**: Max 2 retries, 1-sec delay. No retry on 4xx. On failure: log + Telegram alert. Paper mode continues regardless (source of truth). All accounts fire in parallel via `ThreadPoolExecutor` (~100ms spread).
+
 ### Strategy Features
+- **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)
 - **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
 - **Local Bar Storage**: Saves 3m bars to CSV daily, merges with live TradingView data for 30+ day backtests (90-day retention)
 - **Retrace Risk Cap (V10.11)**: ES/MES retrace risk > 8pts → force 1 contract (NQ/MNQ uncapped)
@@ -353,6 +384,12 @@ python -m runners.run_live --paper --symbols ES NQ MES MNQ
 # Paper mode - equities only (custom risk per trade)
 python -m runners.run_live --paper --symbols SPY QQQ --equity-risk 1000
 
+# Paper + webhook (primary use case for live execution)
+python -m runners.run_live --paper --webhook --symbols ES NQ
+
+# Paper + webhook (custom strategy group / config path)
+python -m runners.run_live --paper --webhook --strategy-group ict_v10 --webhook-config config/pickmytrade_accounts.json
+
 # Demo mode (Tradovate sim account)
 python -m runners.run_live --symbols ES NQ
 
@@ -382,7 +419,8 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
-| `runners/run_live.py` | **Combined live trader** - futures + equities |
+| `runners/run_live.py` | **Combined live trader** - futures + equities + webhook integration |
+| `runners/webhook_executor.py` | **PickMyTrade webhook** - multi-account execution for Tradovate |
 | `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ/MES/MNQ) |
 | `runners/run_v10_equity.py` | V10 Quad Entry strategy - equities (SPY/QQQ) |
 | `runners/bar_storage.py` | Local bar save/load/merge (90-day retention) |
@@ -399,6 +437,8 @@ python -m runners.run_replay
 | `config/strategies/ict_es.yaml` | ES configuration |
 | `config/strategies/ict_nq.yaml` | NQ configuration |
 | `config/tradovate_credentials.template.json` | API credentials template |
+| `config/pickmytrade_accounts.template.json` | PickMyTrade config template |
+| `config/pickmytrade_accounts.json` | PickMyTrade credentials (**gitignored**) |
 | `run_paper_trading.py` | **Paper trading wrapper** - health check, auto-restart |
 | `deploy/setup_droplet.sh` | DigitalOcean droplet initial setup |
 | `deploy/deploy.sh` | Deploy code updates to droplet |
@@ -471,6 +511,7 @@ sudo systemctl stop paper-trading
 - Graceful shutdown at market close (4:30 PM ET)
 - Skips weekends automatically
 - Telegram alerts: entry/exit events + hourly heartbeat + daily summary + EOD next-day outlook
+- PickMyTrade webhook support (`python run_paper_trading.py --webhook`)
 
 ## Strategy Evolution
 | Version | Key Feature |
