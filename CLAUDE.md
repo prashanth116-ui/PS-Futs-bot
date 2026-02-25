@@ -200,6 +200,25 @@ Live bot had a 57-minute data lag at market open — waited for 20 session bars 
 
 **Note**: Backtest and live bot will still diverge due to real-time vs post-session bar construction, but the 57-min blind spot is eliminated.
 
+### V10.12 Backtest Parity Fixes (Feb 24, 2026)
+Live bot P/L diverged from backtest by ~$1,231 (11%) on Feb 24. Root cause: trail logic and parameter mismatches between `run_live.py` and `run_v10_dual_entry.py`.
+
+**Trail logic fixes (biggest impact — ~$850 recovered):**
+- Added `last_swing` gate to T1/T2/Runner trail updates — live bot was accepting any improving swing; backtest requires swing beyond previous
+- Changed trail scan from 3-bar loop to single bar at `i-2` (matching backtest's `check_idx = i - 2`)
+- Increased bar fetch from 10 to 20 for swing detection context
+- Initialize `last_swing` at entry price on trade open, T1 hit (breakeven), and 6R touch (current bar high/low)
+
+**Parameter parity:**
+- Fixed `retracement_morning_only=True` → `False` (was blocking overnight retrace entries after noon; backtest allows all day)
+- Made all `run_session_v10()` params explicit: `max_open_trades=3`, `overnight_retrace_min_adx=22`, `high_displacement_override=3.0`, `t1_r_target=3`, `trail_r_trigger=6`
+
+**Risk manager parity:**
+- Added `record_trade_entry()` in paper mode (was never called — risk manager saw 0 open trades)
+- Added `record_trade_exit()` on paper trade close (risk manager now tracks P/L, consecutive losses, open positions)
+
+**Result**: Estimated gap reduction from ~11% to ~2-3% (remaining gap is inherent real-time vs post-session bar data).
+
 ### PickMyTrade Webhook Integration (Feb 24, 2026)
 Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + prop firm Tradovate accounts. Tradovate blocks direct API on prop firm accounts; PickMyTrade is an authorized vendor that acts as the execution bridge.
 
