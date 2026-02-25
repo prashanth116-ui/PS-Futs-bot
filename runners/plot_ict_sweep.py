@@ -148,7 +148,7 @@ def run_strategy_for_day(all_bars, target_date, config, all_mtf_bars=None):
                 all_entries.append(entry)
                 all_results.append(result)
 
-            bar_idx += 1
+        bar_idx += 1
 
     return all_entries, all_results, day_bars
 
