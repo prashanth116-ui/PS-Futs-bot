@@ -398,6 +398,8 @@ def run_session_v10(
     trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
     # V10.12: Consolidation detection filter
     consol_threshold=0.0,  # Range/ATR ratio threshold (0=disabled). Skip entries when ratio < threshold.
+    # V10.13: Global consecutive loss stop (ES/MES only)
+    max_consec_losses=0,  # Stop all entries after N consecutive losses across directions (0=disabled)
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -864,6 +866,7 @@ def run_session_v10(
     entries_taken = {'LONG': 0, 'SHORT': 0}
     loss_count = {'LONG': 0, 'SHORT': 0}
     bos_loss_count = 0  # V10.6: Track BOS losses for daily limit
+    global_consec_losses = 0  # V10.13: Consecutive loss counter (resets on any win)
 
     # V10.7: T1/T2/runner splits are now calculated per-trade based on trade's contract count
     # For 3 contracts: T1=1, T2=1, Runner=1
@@ -980,6 +983,7 @@ def run_session_v10(
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'cts': remaining})
                     trade['remaining'] = 0
                     loss_count[trade['direction']] += 1
+                    global_consec_losses += 1  # V10.13
                     # V10.6: Track BOS losses for daily limit
                     if 'BOS' in trade.get('entry_type', ''):
                         bos_loss_count += 1
@@ -1041,6 +1045,10 @@ def run_session_v10(
             if trade in active_trades:
                 active_trades.remove(trade)
                 completed_results.append(trade)
+                # V10.13: Reset consecutive loss counter on winning trade
+                trade_pnl = sum(e['pnl'] for e in trade['exits'])
+                if trade_pnl >= 0:
+                    global_consec_losses = 0
 
         # Check for new entries
         current_open = len(active_trades)
@@ -1051,6 +1059,10 @@ def run_session_v10(
 
             direction = entry['direction']
             entry_type = entry.get('entry_type', '')
+
+            # V10.13: Global consecutive loss stop (ES/MES only)
+            if max_consec_losses > 0 and global_consec_losses >= max_consec_losses:
+                continue
 
             # Direction-aware circuit breaker: skip if this direction hit max losses
             if loss_count[direction] >= max_losses_per_day:

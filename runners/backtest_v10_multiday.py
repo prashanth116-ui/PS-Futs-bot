@@ -92,6 +92,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
 
         # V10.6: Per-symbol BOS control
         disable_bos = symbol in ['ES', 'MES']
+        # V10.13: Global consecutive loss stop (ES/MES only)
+        max_consec_losses = 2 if symbol in ['ES', 'MES'] else 0
 
         # Run V10 strategy with all filters
         results = run_session_v10(
@@ -116,6 +118,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
             bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
             max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
+            max_consec_losses=max_consec_losses,  # V10.13: Global consecutive loss stop
         )
 
         # Tally results

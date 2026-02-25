@@ -533,6 +533,7 @@ class LiveTrader:
             t1_r_target=3,
             trail_r_trigger=6,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
+            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13: ES/MES only
         )
 
         # Process signals

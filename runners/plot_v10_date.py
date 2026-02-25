@@ -54,6 +54,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
         high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
         disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
         bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
+        max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13
     )
 
     if not all_results:

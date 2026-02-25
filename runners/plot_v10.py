@@ -114,6 +114,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             bos_daily_loss_limit=1,
             max_retrace_risk_pts=max_retrace_risk,  # V10.12: Reduce retrace cts if high risk
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
+            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13
         )
 
     if losses_only:
