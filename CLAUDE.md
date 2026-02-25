@@ -16,17 +16,17 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.11 (Retrace Risk Cap + Startup Fix) - Feb 23, 2026
+## Current Strategy: V10.13 (Global Consecutive Loss Stop) - Feb 24, 2026
 
 ### Supported Instruments
-| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled |
-|--------|------|------------|----------|--------------|------------------|-------------|
-| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** |
-| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | None | ON (loss limit) |
-| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** |
-| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | None | ON (loss limit) |
-| SPY | S&P 500 ETF | per share | $0.30 | - | - | **OFF** |
-| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | - | ON (loss limit) |
+| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled | Consec Stop |
+|--------|------|------------|----------|--------------|------------------|-------------|-------------|
+| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2 losses** |
+| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | None | ON (loss limit) | OFF |
+| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2 losses** |
+| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | None | ON (loss limit) | OFF |
+| SPY | S&P 500 ETF | per share | $0.30 | - | - | **OFF** | OFF |
+| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | - | ON (loss limit) | OFF |
 
 **Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
@@ -200,6 +200,27 @@ Live bot had a 57-minute data lag at market open — waited for 20 session bars 
 
 **Note**: Backtest and live bot will still diverge due to real-time vs post-session bar construction, but the 57-min blind spot is eliminated.
 
+### V10.13 Global Consecutive Loss Stop (Feb 24, 2026)
+After investigating Feb 19 (worst bot day: -$5,562.50, 11 losses), added a global consecutive loss counter that stops all trading for the day after 2 consecutive losses. Applied to ES/MES only — NQ consecutive losses often precede big trend recoveries.
+
+**How it works:**
+- Counter increments on any losing trade (regardless of direction)
+- Counter resets to 0 on any winning trade
+- When counter >= 2: all entries disabled for rest of day
+- Resets daily
+
+**Why global (not per-direction):** Feb 19 losses alternated directions (SHORT, LONG, SHORT, LONG). Per-direction counters never reach 2 because each direction only sees 1 consecutive loss.
+
+**Why ES/MES only:** On NQ Feb 12, 2 consecutive losses at 10:06/10:18 were followed by +$30k in winners ($6,675 + $5,970 + $17,412). Applying to NQ would cost -$29,228 over 17 days.
+
+**17-Day A/B Validation (ES):**
+| Config | Trades | Wins | Losses | Win Rate | Total P/L | Feb 19 |
+|--------|--------|------|--------|----------|-----------|--------|
+| **WITH 2-consec stop** | **178** | **156** | **22** | **87.6%** | **+$161,194** | **-$412** |
+| WITHOUT (baseline) | 180 | 156 | 24 | **86.7%** | +$160,706 | -$900 |
+
+**Result**: +$488 improvement, zero harm to any winning day, Feb 19 loss cut from -$900 to -$412.
+
 ### V10.12 Backtest Parity Fixes (Feb 24, 2026)
 Live bot P/L diverged from backtest by ~$1,231 (11%) on Feb 24. Root cause: trail logic and parameter mismatches between `run_live.py` and `run_v10_dual_entry.py`.
 
@@ -250,6 +271,7 @@ Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + pro
 **Error handling**: Max 2 retries, 1-sec delay. No retry on 4xx. On failure: log + Telegram alert. Paper mode continues regardless (source of truth). All accounts fire in parallel via `ThreadPoolExecutor` (~100ms spread).
 
 ### Strategy Features
+- **Global Consecutive Loss Stop (V10.13)**: ES/MES stop all trading after 2 consecutive losses (NQ/MNQ exempt — consec losses precede big recoveries)
 - **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)
 - **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
 - **Local Bar Storage**: Saves 3m bars to CSV daily, merges with live TradingView data for 30+ day backtests (90-day retention)
@@ -293,6 +315,7 @@ Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + pro
 | **BOS Disable** | **ES/MES/SPY** | **BOS off for low win-rate symbols (V10.6)** |
 | **BOS Loss Limit** | **NQ/MNQ/QQQ: 1/day** | **Stop BOS after 1 loss per day (V10.6)** |
 | **Max Losses** | **3/direction/day** | **V10.10: Direction-aware circuit breaker** |
+| **Consec Loss Stop** | **ES/MES: 2 consec** | **V10.13: Stop all trading after 2 consecutive losses (NQ/MNQ exempt)** |
 | **Max Open Trades** | **3 per direction** | **V10.7: Increased from 2** |
 | **Position Sizing** | **Dynamic** | **V10.7: 1st trade: 3 cts, 2nd+: 2 cts (max 6 cts)** |
 
@@ -322,7 +345,10 @@ Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + pro
 | Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights (V10.11)
+### Key Insights (V10.13)
+- Global consecutive loss stop (ES/MES only) prevents whipsaw damage — Feb 19 loss cut from -$900 to -$412
+- NQ exempt from consecutive loss stop: Feb 12 had 2 consec losses then +$30k in winners
+- Cooldown-based approaches (30/60/90/120min) had zero effect — post-trigger trades come hours later
 - Live bot startup fix eliminates 57-min data lag — trades from 04:03 instead of ~05:00
 - Feb 23 analysis: old bot missed 3 early winners (+$1,537.50) due to data lag
 - Backtest vs live will still diverge (real-time vs post-session bars) but gap is much smaller
@@ -535,6 +561,8 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.13 | Global consecutive loss stop: ES/MES stop after 2 consec losses (NQ exempt) - **+$488 ES, Feb 19 loss halved** |
+| V10.12 | Backtest parity fixes: trail logic, parameter matching, risk manager tracking - **~11% gap → ~2-3%** |
 | V10.11 | Retrace risk cap: ES/MES >8pts → 1 ct (NQ uncapped) + **startup data lag fix (57min → instant)** |
 | V10.10 | Entry cap fix + direction-aware circuit breaker + equity FVG date filter + BOS parity + **EOD outlook alert** - **+$350k/12d** |
 | V10.9 | R-target tuning: T1=3R, Trail=6R (was 4R/8R) - **+31% P/L, 87.7% WR, zero DD** |
