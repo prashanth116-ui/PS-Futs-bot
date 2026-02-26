@@ -331,7 +331,7 @@ class LiveTrader:
             print(f"Futures: {', '.join(self.futures_symbols)} (2-tick buffer)")
         if self.equity_symbols:
             print(f"Equities: {', '.join(self.equity_symbols)} (${self.equity_risk}/trade, ATR buffer)")
-        print(f"Scan interval: {self.scan_interval}s")
+        print(f"Scan: bar-aligned (3m close + 5s buffer)")
         print(f"Timezone: EST (Current: {get_est_now().strftime('%H:%M:%S')})")
         print("Futures hours: 4:00-16:00 ET | Equities: 9:30-16:00 ET")
         print("=" * 70)
@@ -442,7 +442,7 @@ class LiveTrader:
                     self._print_status()
                 except Exception as e:
                     log(f"  Error in _print_status: {e}")
-                self._interruptible_sleep(self.scan_interval)
+                self._sleep_until_next_bar_close()
 
             except KeyboardInterrupt:
                 break
@@ -460,6 +460,20 @@ class LiveTrader:
             sleep_chunk = min(30, seconds - elapsed)
             time.sleep(sleep_chunk)
             elapsed += sleep_chunk
+
+    def _sleep_until_next_bar_close(self):
+        """Sleep until the next 3-minute bar close + 5s buffer.
+
+        Aligns scans to bar boundaries so the bot always processes
+        finalized OHLC data, matching backtest behavior.
+        """
+        now = datetime.now()
+        total_seconds = now.minute * 60 + now.second
+        seconds_into_bar = total_seconds % 180
+        sleep_seconds = 180 - seconds_into_bar + 5  # 5s after bar close
+        if sleep_seconds < 10:
+            sleep_seconds += 180  # Don't scan too quickly if we're right at boundary
+        self._interruptible_sleep(sleep_seconds)
 
     def _is_trading_hours(self, dt: datetime) -> bool:
         """Check if within trading hours (EST).
