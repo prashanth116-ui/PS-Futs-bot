@@ -1446,7 +1446,9 @@ class LiveTrader:
 
         if self.paper_mode:
             open_trades = len(self.paper_trades)
-            log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}")
+            open_cts = self._count_open_contracts()
+            cts_str = f" ({open_cts} cts)" if open_trades > 0 else ""
+            log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}{cts_str}")
         else:
             risk_summary = self.risk_manager.get_summary()
             log(f"[HEARTBEAT] {timestamp} | {prices_str} | Trades: {risk_summary['daily_trades']} | P/L: ${risk_summary['daily_pnl']:+,.2f} | Open: {risk_summary['open_trades']}")
@@ -1465,7 +1467,9 @@ class LiveTrader:
             mode = "PAPER" if self.paper_mode else "LIVE"
             if self.paper_mode:
                 open_trades = len(self.paper_trades)
-                tg_msg = f"[{mode}] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}"
+                open_cts = self._count_open_contracts()
+                cts_str = f" ({open_cts} cts)" if open_trades > 0 else ""
+                tg_msg = f"[{mode}] {timestamp} | {prices_str} | Trades: {self.paper_daily_trades} | P/L: ${self.paper_daily_pnl:+,.2f} | Open: {open_trades}{cts_str}"
             else:
                 risk_summary = self.risk_manager.get_summary()
                 tg_msg = f"[{mode}] {timestamp} | {prices_str} | Trades: {risk_summary['daily_trades']} | P/L: ${risk_summary['daily_pnl']:+,.2f} | Open: {risk_summary['open_trades']}"
@@ -1473,6 +1477,20 @@ class LiveTrader:
                 notify_status(tg_msg)
             except Exception:
                 pass  # Don't let Telegram failures break the loop
+
+    def _count_open_contracts(self):
+        """Count total remaining contracts across all open paper trades."""
+        total = 0
+        for trade in self.paper_trades:
+            remaining = trade.contracts
+            if trade.t1_hit:
+                remaining -= 1
+            if trade.t2_hit:
+                remaining -= 1
+            if trade.runner_exit:
+                remaining -= 1
+            total += remaining
+        return total
 
     def _calculate_next_day_outlook(self):
         """Calculate and send next-day outlook for each symbol.
