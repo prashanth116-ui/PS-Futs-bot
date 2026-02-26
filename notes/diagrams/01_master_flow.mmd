@@ -1,0 +1,25 @@
+flowchart TD
+    START([Session Start\n4:00 ET]) --> LOAD[Load 3m Bars\nOvernight + Session]
+    LOAD --> FVG[Detect All FVGs\nfrom overnight + RTH bars]
+    FVG --> INDICATORS[Calculate Indicators\nEMA 20/50, ADX 14, DI+/DI-]
+
+    INDICATORS --> ENTRY_A{Entry Type A\nCreation}
+    INDICATORS --> ENTRY_B{Entry Type B\nRetrace}
+    INDICATORS --> ENTRY_C{Entry Type C\nBOS + Retrace}
+
+    ENTRY_A --> COLLECT[Collect All Valid Entries\nSort by Bar Index]
+    ENTRY_B --> COLLECT
+    ENTRY_C --> COLLECT
+
+    COLLECT --> LOOP[/For Each Bar in Session/]
+    LOOP --> MANAGE[Manage Active Trades\nTrail Updates + Exit Checks]
+    MANAGE --> GATES{Entry Gates}
+
+    GATES -->|Pass| SIZE[Position Sizing\n3 cts / 2 cts / 1 ct]
+    GATES -->|Fail| LOOP
+
+    SIZE --> OPEN[Open Trade\nEntry + Stop + Targets]
+    OPEN --> LOOP
+
+    LOOP -->|EOD 16:00| EOD[Close All Remaining\nat Market Close]
+    EOD --> SUMMARY([Print Results])

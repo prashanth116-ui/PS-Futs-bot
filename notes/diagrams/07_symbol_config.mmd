@@ -1,0 +1,18 @@
+flowchart LR
+    subgraph ES_MES [ES / MES]
+        ES_BOS[BOS: OFF]
+        ES_RISK[Min Risk: 1.5 pts]
+        ES_BOS_CAP[Max BOS Risk: 8 pts]
+        ES_RETRACE[Retrace Cap: 8 pts then 1ct]
+        ES_CONSEC[Consec Loss: 2 then stop]
+        ES_PM[PM Cutoff: No]
+    end
+
+    subgraph NQ_MNQ [NQ / MNQ]
+        NQ_BOS[BOS: ON, 1 loss/day]
+        NQ_RISK[Min Risk: 6.0 pts]
+        NQ_BOS_CAP[Max BOS Risk: 20 pts]
+        NQ_RETRACE[Retrace Cap: None]
+        NQ_CONSEC[Consec Loss: OFF]
+        NQ_PM[PM Cutoff: After 14:00]
+    end

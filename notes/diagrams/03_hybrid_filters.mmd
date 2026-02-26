@@ -1,0 +1,31 @@
+flowchart TD
+    ENTRY([Candidate Entry]) --> M1{MANDATORY 1\nDI Direction}
+    M1 -->|LONG: +DI > -DI| M2{MANDATORY 2\nFVG Size >= 5 ticks}
+    M1 -->|SHORT: -DI > +DI| M2
+    M1 -->|Fail| REJECT([REJECT])
+
+    M2 -->|Pass| OPT[OPTIONAL FILTERS\nNeed 2 of 3 to pass]
+    M2 -->|Fail| REJECT
+
+    OPT --> O1{Displacement\n>= 1.0x avg body}
+    OPT --> O2{ADX >= 11\nor 3x disp + ADX >= 10}
+    OPT --> O3{EMA Trend\nEMA20 vs EMA50}
+
+    O1 -->|Pass| COUNT[Count Passes]
+    O1 -->|Fail| COUNT
+    O2 -->|Pass| COUNT
+    O2 -->|Fail| COUNT
+    O3 -->|Pass| COUNT
+    O3 -->|Fail| COUNT
+
+    COUNT --> CHECK{Passes >= 2?}
+    CHECK -->|Yes| TIME[Time Filters]
+    CHECK -->|No| REJECT
+
+    TIME --> T1{Midday Cutoff\n12:00-14:00?}
+    T1 -->|In range| REJECT
+    T1 -->|Outside| T2{NQ/MNQ PM\nAfter 14:00?}
+    T2 -->|Yes + NQ| REJECT
+    T2 -->|No| RISK{Min Risk Check\nES: 1.5 pts, NQ: 6 pts}
+    RISK -->|Pass| ACCEPT([ACCEPT])
+    RISK -->|Fail| REJECT

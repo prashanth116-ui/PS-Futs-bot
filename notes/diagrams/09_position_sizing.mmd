@@ -1,0 +1,19 @@
+flowchart TD
+    ENTRY([New Entry Signal]) --> OPEN{How many trades\ncurrently open?}
+
+    OPEN -->|0 trades| BASE[Base: 3 Contracts]
+    OPEN -->|1+ trades| REDUCED[Reduced: 2 Contracts]
+
+    BASE --> RETRACE1{Retrace entry?\nRisk > max_retrace_risk?}
+    REDUCED --> RETRACE2{Retrace entry?\nRisk > max_retrace_risk?}
+
+    RETRACE1 -->|ES/MES + risk > 8pts| FORCE1A[Force: 1 Contract]
+    RETRACE1 -->|No| SPLIT3[Split: 1 T1 + 1 T2 + 1 Runner]
+
+    RETRACE2 -->|ES/MES + risk > 8pts| FORCE1B[Force: 1 Contract]
+    RETRACE2 -->|No| SPLIT2[Split: 1 T1 + 1 T2 + 0 Runner]
+
+    SPLIT3 --> MAX[Max Exposure: 6 cts\n3 open trades x 2 avg]
+    SPLIT2 --> MAX
+    FORCE1A --> MAX
+    FORCE1B --> MAX

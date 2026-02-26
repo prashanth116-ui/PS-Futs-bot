@@ -1,0 +1,20 @@
+flowchart TD
+    BAR([New Bar]) --> SWING{Check bar at i-2\nfor swing point}
+
+    SWING --> SL{Swing Low?\nlookback=2}
+    SWING --> SH{Swing High?\nlookback=2}
+
+    SL -->|LONG trade| SL_CHECK{Swing > last\ntracked swing?}
+    SL_CHECK -->|Yes| SL_UPDATE[Update trail stop\n= swing - buffer]
+    SL_CHECK -->|No| SKIP([Skip: not higher])
+
+    SH -->|SHORT trade| SH_CHECK{Swing < last\ntracked swing?}
+    SH_CHECK -->|Yes| SH_UPDATE[Update trail stop\n= swing + buffer]
+    SH_CHECK -->|No| SKIP2([Skip: not lower])
+
+    SL_UPDATE --> BUFFERS{Which trail?}
+    SH_UPDATE --> BUFFERS
+
+    BUFFERS -->|T1 trail\n3R to 6R| B1[2-tick buffer]
+    BUFFERS -->|T2 trail\nafter 6R| B2[4-tick buffer]
+    BUFFERS -->|Runner trail\nafter 6R + T2 exit| B3[6-tick buffer]

@@ -1,0 +1,32 @@
+flowchart TD
+    TRADE([Active Trade\nEntry at FVG midpoint]) --> PHASE1{Price hits\nStop?}
+
+    PHASE1 -->|Yes| FULL_STOP[FULL STOP\nAll contracts exit\nat stop price]
+    FULL_STOP --> LOSS([Loss recorded\nDirection loss +1])
+
+    PHASE1 -->|No| PHASE2{Price hits\n3R target?}
+    PHASE2 -->|No| PHASE1
+
+    PHASE2 -->|Yes| T1_EXIT[T1 EXIT: 1 ct\nFixed profit at 3R\nTrail stop set at entry]
+    T1_EXIT --> PHASE3{Price hits\n6R target?}
+
+    PHASE3 -->|No| T1_TRAIL{T1 trail\nstop hit?}
+    T1_TRAIL -->|Yes| ALL_EXIT[ALL remaining exit\nat trail stop\nBreakeven floor]
+    T1_TRAIL -->|No| PHASE3
+
+    PHASE3 -->|Yes| ACTIVATE[Activate T2 + Runner trails\nFloor at 3R profit]
+    ACTIVATE --> T2_TRAIL{T2 trail\nstop hit?\n4-tick buffer}
+
+    T2_TRAIL -->|No, keep trailing| T2_TRAIL
+    T2_TRAIL -->|Yes| T2_CHECK{Has Runner?\n3-ct trade only}
+
+    T2_CHECK -->|No runner\n2-ct trade| CLOSE_ALL[Close remaining\nT2 profit locked]
+    T2_CHECK -->|Yes| T2_EXIT[T2 EXIT: 1 ct\nRunner continues]
+
+    T2_EXIT --> RUNNER{Runner trail\nstop hit?\n6-tick buffer}
+    RUNNER -->|No, keep trailing| RUNNER
+    RUNNER -->|Yes| RUNNER_EXIT[RUNNER EXIT: 1 ct\nat trail stop]
+    RUNNER_EXIT --> DONE([Trade Complete])
+    CLOSE_ALL --> DONE
+
+    ALL_EXIT --> DONE
