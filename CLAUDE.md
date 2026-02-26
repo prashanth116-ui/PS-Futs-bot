@@ -16,7 +16,7 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.13 (Global Consecutive Loss Stop) - Feb 24, 2026
+## Current Strategy: V10.14 (Opposing FVG Exit) - Feb 26, 2026
 
 ### Supported Instruments
 | Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled | Consec Stop |
@@ -330,7 +330,57 @@ python -m runners.plot_v10 ES 3 --fvg-mode=body
 python -m runners.run_v10_dual_entry ES 3 --fvg-mode=body
 ```
 
+### V10.14 Opposing FVG Exit for T2/Runner (Feb 26, 2026)
+When a strong opposing FVG forms after entry, exit remaining T2/Runner contracts at bar close instead of waiting for trail stop. Catches reversals that the structure trail misses (e.g., Feb 26: SHORT rode 86-point drop but trail didn't tighten during waterfall — 41-point reversal gave back profit while a 29-tick bullish FVG formed at 10:39).
+
+**How it works:**
+- After 6R touch, scan for opposing FVGs created since entry
+- Opposing = BULLISH FVG for SHORT trades, BEARISH FVG for LONG trades
+- FVG must meet minimum size threshold
+- Exit ALL remaining contracts (T2 + Runner) at bar close
+- Exit type: `OPP_FVG`
+
+**Per-symbol config (A/B tested):**
+| Symbol | Config | Trigger | Min FVG Size |
+|--------|--------|---------|-------------|
+| ES/MES | B2 | After 6R | 10 ticks (2.5 pts) |
+| NQ/MNQ | B1 | After 6R | 5 ticks (1.25 pts) |
+
+**18-Day A/B Test Matrix (ES):**
+| Config | Trigger | Min FVG | Total P/L | vs Baseline |
+|--------|---------|---------|-----------|-------------|
+| Baseline | — | — | $163,350 | — |
+| A1 | After T1 | 5 ticks | $167,113 | +$3,763 |
+| A2 | After T1 | 10 ticks | $171,306 | +$7,956 |
+| A3 | After T1 | 20 ticks | $167,619 | +$4,269 |
+| B1 | After 6R | 5 ticks | $169,100 | +$5,750 |
+| **B2** | **After 6R** | **10 ticks** | **$172,869** | **+$9,519** |
+| B3 | After 6R | 20 ticks | $167,081 | +$3,731 |
+
+**ES: All configs beat baseline. B2 (after 6R, 10 ticks) is best at +$9,519 (+5.8%).**
+
+**18-Day A/B Test Matrix (NQ):**
+| Config | Trigger | Min FVG | Total P/L | vs Baseline |
+|--------|---------|---------|-----------|-------------|
+| Baseline | — | — | $293,160 | — |
+| A1 | After T1 | 5 ticks | $279,945 | -$13,215 |
+| B1 | After 6R | 5 ticks | $284,105 | -$9,055 |
+| B2 | After 6R | 10 ticks | $282,365 | -$10,795 |
+| B3 | After 6R | 20 ticks | $284,330 | -$8,830 |
+
+**NQ: All configs lose money vs baseline.** Opposing FVG exit cuts runners short — big NQ trend moves get exited prematurely. B1 (after 6R, 5 ticks) is least harmful at -$9,055.
+
+**Why per-symbol:** Same pattern as retrace risk cap and consecutive loss stop — ES benefits from tighter risk management, NQ benefits from letting runners run. NQ's B1 config enabled despite negative backtest to protect against extreme reversals (the cost is small relative to potential tail risk).
+
+**CLI usage:**
+```bash
+# A/B test opposing FVG exit
+python -m runners.backtest_v10_multiday ES 18 --opp-fvg-exit --opp-fvg-min-ticks=10 --opp-fvg-after-6r
+python -m runners.backtest_v10_multiday NQ 18 --opp-fvg-exit --opp-fvg-min-ticks=5 --opp-fvg-after-6r
+```
+
 ### Strategy Features
+- **Opposing FVG Exit (V10.14)**: Exit T2/Runner on opposing FVG after 6R (ES: 10 ticks, NQ: 5 ticks) — ES +$9.5k/18d
 - **Global Consecutive Loss Stop (V10.13)**: ES/MES stop all trading after 2 consecutive losses (NQ/MNQ exempt — consec losses precede big recoveries)
 - **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)
 - **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
@@ -624,6 +674,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.14 | Opposing FVG exit for T2/Runner: per-symbol (ES:10t, NQ:5t) after 6R - **ES +$9.5k/18d (+5.8%)** |
 | V10.13 | Global consecutive loss stop: ES/MES stop after 2 consec losses (NQ exempt) - **+$488 ES, Feb 19 loss halved** |
 | V10.12 | Backtest parity fixes: trail logic, parameter matching, risk manager tracking - **~11% gap → ~2-3%** |
 | V10.11 | Retrace risk cap: ES/MES >8pts → 1 ct (NQ uncapped) + **startup data lag fix (57min → instant)** |
