@@ -10,7 +10,7 @@ from runners.bar_storage import load_bars_with_history
 from runners.run_v10_dual_entry import run_session_v10
 
 
-def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
+def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
@@ -54,7 +54,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
     print('='*80)
     print(f'Strategy: V10.13 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
-    print('  - Morning only filter: YES')
+    print('  - Morning only filter: NO (parity with live runner)')
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
@@ -106,7 +106,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
             enable_creation_entry=True,
             enable_retracement_entry=True,
             enable_bos_entry=True,
-            retracement_morning_only=True,
+            retracement_morning_only=False,  # Parity with run_live.py (allow overnight retrace all day)
             t1_fixed_4r=True,
             midday_cutoff=True,       # V10.2: No entries 12:00-14:00
             pm_cutoff_nq=True,        # V10.2: No NQ entries after 14:00
@@ -165,6 +165,20 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6):
         })
 
         print(f'{target_date} {day_trades:>7} {day_wins:>5} {day_losses:>7} {win_rate:>5.1f}% ${day_pnl:>+10,.0f} ${total_pnl:>+10,.0f}')
+
+        # Per-trade verbose output (matches run_v10_dual_entry.py format)
+        if verbose and results:
+            for r in results:
+                entry_tag = r['entry_type']
+                reentry_tag = ' [2nd]' if r.get('is_reentry') else ''
+                result_str = 'WIN' if r['total_dollars'] > 0.01 else 'LOSS' if r['total_dollars'] < -0.01 else 'BE'
+                cts = r.get('contracts_filled', contracts)
+                print(f"  {r['direction']} {entry_tag}{reentry_tag} @ {r['entry_time'].strftime('%H:%M')} | "
+                      f"Entry: {r['entry_price']:.2f} | Stop: {r['stop_price']:.2f} | "
+                      f"Risk: {r['risk']:.2f} pts | {cts} cts | {result_str} ${r['total_dollars']:+,.2f}")
+                for e in r['exits']:
+                    dollars = (e['pnl'] / tick_size) * tick_value
+                    print(f"    {e['type']}: {e['cts']} ct @ {e['price']:.2f} = ${dollars:+,.2f}")
 
     print('-'*80)
     print()
@@ -226,13 +240,16 @@ if __name__ == '__main__':
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
     contracts = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 
-    # Parse optional R-target flags
+    # Parse optional flags
     t1_r = 3
     trail_r = 6
+    verbose = False
     for arg in sys.argv[4:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
         elif arg.startswith('--trail-r='):
             trail_r = int(arg.split('=')[1])
+        elif arg == '--verbose' or arg == '-v':
+            verbose = True
 
-    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r)
+    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r, verbose=verbose)
