@@ -240,6 +240,25 @@ Live bot P/L diverged from backtest by ~$1,231 (11%) on Feb 24. Root cause: trai
 
 **Result**: Estimated gap reduction from ~11% to ~2-3% (remaining gap is inherent real-time vs post-session bar data).
 
+**Additional parity fix (Feb 26, 2026):**
+- Fixed `retracement_morning_only=True` → `False` in `backtest_v10_multiday.py:109` (was mismatched with `run_live.py:520` which uses `False`)
+- Added `--verbose` / `-v` flag to multiday backtest for per-trade output (enables trade-by-trade comparison with live logs)
+
+**Feb 25 Divergence Analysis (Live +$3,131 vs Backtest +$5,631 = $2,500 gap):**
+
+| # | Live Runner | Backtest | Notes |
+|---|-------------|----------|-------|
+| 1 | CREATION 07:21 @ 6924.75, STOP -$375 | CREATION 07:21 @ 6924.62, STOP -$356 | Entry price differs (real-time vs finalized FVG midpoint) |
+| 2 | CREATION 08:58 @ 6926.38, +$731 | *(not present)* | Live-only: real-time bars produced FVG that finalized bars didn't |
+| 3 | CREATION 09:34 @ 6933.62, +$731 | CREATION 09:33 @ 6933.62, +$731 | Match |
+| 4 | CREATION 09:49 @ 6942.25, T1 only +$338 | CREATION 09:48 @ 6942.25, T1 only +$338 | Match |
+| 5 | INTRADAY 10:10 @ 6935.25, STOP -$488 | *(not present)* | Live-only: different FVG from real-time bars |
+| 6 | CREATION 11:02 @ 6935.38, +$2,194 | CREATION 11:00 @ 6935.38, +$2,194 | Match |
+| - | *(not present)* | CREATION 11:27 @ 6940.50, +$1,188 | Backtest-only |
+| - | *(not present)* | INTRADAY 11:18 @ 6938.75, +$1,538 | Backtest-only |
+
+**Root cause**: Real-time vs finalized bar data. Live TradingView bars have different OHLC values while candles are still forming, producing different FVGs and trade decisions. 3 of 4 matching trades are identical; the gap comes entirely from trades that only exist in one system. This is inherent and unfixable — not a code bug.
+
 ### PickMyTrade Webhook Integration (Feb 24, 2026)
 Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + prop firm Tradovate accounts. Tradovate blocks direct API on prop firm accounts; PickMyTrade is an authorized vendor that acts as the execution bridge.
 
