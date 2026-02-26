@@ -345,7 +345,7 @@ class RiskManager:
 
 
 def create_default_risk_manager() -> RiskManager:
-    """Create risk manager with default V10.13 limits."""
+    """Create risk manager with default V10.14 limits."""
     limits = RiskLimits(
         max_daily_loss=2000.0,
         max_daily_trades=10,

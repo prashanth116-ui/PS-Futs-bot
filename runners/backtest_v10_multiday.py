@@ -1,5 +1,5 @@
 """
-V10.13 Multi-Day Backtest - Validate strategy across multiple trading days.
+V10.14 Multi-Day Backtest - Validate strategy across multiple trading days.
 """
 import sys
 sys.path.insert(0, '.')
@@ -11,14 +11,15 @@ from runners.run_v10_dual_entry import run_session_v10
 
 
 def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
-                          opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False):
+                          opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False,
+                          min_fvg_ticks=5, min_risk_override=None):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
     # Tick values: ES=$12.50, NQ=$5.00, MES=$1.25 (1/10 ES), MNQ=$0.50 (1/10 NQ)
     tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
     # Min risk in points (same for micro and mini)
-    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
+    min_risk_pts = min_risk_override if min_risk_override is not None else (1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5)
     # V10.4: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
     # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only — NQ retraces win big)
@@ -53,7 +54,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print(f'Strategy: V10.13 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
+    print(f'Strategy: V10.14 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print(f'  - FVG Mode: {fvg_mode.upper()} ({"high/low" if fvg_mode == "wick" else "open/close"})')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: NO (parity with live runner)')
@@ -97,7 +98,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
 
         # V10.6: Per-symbol BOS control
         disable_bos = symbol in ['ES', 'MES']
-        # V10.13: Global consecutive loss stop (ES/MES only)
+        # V10.14: Global consecutive loss stop (ES/MES only)
         max_consec_losses = 2 if symbol in ['ES', 'MES'] else 0
 
         # Run V10 strategy with all filters
@@ -123,11 +124,12 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
             max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
-            max_consec_losses=max_consec_losses,  # V10.13: Global consecutive loss stop
+            max_consec_losses=max_consec_losses,  # V10.14: Global consecutive loss stop
             fvg_mode=fvg_mode,  # FVG detection: "wick" or "body"
             opposing_fvg_exit=opp_fvg_exit,
             opposing_fvg_min_ticks=opp_fvg_min_ticks,
             opposing_fvg_after_6r_only=opp_fvg_after_6r,
+            entry_min_fvg_ticks=min_fvg_ticks,
         )
 
         # Tally results
@@ -257,6 +259,8 @@ if __name__ == '__main__':
     opp_fvg_exit = False
     opp_fvg_min_ticks = 5
     opp_fvg_after_6r = False
+    min_fvg_ticks = 5
+    min_risk_override = None
     for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
@@ -272,8 +276,13 @@ if __name__ == '__main__':
             opp_fvg_min_ticks = int(arg.split('=')[1])
         elif arg == '--opp-fvg-after-6r':
             opp_fvg_after_6r = True
+        elif arg.startswith('--min-fvg-ticks='):
+            min_fvg_ticks = int(arg.split('=')[1])
+        elif arg.startswith('--min-risk='):
+            min_risk_override = float(arg.split('=')[1])
 
     backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
                           verbose=verbose, fvg_mode=fvg_mode,
                           opp_fvg_exit=opp_fvg_exit, opp_fvg_min_ticks=opp_fvg_min_ticks,
-                          opp_fvg_after_6r=opp_fvg_after_6r)
+                          opp_fvg_after_6r=opp_fvg_after_6r,
+                          min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override)

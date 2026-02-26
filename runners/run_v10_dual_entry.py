@@ -1,5 +1,5 @@
 """
-V10.13 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
+V10.14 Quad Entry Mode - FVG Creation + Retracement + Smart BOS
 
 ENTRY TYPES:
 ============
@@ -398,7 +398,7 @@ def run_session_v10(
     trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
     # V10.12: Consolidation detection filter
     consol_threshold=0.0,  # Range/ATR ratio threshold (0=disabled). Skip entries when ratio < threshold.
-    # V10.13: Global consecutive loss stop (ES/MES only)
+    # V10.14: Global consecutive loss stop (ES/MES only)
     max_consec_losses=0,  # Stop all entries after N consecutive losses across directions (0=disabled)
     # FVG detection mode
     fvg_mode="wick",  # "wick" (default, high/low) or "body" (open/close)
@@ -406,6 +406,8 @@ def run_session_v10(
     opposing_fvg_exit=False,          # Enable opposing FVG exit for T2/Runner
     opposing_fvg_min_ticks=5,         # Min opposing FVG size in ticks
     opposing_fvg_after_6r_only=False, # True = only after 6R, False = after T1
+    # FVG size filter (A/B testing)
+    entry_min_fvg_ticks=5,            # Min FVG size in ticks for entry (default: 5)
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -472,9 +474,9 @@ def run_session_v10(
                 if session_bar_idx is None:
                     continue
 
-                # Min FVG size filter for creation entries (5 ticks) - MANDATORY
+                # Min FVG size filter for creation entries - MANDATORY
                 fvg_size_ticks = (fvg.high - fvg.low) / tick_size
-                if fvg_size_ticks < 5:
+                if fvg_size_ticks < entry_min_fvg_ticks:
                     continue
 
                 creating_bar = all_bars[fvg.created_bar_index]
@@ -637,7 +639,7 @@ def run_session_v10(
                     # V10.8 HYBRID FILTER SYSTEM
                     # MANDATORY: FVG Size (must pass)
                     fvg_size_ticks = (fvg.high - fvg.low) / tick_size
-                    if fvg_size_ticks < 5:
+                    if fvg_size_ticks < entry_min_fvg_ticks:
                         continue
 
                     # MANDATORY: DI Direction (must pass)
@@ -741,9 +743,9 @@ def run_session_v10(
                 if fvg.direction != expected_fvg_dir:
                     continue
 
-                # Min FVG size (5 ticks)
+                # Min FVG size
                 fvg_size_ticks = (fvg.high - fvg.low) / tick_size
-                if fvg_size_ticks < 5:
+                if fvg_size_ticks < entry_min_fvg_ticks:
                     continue
 
                 # Check if FVG already tracked from this BOS
@@ -873,7 +875,7 @@ def run_session_v10(
     entries_taken = {'LONG': 0, 'SHORT': 0}
     loss_count = {'LONG': 0, 'SHORT': 0}
     bos_loss_count = 0  # V10.6: Track BOS losses for daily limit
-    global_consec_losses = 0  # V10.13: Consecutive loss counter (resets on any win)
+    global_consec_losses = 0  # V10.14: Consecutive loss counter (resets on any win)
 
     # V10.7: T1/T2/runner splits are now calculated per-trade based on trade's contract count
     # For 3 contracts: T1=1, T2=1, Runner=1
@@ -990,7 +992,7 @@ def run_session_v10(
                     trade['exits'].append({'type': 'STOP', 'pnl': pnl, 'price': trade['stop_price'], 'time': bar.timestamp, 'cts': remaining})
                     trade['remaining'] = 0
                     loss_count[trade['direction']] += 1
-                    global_consec_losses += 1  # V10.13
+                    global_consec_losses += 1  # V10.14
                     # V10.6: Track BOS losses for daily limit
                     if 'BOS' in trade.get('entry_type', ''):
                         bos_loss_count += 1
@@ -1072,7 +1074,7 @@ def run_session_v10(
             if trade in active_trades:
                 active_trades.remove(trade)
                 completed_results.append(trade)
-                # V10.13: Reset consecutive loss counter on winning trade
+                # V10.14: Reset consecutive loss counter on winning trade
                 trade_pnl = sum(e['pnl'] for e in trade['exits'])
                 if trade_pnl >= 0:
                     global_consec_losses = 0
@@ -1087,7 +1089,7 @@ def run_session_v10(
             direction = entry['direction']
             entry_type = entry.get('entry_type', '')
 
-            # V10.13: Global consecutive loss stop (ES/MES only)
+            # V10.14: Global consecutive loss stop (ES/MES only)
             if max_consec_losses > 0 and global_consec_losses >= max_consec_losses:
                 continue
 
@@ -1262,7 +1264,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print('='*70)
     print(f'{symbol} BACKTEST - {today} - {contracts} Contracts')
     print('='*70)
-    print('Strategy: ICT FVG V10.13 (Quad Entry Mode)')
+    print('Strategy: ICT FVG V10.14 (Quad Entry Mode)')
     print(f'  - Entry Type A (Creation): {"ENABLED" if enable_creation else "DISABLED"}')
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:
