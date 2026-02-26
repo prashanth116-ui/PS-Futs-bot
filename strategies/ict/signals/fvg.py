@@ -195,9 +195,14 @@ def _check_bullish_fvg(
     tick_size = config.get("tick_size", 0.25)
     min_gap_size = min_fvg_ticks * tick_size
 
-    # Bullish FVG: bar[i-2].high < bar[i].low
-    fvg_low = bar_i_minus_2.high
-    fvg_high = bar_i.low
+    # Bullish FVG: gap between bar[i-2] top and bar[i] bottom
+    fvg_mode = config.get("fvg_mode", "wick")
+    if fvg_mode == "body":
+        fvg_low = max(bar_i_minus_2.open, bar_i_minus_2.close)
+        fvg_high = min(bar_i.open, bar_i.close)
+    else:
+        fvg_low = bar_i_minus_2.high
+        fvg_high = bar_i.low
 
     # Check if gap exists and meets minimum size
     gap_size = fvg_high - fvg_low
@@ -247,9 +252,14 @@ def _check_bearish_fvg(
     tick_size = config.get("tick_size", 0.25)
     min_gap_size = min_fvg_ticks * tick_size
 
-    # Bearish FVG: bar[i-2].low > bar[i].high
-    fvg_low = bar_i.high
-    fvg_high = bar_i_minus_2.low
+    # Bearish FVG: gap between bar[i] top and bar[i-2] bottom
+    fvg_mode = config.get("fvg_mode", "wick")
+    if fvg_mode == "body":
+        fvg_low = max(bar_i.open, bar_i.close)
+        fvg_high = min(bar_i_minus_2.open, bar_i_minus_2.close)
+    else:
+        fvg_low = bar_i.high
+        fvg_high = bar_i_minus_2.low
 
     # Check if gap exists and meets minimum size
     gap_size = fvg_high - fvg_low

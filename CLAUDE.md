@@ -289,6 +289,47 @@ Enables multi-account execution via PickMyTrade ($50/mo flat) for personal + pro
 
 **Error handling**: Max 2 retries, 1-sec delay. No retry on 4xx. On failure: log + Telegram alert. Paper mode continues regardless (source of truth). All accounts fire in parallel via `ThreadPoolExecutor` (~100ms spread).
 
+### FVG Detection Mode: Wick vs Body A/B Test (Feb 26, 2026)
+Tested body-based FVG detection (open/close boundaries, matching TradingView's indicator) vs current wick-based (high/low boundaries, ICT's definition). Added `--fvg-mode=body` CLI flag to backtest and plot runners.
+
+**ICT Definition**: FVGs use wicks — the gap must be a price range where no trading occurred at all. Body-based gaps may have already been filled by wicks.
+
+**18-Day A/B Results (ES):**
+| Config | Trades | Wins | Losses | Win Rate | Total P/L | Max DD |
+|--------|--------|------|--------|----------|-----------|--------|
+| **Wick (default)** | **180** | **157** | **23** | **87.2%** | **+$163,825** | **$413** |
+| Body | 218 | 150 | 68 | 68.8% | +$151,375 | $600 |
+
+Body mode found 38 more trades but generated 45 more losses. Net **-$12,450** on ES.
+
+**18-Day A/B Results (NQ):**
+| Config | Trades | Wins | Losses | Win Rate | Total P/L | Max DD |
+|--------|--------|------|--------|----------|-----------|--------|
+| Wick (default) | 138 | 115 | 23 | 83.3% | +$280,525 | $778 |
+| **Body** | **279** | **204** | **75** | **73.1%** | **+$401,698** | **$2,263** |
+
+Body mode found 141 more trades and generated **+$121,173** on NQ — extra entries catch big trend runners.
+
+**Combined 18-Day (ES + NQ):**
+| Config | Combined P/L |
+|--------|-------------|
+| All Wick | $444,350 |
+| All Body | $553,073 |
+| Per-Symbol (ES wick, NQ body) | $565,523 |
+
+**Decision**: Keep **wick as default** for all symbols. It's the correct ICT definition, validated on ES (87% vs 69% WR). NQ body-mode edge is real (+$121k) but comes with 3x drawdown and lower quality entries — could reverse in different market conditions. The `--fvg-mode=body` flag remains available for future retesting.
+
+**CLI usage:**
+```bash
+# Default (wick)
+python -m runners.backtest_v10_multiday ES 17
+
+# Body mode
+python -m runners.backtest_v10_multiday ES 17 --fvg-mode=body
+python -m runners.plot_v10 ES 3 --fvg-mode=body
+python -m runners.run_v10_dual_entry ES 3 --fvg-mode=body
+```
+
 ### Strategy Features
 - **Global Consecutive Loss Stop (V10.13)**: ES/MES stop all trading after 2 consecutive losses (NQ/MNQ exempt — consec losses precede big recoveries)
 - **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)

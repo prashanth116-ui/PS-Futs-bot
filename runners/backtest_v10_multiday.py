@@ -10,7 +10,7 @@ from runners.bar_storage import load_bars_with_history
 from runners.run_v10_dual_entry import run_session_v10
 
 
-def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False):
+def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick"):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
@@ -53,6 +53,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
     print(f'Strategy: V10.13 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
+    print(f'  - FVG Mode: {fvg_mode.upper()} ({"high/low" if fvg_mode == "wick" else "open/close"})')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: NO (parity with live runner)')
     print(f'  - Min risk: {min_risk_pts} pts')
@@ -119,6 +120,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
             max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
             max_consec_losses=max_consec_losses,  # V10.13: Global consecutive loss stop
+            fvg_mode=fvg_mode,  # FVG detection: "wick" or "body"
         )
 
         # Tally results
@@ -238,18 +240,21 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
 if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-    contracts = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    contracts = int(sys.argv[3]) if len(sys.argv) > 3 and not sys.argv[3].startswith('--') else 3
 
     # Parse optional flags
     t1_r = 3
     trail_r = 6
     verbose = False
-    for arg in sys.argv[4:]:
+    fvg_mode = "wick"
+    for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
         elif arg.startswith('--trail-r='):
             trail_r = int(arg.split('=')[1])
         elif arg == '--verbose' or arg == '-v':
             verbose = True
+        elif arg.startswith('--fvg-mode='):
+            fvg_mode = arg.split('=')[1]
 
-    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r, verbose=verbose)
+    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r, verbose=verbose, fvg_mode=fvg_mode)

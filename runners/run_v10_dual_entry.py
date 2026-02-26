@@ -400,6 +400,8 @@ def run_session_v10(
     consol_threshold=0.0,  # Range/ATR ratio threshold (0=disabled). Skip entries when ratio < threshold.
     # V10.13: Global consecutive loss stop (ES/MES only)
     max_consec_losses=0,  # Stop all entries after N consecutive losses across directions (0=disabled)
+    # FVG detection mode
+    fvg_mode="wick",  # "wick" (default, high/low) or "body" (open/close)
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -420,7 +422,8 @@ def run_session_v10(
         'min_fvg_ticks': 2,  # Lower threshold to catch smaller overnight FVGs
         'tick_size': tick_size,
         'max_fvg_age_bars': 200,  # Extended for overnight FVGs
-        'invalidate_on_close_through': True
+        'invalidate_on_close_through': True,
+        'fvg_mode': fvg_mode,  # "wick" or "body"
     }
 
     # Detect FVGs from ALL bars (including overnight)
@@ -1183,7 +1186,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
                   overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
                   t1_fixed_4r=True,  # HYBRID default: T1 takes profit at 4R
                   t1_r=3, trail_r=6,  # R-target tuning (V10.9)
-                  consol_threshold=0.0):  # V10.12: Consolidation filter (0=disabled)
+                  consol_threshold=0.0,  # V10.12: Consolidation filter (0=disabled)
+                  fvg_mode="wick"):  # FVG detection: "wick" or "body"
     """Run V10 backtest for today.
 
     Args:
@@ -1292,6 +1296,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         high_displacement_override=3.0,
         max_retrace_risk_pts=max_retrace_risk_pts,
         consol_threshold=consol_threshold,
+        fvg_mode=fvg_mode,
     )
 
     total_pnl = 0
@@ -1352,6 +1357,7 @@ if __name__ == '__main__':
     t1_r = 3
     trail_r = 6
     consol_threshold = 0.0
+    fvg_mode = "wick"
 
     for arg in sys.argv[3:]:
         if arg == '--creation-only':
@@ -1375,6 +1381,8 @@ if __name__ == '__main__':
             trail_r = int(arg.split('=')[1])
         elif arg.startswith('--consol='):
             consol_threshold = float(arg.split('=')[1])
+        elif arg.startswith('--fvg-mode='):
+            fvg_mode = arg.split('=')[1]
 
     run_today_v10(
         symbol=symbol,
@@ -1387,4 +1395,5 @@ if __name__ == '__main__':
         t1_r=t1_r,
         trail_r=trail_r,
         consol_threshold=consol_threshold,
+        fvg_mode=fvg_mode,
     )

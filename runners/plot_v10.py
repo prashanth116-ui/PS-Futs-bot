@@ -35,7 +35,7 @@ def calculate_ema(closes, period):
     return ema
 
 
-def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50, losses_only=False):
+def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50, losses_only=False, fvg_mode="wick"):
     """Plot today's trades with V10.13 Quad Entry strategy. Supports futures and equities."""
 
     is_equity = symbol.upper() in ['SPY', 'QQQ']
@@ -115,6 +115,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             max_retrace_risk_pts=max_retrace_risk,  # V10.12: Reduce retrace cts if high risk
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
             max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13
+            fvg_mode=fvg_mode,
         )
 
     if losses_only:
@@ -313,7 +314,8 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
 
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
     bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
-    ax.set_title(f'{symbol} 3-Minute | {today} | V10.13 Quad Entry Mode\n'
+    fvg_label = f' | FVG: {fvg_mode.upper()}' if fvg_mode != 'wick' else ''
+    ax.set_title(f'{symbol} 3-Minute | {today} | V10.13 Quad Entry Mode{fvg_label}\n'
                  f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
@@ -396,7 +398,8 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
                 verticalalignment='bottom', horizontalalignment='left',
                 fontweight='bold', bbox=rth_props, family='monospace')
 
-    filename = f'backtest_{symbol}_V10.13_{today}.png'
+    mode_suffix = f'_{fvg_mode}' if fvg_mode != 'wick' else ''
+    filename = f'backtest_{symbol}_V10.13_{today}{mode_suffix}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()
@@ -407,7 +410,11 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
 if __name__ == '__main__':
     symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
     contracts = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    interval = sys.argv[3] if len(sys.argv) > 3 else '3m'
-    risk = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+    interval = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith('--') else '3m'
+    risk = int(sys.argv[4]) if len(sys.argv) > 4 and not sys.argv[4].startswith('--') else 50
     losses = '--losses' in sys.argv
-    plot_v10(symbol=symbol, contracts=contracts, interval=interval, risk_per_trade=risk, losses_only=losses)
+    fvg_mode = "wick"
+    for arg in sys.argv:
+        if arg.startswith('--fvg-mode='):
+            fvg_mode = arg.split('=')[1]
+    plot_v10(symbol=symbol, contracts=contracts, interval=interval, risk_per_trade=risk, losses_only=losses, fvg_mode=fvg_mode)
