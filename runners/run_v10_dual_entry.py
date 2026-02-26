@@ -402,6 +402,10 @@ def run_session_v10(
     max_consec_losses=0,  # Stop all entries after N consecutive losses across directions (0=disabled)
     # FVG detection mode
     fvg_mode="wick",  # "wick" (default, high/low) or "body" (open/close)
+    # Opposing FVG exit for T2/Runner
+    opposing_fvg_exit=False,          # Enable opposing FVG exit for T2/Runner
+    opposing_fvg_min_ticks=5,         # Min opposing FVG size in ticks
+    opposing_fvg_after_6r_only=False, # True = only after 6R, False = after T1
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -1040,6 +1044,26 @@ def run_session_v10(
                         trade['exits'].append({'type': 'RUNNER_STOP', 'pnl': pnl, 'price': trade['runner_stop'], 'time': bar.timestamp, 'cts': remaining})
                         trade['remaining'] = 0
                         remaining = 0
+
+            # Opposing FVG exit for T2/Runner
+            if opposing_fvg_exit and remaining > 0 and trade['t1_exited']:
+                # Check trigger: after T1 always, or only after 6R if configured
+                trigger_met = trade['touched_8r'] if opposing_fvg_after_6r_only else trade['touched_4r']
+                if trigger_met:
+                    opposing_dir = 'BULLISH' if not is_long else 'BEARISH'
+                    min_opp_size = opposing_fvg_min_ticks * tick_size
+                    entry_all_idx = session_to_all_idx.get(trade['entry_bar_idx'], 0)
+                    current_all_idx = session_to_all_idx.get(i, 0)
+                    for fvg in all_fvgs:
+                        if (fvg.direction == opposing_dir
+                                and fvg.created_bar_index > entry_all_idx
+                                and fvg.created_bar_index <= current_all_idx
+                                and (fvg.high - fvg.low) >= min_opp_size):
+                            pnl = (bar.close - trade['entry_price']) * remaining if is_long else (trade['entry_price'] - bar.close) * remaining
+                            trade['exits'].append({'type': 'OPP_FVG', 'pnl': pnl, 'price': bar.close, 'time': bar.timestamp, 'cts': remaining})
+                            trade['remaining'] = 0
+                            remaining = 0
+                            break
 
             if trade['remaining'] <= 0:
                 trades_to_remove.append(trade)

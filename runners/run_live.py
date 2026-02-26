@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
+from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 from runners.run_v10_equity import run_session_v10_equity
 from runners.tradovate_client import TradovateClient, create_client
 from runners.order_manager import OrderManager
@@ -37,6 +38,7 @@ from runners.risk_manager import RiskManager, create_default_risk_manager
 from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_next_day_outlook
 from runners.bar_storage import save_daily_bars, load_bars_with_history
 from runners.webhook_executor import WebhookExecutor
+from runners.divergence_tracker import save_live_trades, compare_day, format_console_report, format_telegram_alert
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -179,6 +181,9 @@ class LiveTrader:
             'max_retrace_risk': 8.0,
             'contracts': 3,
             'type': 'futures',
+            'opp_fvg_exit': True,
+            'opp_fvg_min_ticks': 10,   # B2: after 6R, 10 ticks
+            'opp_fvg_after_6r': True,
         },
         'NQ': {
             'tradovate_symbol': 'NQH5',
@@ -189,6 +194,9 @@ class LiveTrader:
             'max_retrace_risk': None,
             'contracts': 3,
             'type': 'futures',
+            'opp_fvg_exit': True,
+            'opp_fvg_min_ticks': 5,    # B1: after 6R, 5 ticks
+            'opp_fvg_after_6r': True,
         },
         'MES': {
             'tradovate_symbol': 'MESH5',
@@ -199,6 +207,9 @@ class LiveTrader:
             'max_retrace_risk': 8.0,
             'contracts': 3,
             'type': 'futures',
+            'opp_fvg_exit': True,
+            'opp_fvg_min_ticks': 10,   # B2: after 6R, 10 ticks (same as ES)
+            'opp_fvg_after_6r': True,
         },
         'MNQ': {
             'tradovate_symbol': 'MNQH5',
@@ -209,6 +220,9 @@ class LiveTrader:
             'max_retrace_risk': None,
             'contracts': 3,
             'type': 'futures',
+            'opp_fvg_exit': True,
+            'opp_fvg_min_ticks': 5,    # B1: after 6R, 5 ticks (same as NQ)
+            'opp_fvg_after_6r': True,
         },
     }
 
@@ -278,6 +292,11 @@ class LiveTrader:
         self.paper_daily_trades = 0
         self.paper_daily_wins = 0
         self.paper_daily_losses = 0
+        self.paper_trade_history: List[Dict] = []  # Snapshots of closed trades for divergence tracking
+
+        # Cached bars and FVGs for opposing FVG exit (refreshed each scan cycle)
+        self._cached_all_bars: Dict[str, list] = {}
+        self._cached_fvgs: Dict[str, list] = {}
 
         # Price tracking for heartbeat
         self.last_prices: Dict[str, float] = {}
@@ -502,6 +521,20 @@ class LiveTrader:
         self.last_prices[symbol] = current_price
         log(f"  {symbol}: {current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
+        # Cache bars and FVGs for opposing FVG exit in _manage_paper_trades
+        self._cached_all_bars[symbol] = bars
+        if config.get('opp_fvg_exit'):
+            fvg_config = {'min_fvg_ticks': 2, 'tick_size': config['tick_size'],
+                          'max_fvg_age_bars': 200, 'invalidate_on_close_through': True, 'fvg_mode': 'wick'}
+            fvgs = detect_fvgs(bars, fvg_config)
+            for fvg in fvgs:
+                if not fvg.mitigated:
+                    for bar_idx in range(fvg.created_bar_index + 1, len(bars)):
+                        update_fvg_mitigation(fvg, bars[bar_idx], bar_idx, fvg_config)
+                        if fvg.mitigated:
+                            break
+            self._cached_fvgs[symbol] = fvgs
+
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
 
@@ -534,6 +567,10 @@ class LiveTrader:
             trail_r_trigger=6,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
             max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13: ES/MES only
+            # Opposing FVG exit
+            opposing_fvg_exit=config.get('opp_fvg_exit', False),
+            opposing_fvg_min_ticks=config.get('opp_fvg_min_ticks', 5),
+            opposing_fvg_after_6r_only=config.get('opp_fvg_after_6r', False),
         )
 
         # Process signals
@@ -1166,6 +1203,79 @@ class LiveTrader:
                             log(f"    [WEBHOOK] Runner close failed: {e}")
 
                     closed_trades.append(trade_id)
+                    continue
+
+            # Opposing FVG exit for T2/Runner (after T1 or 6R depending on config)
+            if trade.status == PaperTradeStatus.OPEN and trade.t1_hit and trade.asset_type == 'futures':
+                sym_config = self.FUTURES_SYMBOLS.get(trade.symbol, {})
+                if sym_config.get('opp_fvg_exit') and trade.symbol in self._cached_fvgs:
+                    trigger_met = trade.touched_8r if sym_config.get('opp_fvg_after_6r') else trade.t1_hit
+                    if trigger_met:
+                        opposing_dir = 'BULLISH' if not trade.is_long else 'BEARISH'
+                        min_size = sym_config.get('opp_fvg_min_ticks', 5) * trade.tick_size
+                        all_bars = self._cached_all_bars.get(trade.symbol, [])
+                        entry_time_aware = to_est_aware(trade.entry_time)
+
+                        for fvg in self._cached_fvgs[trade.symbol]:
+                            if fvg.direction != opposing_dir:
+                                continue
+                            if (fvg.high - fvg.low) < min_size:
+                                continue
+                            if fvg.created_bar_index >= len(all_bars):
+                                continue
+                            fvg_time = to_est_aware(all_bars[fvg.created_bar_index].timestamp)
+                            if fvg_time <= entry_time_aware:
+                                continue
+
+                            # Opposing FVG found — exit all remaining contracts
+                            current_close = bars[-1].close if bars else trade.entry_price
+                            remaining_cts = 0
+                            if not trade.t2_hit:
+                                trade.t2_pnl = trade.calculate_pnl(current_close, cts_t2)
+                                trade.t2_hit = True
+                                remaining_cts += cts_t2
+                            if trade.has_runner and not trade.runner_exit:
+                                trade.runner_pnl = trade.calculate_pnl(current_close, cts_runner)
+                                trade.runner_exit = True
+                                remaining_cts += cts_runner
+
+                            if remaining_cts > 0:
+                                trade.status = PaperTradeStatus.CLOSED
+                                trade.exit_time = get_est_now()
+                                trade.exit_price = current_close
+                                trade.exit_reason = "OPP_FVG"
+
+                                self.paper_daily_pnl += trade.total_pnl
+                                self.paper_daily_trades += 1
+                                if trade.total_pnl > 0:
+                                    self.paper_daily_wins += 1
+                                else:
+                                    self.paper_daily_losses += 1
+
+                                fvg_size_ticks = (fvg.high - fvg.low) / trade.tick_size
+                                log(f"\n  [PAPER] OPP FVG EXIT: {trade.symbol} {trade.direction}")
+                                log(f"    Opposing {opposing_dir} FVG: {fvg_size_ticks:.0f} ticks @ {fvg_time.strftime('%H:%M')}")
+                                log(f"    T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}" +
+                                    (f" | Runner: ${trade.runner_pnl:+,.2f}" if trade.has_runner else ""))
+                                log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                                notify_exit(
+                                    symbol=trade.symbol, direction=trade.direction,
+                                    exit_type="OPP_FVG", exit_price=current_close,
+                                    pnl=trade.total_pnl, contracts=trade.contracts,
+                                )
+
+                                if self.webhook:
+                                    try:
+                                        self.webhook.close_position(
+                                            symbol=trade.symbol, direction=trade.direction,
+                                            paper_trade_id=trade.id,
+                                        )
+                                    except Exception as e:
+                                        log(f"    [WEBHOOK] OPP FVG close failed: {e}")
+
+                                closed_trades.append(trade_id)
+                            break  # Only need first matching opposing FVG
 
         # Remove closed trades from active tracking
         for trade_id in closed_trades:
@@ -1174,7 +1284,79 @@ class LiveTrader:
                 trade.symbol, trade.contracts, trade.total_pnl,
                 is_win=trade.total_pnl > 0,
             )
+            self.paper_trade_history.append(self._snapshot_paper_trade(trade))
             del self.paper_trades[trade_id]
+
+    def _snapshot_paper_trade(self, trade: PaperTrade) -> Dict:
+        """Capture a closed PaperTrade as a plain dict for divergence tracking."""
+        return {
+            'id': trade.id,
+            'symbol': trade.symbol,
+            'direction': trade.direction,
+            'entry_type': trade.entry_type,
+            'entry_price': trade.entry_price,
+            'stop_price': trade.stop_price,
+            'exit_price': trade.exit_price,
+            'exit_reason': trade.exit_reason,
+            'contracts': trade.contracts,
+            'has_runner': trade.has_runner,
+            'entry_time': trade.entry_time.isoformat() if trade.entry_time else None,
+            'exit_time': trade.exit_time.isoformat() if trade.exit_time else None,
+            'risk_pts': trade.risk_pts,
+            't1_pnl': trade.t1_pnl,
+            't2_pnl': trade.t2_pnl,
+            'runner_pnl': trade.runner_pnl,
+            'total_pnl': trade.total_pnl,
+            'tick_size': trade.tick_size,
+            'tick_value': trade.tick_value,
+        }
+
+    def _run_divergence_check(self):
+        """Run live vs backtest divergence comparison at EOD."""
+        today = get_est_now().date()
+        reports = []
+
+        for symbol in self.futures_symbols:
+            # Filter trades for this symbol
+            sym_trades = [t for t in self.paper_trade_history if t['symbol'] == symbol]
+            if not sym_trades:
+                continue
+
+            sym_wins = sum(1 for t in sym_trades if t['total_pnl'] > 0)
+            sym_losses = sum(1 for t in sym_trades if t['total_pnl'] < 0)
+            sym_pnl = sum(t['total_pnl'] for t in sym_trades)
+            summary = {
+                'trades': len(sym_trades),
+                'wins': sym_wins,
+                'losses': sym_losses,
+                'pnl': sym_pnl,
+            }
+
+            # Save live trades to JSON
+            save_live_trades(symbol, today, sym_trades, summary)
+            log(f"  [DIVERGENCE] Saved {len(sym_trades)} {symbol} trades to JSON")
+
+            # Run comparison
+            report = compare_day(symbol, today, live_trades=sym_trades)
+            reports.append(report)
+
+        if not reports:
+            log("  [DIVERGENCE] No futures trades to compare")
+            return
+
+        # Print console report
+        console = format_console_report(reports)
+        print(console)
+
+        # Send Telegram alert if gap exceeds threshold
+        alert = format_telegram_alert(reports)
+        if alert:
+            try:
+                from runners.notifier import notify_error
+                notify_error(alert)
+                log("  [DIVERGENCE] Telegram alert sent (gap exceeds threshold)")
+            except Exception as e:
+                log(f"  [DIVERGENCE] Telegram alert failed: {e}")
 
     def _manage_active_trades(self):
         """Manage active trades - check targets and stops."""
@@ -1508,6 +1690,13 @@ class LiveTrader:
                         log(f"  [BARS] Saved {len(created)} CSV(s) for {sym}")
                 except Exception as e:
                     log(f"  [BARS] Error saving {sym} bars: {e}")
+
+        # Run divergence check (live vs backtest comparison)
+        if self.paper_mode and self.futures_symbols:
+            try:
+                self._run_divergence_check()
+            except Exception as e:
+                log(f"  [DIVERGENCE] Error running divergence check: {e}")
 
         print("=" * 70)
 

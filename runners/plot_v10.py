@@ -35,7 +35,7 @@ def calculate_ema(closes, period):
     return ema
 
 
-def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='3m', risk_per_trade=50, losses_only=False, fvg_mode="wick"):
+def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval='3m', risk_per_trade=50, losses_only=False, fvg_mode="wick"):
     """Plot today's trades with V10.13 Quad Entry strategy. Supports futures and equities."""
 
     is_equity = symbol.upper() in ['SPY', 'QQQ']
@@ -92,6 +92,9 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             overnight_retrace_min_adx=22,
         )
     else:
+        # Per-symbol opposing FVG exit: ES/MES=B2 (6R, 10 ticks), NQ/MNQ=B1 (6R, 5 ticks)
+        opp_fvg_min = 10 if symbol in ['ES', 'MES'] else 5
+
         all_results = run_session_v10(
             session_bars,
             all_bars,
@@ -116,6 +119,10 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
             max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.13
             fvg_mode=fvg_mode,
+            # Opposing FVG exit for T2/Runner
+            opposing_fvg_exit=True,
+            opposing_fvg_min_ticks=opp_fvg_min,
+            opposing_fvg_after_6r_only=True,
         )
 
     if losses_only:
@@ -169,6 +176,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=True, interval='
         'TRAIL_STOP': '#FF9800',
         'STOP': '#F44336',
         'EOD': '#607D8B',
+        'OPP_FVG': '#FF5722',  # Deep orange - opposing FVG exit
     }
 
     total_pnl = 0

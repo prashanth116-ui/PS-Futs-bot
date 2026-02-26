@@ -10,7 +10,8 @@ from runners.bar_storage import load_bars_with_history
 from runners.run_v10_dual_entry import run_session_v10
 
 
-def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick"):
+def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
+                          opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
@@ -60,6 +61,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
     print(f'  - T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R')
+    if opp_fvg_exit:
+        trigger = "after 6R" if opp_fvg_after_6r else "after T1"
+        print(f'  - Opposing FVG Exit: ON ({trigger}, min {opp_fvg_min_ticks} ticks)')
     print('='*80)
     print()
 
@@ -121,6 +125,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
             max_consec_losses=max_consec_losses,  # V10.13: Global consecutive loss stop
             fvg_mode=fvg_mode,  # FVG detection: "wick" or "body"
+            opposing_fvg_exit=opp_fvg_exit,
+            opposing_fvg_min_ticks=opp_fvg_min_ticks,
+            opposing_fvg_after_6r_only=opp_fvg_after_6r,
         )
 
         # Tally results
@@ -247,6 +254,9 @@ if __name__ == '__main__':
     trail_r = 6
     verbose = False
     fvg_mode = "wick"
+    opp_fvg_exit = False
+    opp_fvg_min_ticks = 5
+    opp_fvg_after_6r = False
     for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
@@ -256,5 +266,14 @@ if __name__ == '__main__':
             verbose = True
         elif arg.startswith('--fvg-mode='):
             fvg_mode = arg.split('=')[1]
+        elif arg == '--opp-fvg-exit':
+            opp_fvg_exit = True
+        elif arg.startswith('--opp-fvg-min-ticks='):
+            opp_fvg_min_ticks = int(arg.split('=')[1])
+        elif arg == '--opp-fvg-after-6r':
+            opp_fvg_after_6r = True
 
-    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r, verbose=verbose, fvg_mode=fvg_mode)
+    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
+                          verbose=verbose, fvg_mode=fvg_mode,
+                          opp_fvg_exit=opp_fvg_exit, opp_fvg_min_ticks=opp_fvg_min_ticks,
+                          opp_fvg_after_6r=opp_fvg_after_6r)
