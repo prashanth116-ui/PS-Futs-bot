@@ -1,0 +1,24 @@
+gantt
+    title Trading Session Timeline - EST
+    dateFormat HH:mm
+    axisFormat %H:%M
+
+    section Pre-Market
+    Overnight FVG Tracking     :04:00, 05:30
+
+    section Pre-RTH
+    All Entry Types Active     :04:00, 09:30
+
+    section RTH Morning
+    Full Trading All Types     :09:30, 12:00
+    B1 Overnight Retrace (all RTH) :09:30, 16:00
+
+    section Midday
+    NO ENTRIES Lunch Lull      :crit, 12:00, 14:00
+
+    section Afternoon
+    ES Trading Resumes         :14:00, 16:00
+    NQ MNQ CUTOFF              :crit, 14:00, 16:00
+
+    section EOD
+    Close All Positions        :milestone, 16:00, 0min

@@ -1,0 +1,22 @@
+flowchart TD
+    SIGNAL([Valid Entry Signal]) --> G1{Consecutive losses\n< max? V10.13}
+    G1 -->|No| BLOCK1([Blocked:\nConsec Loss Stop])
+    G1 -->|Yes| G2{Direction losses\n< 3 today?}
+    G2 -->|No| BLOCK2([Blocked:\nCircuit Breaker])
+    G2 -->|Yes| G3{BOS entry?}
+    G3 -->|Yes| G4{BOS daily loss\nlimit reached?}
+    G3 -->|No| G5
+    G4 -->|Yes| BLOCK3([Blocked:\nBOS Loss Limit])
+    G4 -->|No| G5{Open trades\n< 3?}
+    G5 -->|No| BLOCK4([Blocked:\nMax Open Trades])
+    G5 -->|Yes| SIZING[Position Sizing]
+
+    SIZING --> S1{How many trades\ncurrently open?}
+    S1 -->|0 open| CT3[3 Contracts\nT1 + T2 + Runner]
+    S1 -->|1+ open| CT2[2 Contracts\nT1 + T2, no Runner]
+
+    CT3 --> RETRACE{Retrace entry?\nRisk > 8 pts?\nES/MES only}
+    CT2 --> RETRACE
+    RETRACE -->|Yes| CT1[Force: 1 Contract\nV10.11 Risk Cap]
+    RETRACE -->|No| ENTER([Open Trade])
+    CT1 --> ENTER

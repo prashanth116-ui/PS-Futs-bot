@@ -1,0 +1,36 @@
+flowchart TD
+    FVG_DETECTED([FVG Detected]) --> TYPE{Where was\nFVG created?}
+
+    TYPE -->|During session bar| A[Entry A: CREATION\nEnter immediately at FVG midpoint]
+    TYPE -->|Before 9:30 AM| B1[Entry B1: OVERNIGHT RETRACE\nWait for price to retrace into FVG]
+    TYPE -->|During RTH, 2+ bars ago| B2[Entry B2: INTRADAY RETRACE\nWait for price to retrace into FVG]
+    TYPE -->|After BOS, within 5 bars| C[Entry C: BOS RETRACE\nWait for price to retrace into FVG]
+
+    A --> A_DISP{Displacement\n>= 3x avg body?}
+    A_DISP -->|Yes| A_OVERRIDE[3x Override\nADX >= 10 only]
+    A_DISP -->|No| A_FILTER[Hybrid Filter Check]
+    A_OVERRIDE --> VALID([Valid Entry])
+
+    B1 --> B1_REJ{Rejection Candle?\nWick >= 0.85x body}
+    B2 --> B2_REJ{Rejection Candle?\nWick >= 0.85x body}
+    C --> C_TOUCH{Price touches\nFVG zone?}
+
+    B1_REJ -->|Yes| B1_ADX{ADX >= 22?}
+    B1_REJ -->|No| SKIP1([Skip])
+    B1_ADX -->|Yes| B1_FILTER[Hybrid Filter Check\nAllowed all day in RTH]
+    B1_ADX -->|No| SKIP2([Skip])
+
+    B2_REJ -->|Yes| B2_FILTER[Hybrid Filter Check]
+    B2_REJ -->|No| SKIP3([Skip])
+
+    C_TOUCH -->|Yes| C_BOS{BOS enabled\nfor symbol?}
+    C_TOUCH -->|No| SKIP4([Skip])
+    C_BOS -->|ES/MES: OFF| SKIP5([Skip])
+    C_BOS -->|NQ/MNQ: ON| C_LOSS{BOS losses\ntoday < 1?}
+    C_LOSS -->|Yes| C_FILTER[Hybrid Filter Check]
+    C_LOSS -->|No| SKIP6([Skip])
+
+    A_FILTER --> VALID
+    B1_FILTER --> VALID
+    B2_FILTER --> VALID
+    C_FILTER --> VALID
