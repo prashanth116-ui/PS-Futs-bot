@@ -385,6 +385,9 @@ python -m runners.backtest_v10_multiday NQ 30
 python -m runners.backtest_v10_multiday MES 30
 python -m runners.backtest_v10_multiday MNQ 30
 
+# Verbose per-trade output (compare with live runner logs)
+python -m runners.backtest_v10_multiday ES 1 3 --verbose
+
 # R-target A/B testing (override defaults)
 python -m runners.backtest_v10_multiday ES 11 --t1-r=4 --trail-r=8
 python -m runners.run_v10_dual_entry ES 3 --t1-r=5 --trail-r=10
