@@ -25,6 +25,7 @@ deploy/tv_cookies.json
 
 # Reports and data
 reports/
+data/bars/
 
 # Generated files
 *.png
