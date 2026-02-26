@@ -67,12 +67,12 @@ class RiskLimits:
     max_consecutive_losses: int = 3       # Pause after N consecutive losses
 
     # Position limits
-    max_open_trades: int = 2              # Max simultaneous trades
+    max_open_trades: int = 3              # Max simultaneous trades (parity with backtest)
     max_contracts_per_trade: int = 3      # Max contracts per single trade
     max_total_contracts: int = 6          # Max total open contracts
 
     # Per-symbol limits
-    max_contracts_per_symbol: int = 3     # Max contracts per symbol
+    max_contracts_per_symbol: int = 6     # Max contracts per symbol (parity with backtest: 3 trades × 2-3 cts)
 
     # Time filters (V10.2/V10.4)
     midday_cutoff_start: dt_time = dt_time(12, 0)   # No entries 12:00-14:00
@@ -345,14 +345,15 @@ class RiskManager:
 
 
 def create_default_risk_manager() -> RiskManager:
-    """Create risk manager with default V10.4 limits."""
+    """Create risk manager with default V10.13 limits."""
     limits = RiskLimits(
         max_daily_loss=2000.0,
         max_daily_trades=10,
         max_consecutive_losses=3,
-        max_open_trades=2,
+        max_open_trades=3,              # Parity with backtest (was 2, blocked 2nd/3rd entries)
         max_contracts_per_trade=3,
         max_total_contracts=6,
+        max_contracts_per_symbol=6,     # Parity with backtest (was 3, blocked entries when 1st trade still open)
         max_bos_risk_es=8.0,
         max_bos_risk_nq=20.0,
         disable_spy_intraday=True,
