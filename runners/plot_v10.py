@@ -325,7 +325,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval=
     result_str = 'WIN' if total_pnl > 0 else 'LOSS' if total_pnl < 0 else 'BE'
     bos_status = "OFF" if disable_bos else "ON (1 loss limit)"
     fvg_label = f' | FVG: {fvg_mode.upper()}' if fvg_mode != 'wick' else ''
-    ax.set_title(f'{symbol} 3-Minute | {today} | V10.15 Quad Entry Mode{fvg_label}\n'
+    ax.set_title(f'{symbol} 3-Minute | {today} | {STRATEGY_VERSION} Quad Entry Mode{fvg_label}\n'
                  f'Trades: {len(all_results)} ({creation_count} Creation, {overnight_count} Overnight, {intraday_count} Intraday, {bos_count} BOS) | BOS: {bos_status}\n'
                  f'Result: {result_str} | Total P/L: ${total_pnl:+,.2f}',
                  fontsize=14, fontweight='bold')
@@ -409,7 +409,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval=
                 fontweight='bold', bbox=rth_props, family='monospace')
 
     mode_suffix = f'_{fvg_mode}' if fvg_mode != 'wick' else ''
-    filename = f'backtest_{symbol}_V10.15_{today}{mode_suffix}.png'
+    filename = f'backtest_{symbol}_{STRATEGY_VERSION}_{today}{mode_suffix}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
     plt.close()

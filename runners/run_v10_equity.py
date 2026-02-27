@@ -948,7 +948,7 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, 
     session_bars = [b for b in day_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
     print(f"\n{'='*70}")
-    print(f"V10.15 EQUITY - {symbol} - {today}")
+    print(f"{STRATEGY_VERSION} EQUITY - {symbol} - {today}")
     print(f"{'='*70}")
     print(f"Session bars: {len(session_bars)}")
     print(f"Risk per trade: ${risk_per_trade}")

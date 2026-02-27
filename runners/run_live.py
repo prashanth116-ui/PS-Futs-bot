@@ -322,7 +322,7 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.15 LIVE TRADER - Combined Futures + Equities")
+        print(f"{STRATEGY_VERSION} LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.webhook:
@@ -353,7 +353,7 @@ class LiveTrader:
 
         # Send Telegram startup notification
         mode = "PAPER" if self.paper_mode else "LIVE"
-        notify_status(f"V10.15 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
+        notify_status(f"{STRATEGY_VERSION} {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
 
         self._trading_loop()
 
@@ -1737,7 +1737,7 @@ class LiveTrader:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='V10.15 Live Trading - Futures + Equities')
+    parser = argparse.ArgumentParser(description=f'{STRATEGY_VERSION} Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
     parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
@@ -1771,7 +1771,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print("Starting V10.15 Live Trader...")
+    print(f"Starting {STRATEGY_VERSION} Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:
