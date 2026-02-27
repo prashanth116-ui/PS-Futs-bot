@@ -1,7 +1,7 @@
 """
-V10.14 Live Trading Runner - Combined Futures + Equities
+V10.15 Live Trading Runner - Combined Futures + Equities
 
-Main entry point for live trading with the V10.14 strategy.
+Main entry point for live trading with the V10.15 strategy.
 Supports both futures (ES, NQ, MES, MNQ) and equities (SPY, QQQ).
 
 V10.10 Changes:
@@ -163,11 +163,11 @@ class PaperTrade:
 
 class LiveTrader:
     """
-    V10.14 Live Trading System - Combined Futures + Equities
+    V10.15 Live Trading System - Combined Futures + Equities
 
     Runs the strategy in real-time, generating signals and executing trades.
 
-    V10.14: Global consecutive loss stop (ES/MES: 2 consec losses → stop for day)
+    V10.15: Global consecutive loss stop (ES/MES: 2 consec losses → stop for day)
     """
 
     # Futures symbol configurations
@@ -320,7 +320,7 @@ class LiveTrader:
         """Start the live trading loop."""
         self.running = True
         print("=" * 70)
-        print("V10.14 LIVE TRADER - Combined Futures + Equities")
+        print("V10.15 LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.webhook:
@@ -351,7 +351,7 @@ class LiveTrader:
 
         # Send Telegram startup notification
         mode = "PAPER" if self.paper_mode else "LIVE"
-        notify_status(f"V10.14 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
+        notify_status(f"V10.15 {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
 
         self._trading_loop()
 
@@ -552,7 +552,7 @@ class LiveTrader:
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
 
-        # Run V10.14 strategy to get signals (all params explicit for backtest parity)
+        # Run V10.15 strategy to get signals (all params explicit for backtest parity)
         results = run_session_v10(
             session_bars,
             bars,
@@ -580,7 +580,7 @@ class LiveTrader:
             t1_r_target=3,
             trail_r_trigger=6,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
-            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.14: ES/MES only
+            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.15: ES/MES only
             # Opposing FVG exit
             opposing_fvg_exit=config.get('opp_fvg_exit', False),
             opposing_fvg_min_ticks=config.get('opp_fvg_min_ticks', 5),
@@ -623,7 +623,7 @@ class LiveTrader:
         # V10.10: SPY BOS disabled, QQQ BOS enabled with loss limit
         disable_bos = symbol == 'SPY'
 
-        # Run V10.14 equity strategy
+        # Run V10.15 equity strategy
         results = run_session_v10_equity(
             session_bars,
             bars,
@@ -1735,7 +1735,7 @@ class LiveTrader:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='V10.14 Live Trading - Futures + Equities')
+    parser = argparse.ArgumentParser(description='V10.15 Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
     parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
@@ -1769,7 +1769,7 @@ def main():
     futures = [s for s in args.symbols if s in valid_futures]
     equities = [s for s in args.symbols if s in valid_equities]
 
-    print("Starting V10.14 Live Trader...")
+    print("Starting V10.15 Live Trader...")
     print(f"Environment: {environment.upper()}")
     print(f"Paper Mode: {paper_mode}")
     if futures:

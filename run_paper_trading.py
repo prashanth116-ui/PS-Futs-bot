@@ -174,7 +174,7 @@ def main():
     use_webhook = "--webhook" in sys.argv
 
     log("=" * 60)
-    log(f"Paper Trading Wrapper V10.13 Started{' (webhook)' if use_webhook else ''}")
+    log(f"Paper Trading Wrapper V10.15 Started{' (webhook)' if use_webhook else ''}")
     log("=" * 60)
 
     # Check if it's a weekday
