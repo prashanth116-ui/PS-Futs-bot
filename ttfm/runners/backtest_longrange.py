@@ -5,17 +5,17 @@ Gets 60+ days of history by fetching 15m bars directly (77 days available)
 instead of aggregating from 3m bars (only 18 days available).
 
 Usage:
-    python -m runners.backtest_ttfm_longrange ES 60
-    python -m runners.backtest_ttfm_longrange NQ 60
-    python -m runners.backtest_ttfm_longrange ES 60 --t1-r=1 --trail-r=3
+    python -m ttfm.runners.backtest_longrange ES 60
+    python -m ttfm.runners.backtest_longrange NQ 60
+    python -m ttfm.runners.backtest_longrange ES 60 --t1-r=1 --trail-r=3
 """
 import sys
 sys.path.insert(0, '.')
 
 from datetime import time as dt_time, date as dt_date
-from runners.tradingview_loader import fetch_futures_bars
-from runners.run_ttfm import run_session_ttfm_native, SYMBOL_CONFIG, _build_daily_bars
-from strategies.ttfm.signals.bias import determine_bias
+from ttfm.tradingview_loader import fetch_futures_bars
+from ttfm.runners.run_ttfm import run_session_ttfm_native, SYMBOL_CONFIG, _build_daily_bars
+from ttfm.signals.bias import determine_bias
 
 
 def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4,
@@ -31,10 +31,8 @@ def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4
 
     # When risk cap is used, raise absolute max to allow oversized trades through
     if risk_cap_pts and risk_cap_pts < max_risk:
-        # risk_cap already smaller than max — use max as absolute ceiling
         pass
     elif risk_cap_pts:
-        # risk_cap >= max — raise max to 2x the cap to give room
         max_risk = risk_cap_pts * 2
 
     # Fetch all timeframes directly from TradingView
@@ -63,7 +61,6 @@ def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4
     for d in all_dates:
         day_15m = [b for b in bars_15m if b.timestamp.date() == d
                    and premarket_start <= b.timestamp.time() <= rth_end]
-        # Need enough 15m bars for a full session (~48 bars for 04:00-16:00)
         if len(day_15m) >= 20:
             trading_dates.append(d)
         if len(trading_dates) >= days:
@@ -116,7 +113,6 @@ def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4
     print('-' * 80)
 
     for target_date in trading_dates:
-        # Filter 15m/1H bars for this session
         day_15m = [b for b in bars_15m if b.timestamp.date() == target_date
                    and premarket_start <= b.timestamp.time() <= rth_end]
         day_1h = [b for b in bars_1h if b.timestamp.date() == target_date
@@ -125,12 +121,10 @@ def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4
         if len(day_15m) < 10:
             continue
 
-        # Daily bars up to but NOT including session date (no look-ahead)
         history_daily = [b for b in bars_daily if b.timestamp.date() < target_date]
         if len(history_daily) < 2:
             continue
 
-        # Run strategy
         results = run_session_ttfm_native(
             day_15m, day_1h, history_daily,
             tick_size=tick_size, tick_value=tick_value,
@@ -150,7 +144,6 @@ def backtest_ttfm_longrange(symbol='ES', days=60, contracts=3, t1_r=2, trail_r=4
         day_losses = sum(1 for r in results if r['total_dollars'] < 0)
         day_pnl = sum(r['total_dollars'] for r in results)
 
-        # Get bias for display
         bias = determine_bias(history_daily)
         bias_short = bias.direction[:4]
 
