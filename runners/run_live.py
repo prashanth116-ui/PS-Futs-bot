@@ -389,6 +389,30 @@ class LiveTrader:
                     except Exception as e:
                         log(f"    [WEBHOOK] EOD close {trade.id} failed: {e}")
 
+        # Safety net: flatten all broker positions and verify
+        if self.webhook and hasattr(self.webhook, 'close_all'):
+            import time
+            time.sleep(2)
+            try:
+                self.webhook.close_all()
+                time.sleep(3)
+            except Exception as e:
+                log(f"    [WEBHOOK] EOD flatten_all failed: {e}")
+
+            # Verify positions are flat
+            if hasattr(self.webhook, 'client'):
+                try:
+                    remaining = [p for p in self.webhook.client.get_positions() if p.net_pos != 0]
+                    if remaining:
+                        log(f"  [EOD] WARNING: {len(remaining)} position(s) still open after close!")
+                        for p in remaining:
+                            log(f"    contract_id={p.contract_id}, net_pos={p.net_pos}")
+                        notify_status(f"[EOD WARNING] {len(remaining)} position(s) still open after close!")
+                    else:
+                        log("  [EOD] All broker positions verified flat")
+                except Exception as e:
+                    log(f"  [EOD] Position verification failed: {e}")
+
         if self.client:
             self.client.disconnect()
 

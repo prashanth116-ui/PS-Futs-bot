@@ -14,6 +14,7 @@ from runners.run_v10_dual_entry import run_session_v10
 
 def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
                           opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False,
+                          opp_fvg_mode=None,
                           min_fvg_ticks=5, min_risk_override=None):
     """Run V10 backtest across multiple days."""
 
@@ -38,13 +39,19 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     # Get unique trading dates
     all_dates = sorted(set(b.timestamp.date() for b in all_bars), reverse=True)
 
-    # Filter to trading days only (has RTH bars)
+    # Filter to trading days only (has session bars 4:00-16:00)
+    # Full session = ~240 bars (4:00-16:00). Allow partial days (>=10 bars) with warning.
+    FULL_SESSION_BARS = 240
+    MIN_SESSION_BARS = 10
     trading_dates = []
+    partial_dates = {}  # date -> session_bar_count for days below full session
     for d in all_dates:
         day_bars = [b for b in all_bars if b.timestamp.date() == d]
-        rth_bars = [b for b in day_bars if dt_time(9, 30) <= b.timestamp.time() <= dt_time(16, 0)]
-        if len(rth_bars) >= 50:  # Has enough RTH bars
+        session_bars = [b for b in day_bars if dt_time(4, 0) <= b.timestamp.time() <= dt_time(16, 0)]
+        if len(session_bars) >= MIN_SESSION_BARS:
             trading_dates.append(d)
+            if len(session_bars) < FULL_SESSION_BARS:
+                partial_dates[d] = len(session_bars)
         if len(trading_dates) >= days:
             break
 
@@ -66,7 +73,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print(f'  - T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R')
     if opp_fvg_exit:
         trigger = "after 6R" if opp_fvg_after_6r else "after T1"
-        print(f'  - Opposing FVG Exit: ON ({trigger}, min {opp_fvg_min_ticks} ticks)')
+        opp_mode_label = (opp_fvg_mode or fvg_mode).upper()
+        print(f'  - Opposing FVG Exit: ON ({trigger}, min {opp_fvg_min_ticks} ticks, {opp_mode_label} detection)')
     print('='*80)
     print()
 
@@ -95,7 +103,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
         rth_end = dt_time(16, 0)
         session_bars = [b for b in day_bars if premarket_start <= b.timestamp.time() <= rth_end]
 
-        if len(session_bars) < 50:
+        if len(session_bars) < MIN_SESSION_BARS:
             continue
 
         # V10.6: Per-symbol BOS control
@@ -131,6 +139,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             opposing_fvg_exit=opp_fvg_exit,
             opposing_fvg_min_ticks=opp_fvg_min_ticks,
             opposing_fvg_after_6r_only=opp_fvg_after_6r,
+            opposing_fvg_mode=opp_fvg_mode,
             entry_min_fvg_ticks=min_fvg_ticks,
         )
 
@@ -177,7 +186,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             'cumulative': total_pnl,
         })
 
-        print(f'{target_date} {day_trades:>7} {day_wins:>5} {day_losses:>7} {win_rate:>5.1f}% ${day_pnl:>+10,.0f} ${total_pnl:>+10,.0f}')
+        partial_tag = f'  * PARTIAL ({partial_dates[target_date]}/{FULL_SESSION_BARS} session bars)' if target_date in partial_dates else ''
+        print(f'{target_date} {day_trades:>7} {day_wins:>5} {day_losses:>7} {win_rate:>5.1f}% ${day_pnl:>+10,.0f} ${total_pnl:>+10,.0f}{partial_tag}')
 
         # Per-trade verbose output (matches run_v10_dual_entry.py format)
         if verbose and results:
@@ -261,6 +271,7 @@ if __name__ == '__main__':
     opp_fvg_exit = False
     opp_fvg_min_ticks = 5
     opp_fvg_after_6r = False
+    opp_fvg_mode = None
     min_fvg_ticks = 5
     min_risk_override = None
     for arg in sys.argv[3:]:
@@ -278,6 +289,8 @@ if __name__ == '__main__':
             opp_fvg_min_ticks = int(arg.split('=')[1])
         elif arg == '--opp-fvg-after-6r':
             opp_fvg_after_6r = True
+        elif arg.startswith('--opp-fvg-mode='):
+            opp_fvg_mode = arg.split('=')[1]
         elif arg.startswith('--min-fvg-ticks='):
             min_fvg_ticks = int(arg.split('=')[1])
         elif arg.startswith('--min-risk='):
@@ -286,5 +299,5 @@ if __name__ == '__main__':
     backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
                           verbose=verbose, fvg_mode=fvg_mode,
                           opp_fvg_exit=opp_fvg_exit, opp_fvg_min_ticks=opp_fvg_min_ticks,
-                          opp_fvg_after_6r=opp_fvg_after_6r,
+                          opp_fvg_after_6r=opp_fvg_after_6r, opp_fvg_mode=opp_fvg_mode,
                           min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override)

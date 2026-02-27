@@ -75,6 +75,10 @@ class TradovateExecutor(ExecutorInterface):
         # Track orders per paper trade
         self._orders: Dict[str, OrderState] = {}  # paper_trade_id -> OrderState
 
+        # Track consecutive broker failures for alerting
+        self._consecutive_failures: int = 0
+        self._broker_down_alerted: bool = False
+
         # Connect on init
         if not self.client.connect():
             raise ConnectionError("Failed to connect to Tradovate API")
@@ -101,12 +105,15 @@ class TradovateExecutor(ExecutorInterface):
         return OrderAction.BUY if direction == "LONG" else OrderAction.SELL
 
     def _retry_operation(self, operation_name: str, fn, *args, **kwargs):
-        """Execute an operation with retries."""
+        """Execute an operation with retries. Tracks consecutive failures for alerting."""
         last_error = None
         for attempt in range(self.retry_max + 1):
             try:
                 result = fn(*args, **kwargs)
                 if result is not None:
+                    # Success — reset failure counter
+                    self._consecutive_failures = 0
+                    self._broker_down_alerted = False
                     return result
                 last_error = f"{operation_name} returned None"
             except Exception as e:
@@ -119,8 +126,23 @@ class TradovateExecutor(ExecutorInterface):
             if attempt < self.retry_max:
                 time.sleep(self.retry_delay)
 
+        # All retries exhausted
+        self._consecutive_failures += 1
         logger.error("[TRADOVATE] %s failed after %d attempts: %s",
                      operation_name, self.retry_max + 1, last_error)
+
+        # Alert on 3+ consecutive operation failures (likely auth/connection down)
+        if self._consecutive_failures >= 3 and not self._broker_down_alerted:
+            self._broker_down_alerted = True
+            try:
+                from runners.notifier import notify_status
+                notify_status(
+                    f"[BROKER DOWN] Tradovate API failing — {self._consecutive_failures} "
+                    f"consecutive failures. Last error: {last_error}"
+                )
+            except Exception:
+                pass  # Don't let notification failure propagate
+
         return None
 
     def open_position(
@@ -441,26 +463,46 @@ class TradovateExecutor(ExecutorInterface):
 
         return warnings
 
-    def check_orphaned_positions(self) -> List[str]:
+    def check_orphaned_positions(self, auto_close: bool = True) -> List[str]:
         """Check for orphaned broker positions on startup.
 
-        Returns warning messages for any open positions found.
-        Does NOT auto-close — advisory only.
+        If auto_close=True, flattens all orphaned positions and verifies.
+        Returns warning/status messages.
         """
         warnings = []
         try:
             positions = self.client.get_positions()
-            for pos in positions:
-                if pos.net_pos != 0:
-                    msg = (
-                        f"[STARTUP] Orphaned position: contract_id={pos.contract_id}, "
-                        f"net_pos={pos.net_pos}, price={pos.net_price:.2f}"
-                    )
-                    warnings.append(msg)
-                    logger.warning(msg)
+            orphans = [p for p in positions if p.net_pos != 0]
 
-            if not warnings:
+            if not orphans:
                 logger.info("[STARTUP] No orphaned positions found")
+                return warnings
+
+            for pos in orphans:
+                msg = (
+                    f"[STARTUP] Orphaned position: contract_id={pos.contract_id}, "
+                    f"net_pos={pos.net_pos}, price={pos.net_price:.2f}"
+                )
+                warnings.append(msg)
+                logger.warning(msg)
+
+            if auto_close:
+                logger.info("[STARTUP] Auto-closing %d orphaned position(s)", len(orphans))
+                self.client.flatten_all()
+                import time
+                time.sleep(3)
+
+                # Verify flat
+                remaining = [p for p in self.client.get_positions() if p.net_pos != 0]
+                if remaining:
+                    for p in remaining:
+                        msg = f"[STARTUP] FAILED to close orphan: contract_id={p.contract_id}, net_pos={p.net_pos}"
+                        warnings.append(msg)
+                        logger.error(msg)
+                else:
+                    msg = "[STARTUP] All orphaned positions closed successfully"
+                    warnings.append(msg)
+                    logger.info(msg)
 
         except Exception as e:
             msg = f"[STARTUP] Error checking positions: {e}"

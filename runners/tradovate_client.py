@@ -8,12 +8,16 @@ API Documentation: https://api.tradovate.com/
 """
 import os
 import json
+import logging
 import requests
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class Environment(Enum):
@@ -193,6 +197,18 @@ class TradovateClient:
             True if authentication successful, False otherwise.
         """
         try:
+            # Create fresh session to clear any stale Authorization headers
+            old_session = self.session
+            self.session = requests.Session()
+            self.session.headers.update({
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            })
+            try:
+                old_session.close()
+            except Exception:
+                pass
+
             auth_payload = {
                 'name': self.config.username,
                 'password': self.config.password,
@@ -210,13 +226,13 @@ class TradovateClient:
             )
 
             if response.status_code != 200:
-                print(f"Authentication failed: {response.status_code} - {response.text}")
+                logger.error("Authentication failed: %s - %s", response.status_code, response.text)
                 return False
 
             data = response.json()
 
             if 'errorText' in data:
-                print(f"Authentication error: {data['errorText']}")
+                logger.error("Authentication error: %s", data['errorText'])
                 return False
 
             self.access_token = data.get('accessToken')
@@ -239,13 +255,12 @@ class TradovateClient:
             self._fetch_account_info()
 
             self.connected = True
-            print(f"Connected to Tradovate ({self.config.environment.value})")
-            print(f"Account ID: {self.account_id}")
+            logger.info("Connected to Tradovate (%s), account=%s", self.config.environment.value, self.account_id)
 
             return True
 
         except Exception as e:
-            print(f"Connection error: {e}")
+            logger.error("Connection error: %s", e)
             return False
 
     def _fetch_account_info(self):
@@ -264,7 +279,11 @@ class TradovateClient:
                     self.account_id = accounts[0]['id']
 
     def _ensure_connected(self):
-        """Ensure we have a valid connection, refresh if needed."""
+        """Ensure we have a valid connection, refresh if needed.
+
+        Retries authentication up to 3 times with exponential backoff.
+        Raises RuntimeError if all attempts fail.
+        """
         if not self.connected or not self.access_token:
             raise RuntimeError("Not connected. Call connect() first.")
 
@@ -274,8 +293,29 @@ class TradovateClient:
         if expiry and expiry.tzinfo is not None:
             now = now.astimezone(expiry.tzinfo)
         if expiry and now >= expiry - timedelta(minutes=5):
-            print("Token expiring soon, reconnecting...")
-            self.connect()
+            logger.info("Token expiring soon, reconnecting...")
+            for attempt in range(3):
+                if self.connect():
+                    return
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning("Re-auth attempt %d failed, retrying in %ds...", attempt + 1, wait)
+                time.sleep(wait)
+            logger.error("All re-auth attempts failed — broker connection lost")
+            raise RuntimeError("Failed to re-authenticate with Tradovate after 3 attempts")
+
+    def _request_with_401_retry(self, method: str, url: str, **kwargs):
+        """Make HTTP request, retrying once on 401 by re-authenticating.
+
+        Returns the response object (caller checks status_code).
+        """
+        response = getattr(self.session, method)(url, **kwargs)
+        if response.status_code == 401:
+            logger.warning("Got 401, forcing re-authentication...")
+            if self.connect():
+                response = getattr(self.session, method)(url, **kwargs)
+            else:
+                logger.error("Re-auth failed after 401")
+        return response
 
     def get_contract_id(self, symbol: str) -> Optional[int]:
         """
@@ -299,7 +339,8 @@ class TradovateClient:
             return self._contract_cache[symbol]
 
         # Fetch from API
-        response = self.session.get(
+        response = self._request_with_401_retry(
+            'get',
             f"{self.base_url}/contract/find",
             params={'name': symbol},
             timeout=30
@@ -344,7 +385,7 @@ class TradovateClient:
 
         contract_id = self.get_contract_id(symbol)
         if not contract_id:
-            print(f"Contract not found: {symbol}")
+            logger.error("Contract not found: %s", symbol)
             return None
 
         order_payload = {
@@ -380,7 +421,8 @@ class TradovateClient:
                 }
 
         with self._lock:
-            response = self.session.post(
+            response = self._request_with_401_retry(
+                'post',
                 f"{self.base_url}/order/placeorder",
                 json=order_payload,
                 timeout=30
@@ -390,7 +432,7 @@ class TradovateClient:
             data = response.json()
 
             if 'errorText' in data:
-                print(f"Order error: {data['errorText']}")
+                logger.error("Order error: %s", data['errorText'])
                 return None
 
             order = Order(
@@ -406,10 +448,10 @@ class TradovateClient:
                 status=data.get('orderStatus', {}).get('status', 'Unknown'),
             )
 
-            print(f"Order placed: {action.value} {quantity} {symbol} @ {order_type.value}")
+            logger.info("Order placed: %s %d %s @ %s", action.value, quantity, symbol, order_type.value)
             return order
         else:
-            print(f"Order failed: {response.status_code} - {response.text}")
+            logger.error("Order failed: %s - %s", response.status_code, response.text)
             return None
 
     def place_bracket_order(
@@ -465,7 +507,8 @@ class TradovateClient:
         self._ensure_connected()
 
         with self._lock:
-            response = self.session.post(
+            response = self._request_with_401_retry(
+                'post',
                 f"{self.base_url}/order/cancelorder",
                 json={'orderId': order_id},
                 timeout=30
@@ -474,9 +517,9 @@ class TradovateClient:
         if response.status_code == 200:
             data = response.json()
             if 'errorText' not in data:
-                print(f"Order {order_id} cancelled")
+                logger.info("Order %d cancelled", order_id)
                 return True
-            print(f"Cancel error: {data['errorText']}")
+            logger.error("Cancel error: %s", data['errorText'])
 
         return False
 
@@ -510,7 +553,8 @@ class TradovateClient:
             payload['orderQty'] = quantity
 
         with self._lock:
-            response = self.session.post(
+            response = self._request_with_401_retry(
+                'post',
                 f"{self.base_url}/order/modifyorder",
                 json=payload,
                 timeout=30
@@ -519,9 +563,9 @@ class TradovateClient:
         if response.status_code == 200:
             data = response.json()
             if 'errorText' not in data:
-                print(f"Order {order_id} modified")
+                logger.info("Order %d modified", order_id)
                 return True
-            print(f"Modify error: {data['errorText']}")
+            logger.error("Modify error: %s", data['errorText'])
 
         return False
 
@@ -529,7 +573,8 @@ class TradovateClient:
         """Get all open orders."""
         self._ensure_connected()
 
-        response = self.session.get(
+        response = self._request_with_401_retry(
+            'get',
             f"{self.base_url}/order/list",
             timeout=30
         )
@@ -557,7 +602,8 @@ class TradovateClient:
         """Get all open positions."""
         self._ensure_connected()
 
-        response = self.session.get(
+        response = self._request_with_401_retry(
+            'get',
             f"{self.base_url}/position/list",
             timeout=30
         )
@@ -604,7 +650,7 @@ class TradovateClient:
                     quantity=quantity,
                     order_type=OrderType.MARKET,
                 )
-                print(f"Flattened {symbol}: {action.value} {quantity}")
+                logger.info("Flattened %s: %s %d", symbol, action.value, quantity)
 
         return True
 
@@ -616,7 +662,8 @@ class TradovateClient:
         for pos in positions:
             if pos.net_pos != 0:
                 # Get symbol for contract
-                response = self.session.get(
+                response = self._request_with_401_retry(
+                    'get',
                     f"{self.base_url}/contract/item",
                     params={'id': pos.contract_id},
                     timeout=30
@@ -633,7 +680,8 @@ class TradovateClient:
         """Get account balance and margin info."""
         self._ensure_connected()
 
-        response = self.session.get(
+        response = self._request_with_401_retry(
+            'get',
             f"{self.base_url}/cashBalance/getcashbalancesnapshot",
             params={'accountId': self.account_id},
             timeout=30

@@ -408,6 +408,7 @@ def run_session_v10(
     opposing_fvg_exit=False,          # Enable opposing FVG exit for T2/Runner
     opposing_fvg_min_ticks=5,         # Min opposing FVG size in ticks
     opposing_fvg_after_6r_only=False, # True = only after 6R, False = after T1
+    opposing_fvg_mode=None,           # FVG mode for opposing detection: None=same as fvg_mode, "body", "wick"
     # FVG size filter (A/B testing)
     entry_min_fvg_ticks=5,            # Min FVG size in ticks for entry (default: 5)
 ):
@@ -436,6 +437,14 @@ def run_session_v10(
 
     # Detect FVGs from ALL bars (including overnight)
     all_fvgs = detect_fvgs(all_bars, fvg_config)
+
+    # Opposing FVG exit: detect separate FVG list if mode differs from main
+    opp_fvg_mode_resolved = opposing_fvg_mode if opposing_fvg_mode else fvg_mode
+    if opposing_fvg_exit and opp_fvg_mode_resolved != fvg_mode:
+        opp_fvg_config = {**fvg_config, 'fvg_mode': opp_fvg_mode_resolved}
+        opp_fvgs = detect_fvgs(all_bars, opp_fvg_config)
+    else:
+        opp_fvgs = all_fvgs
 
     # Update FVG mitigation status for all detected FVGs
     # This fixes the bug where mitigated FVGs were still being used for entries
@@ -1058,7 +1067,7 @@ def run_session_v10(
                     min_opp_size = opposing_fvg_min_ticks * tick_size
                     entry_all_idx = session_to_all_idx.get(trade['entry_bar_idx'], 0)
                     current_all_idx = session_to_all_idx.get(i, 0)
-                    for fvg in all_fvgs:
+                    for fvg in opp_fvgs:
                         if (fvg.direction == opposing_dir
                                 and fvg.created_bar_index > entry_all_idx
                                 and fvg.created_bar_index <= current_all_idx
