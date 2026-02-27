@@ -65,7 +65,7 @@ class RiskLimits:
     """Risk limit configuration."""
     # Daily limits
     max_daily_loss: float = 2000.0        # Stop trading after this loss
-    max_daily_trades: int = 10            # Max trades per day
+    max_daily_trades: int = 0             # 0 = unlimited (other controls are sufficient)
     max_consecutive_losses: int = 3       # Pause after N consecutive losses
 
     # Position limits
@@ -200,8 +200,8 @@ class RiskManager:
                 self.state.blocked_reason = "Daily loss limit reached"
                 return False, self.state.blocked_reason
 
-            # Daily trade limit
-            if self.state.daily_trades >= self.limits.max_daily_trades:
+            # Daily trade limit (0 = unlimited)
+            if self.limits.max_daily_trades > 0 and self.state.daily_trades >= self.limits.max_daily_trades:
                 return False, "Max daily trades reached"
 
             # Consecutive losses

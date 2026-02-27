@@ -446,7 +446,13 @@ class LiveTrader:
                 try:
                     self._print_status()
                 except Exception as e:
+                    import traceback
                     log(f"  Error in _print_status: {e}")
+                    for line in traceback.format_exc().splitlines():
+                        log(f"  {line}")
+                    # Debug: dump paper_trades contents
+                    for tid, t in self.paper_trades.items():
+                        log(f"  paper_trades[{tid}] = {type(t).__name__}: {t!r}")
                 self._sleep_until_next_bar_close()
 
             except KeyboardInterrupt:
@@ -1511,15 +1517,21 @@ class LiveTrader:
     def _count_open_contracts(self):
         """Count total remaining contracts across all open paper trades."""
         total = 0
-        for trade in self.paper_trades:
-            remaining = trade.contracts
-            if trade.t1_hit:
-                remaining -= 1
-            if trade.t2_hit:
-                remaining -= 1
-            if trade.runner_exit:
-                remaining -= 1
-            total += remaining
+        for trade_id, trade in list(self.paper_trades.items()):
+            try:
+                if not isinstance(trade, PaperTrade):
+                    log(f"  [BUG] paper_trades[{trade_id}] is {type(trade).__name__}: {trade!r}")
+                    continue
+                remaining = trade.contracts
+                if trade.t1_hit:
+                    remaining -= 1
+                if trade.t2_hit:
+                    remaining -= 1
+                if trade.runner_exit:
+                    remaining -= 1
+                total += remaining
+            except AttributeError as e:
+                log(f"  [BUG] _count_open_contracts: {e} | trade_id={trade_id} type={type(trade).__name__} repr={trade!r}")
         return total
 
     def _calculate_next_day_outlook(self):
