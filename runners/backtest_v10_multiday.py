@@ -1,5 +1,5 @@
 """
-V10.14 Multi-Day Backtest - Validate strategy across multiple trading days.
+V10.15 Multi-Day Backtest - Validate strategy across multiple trading days.
 """
 import sys
 sys.path.insert(0, '.')
@@ -54,7 +54,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print('='*80)
     print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
-    print(f'Strategy: V10.14 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
+    print(f'Strategy: V10.15 Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print(f'  - FVG Mode: {fvg_mode.upper()} ({"high/low" if fvg_mode == "wick" else "open/close"})')
     print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
     print('  - Morning only filter: NO (parity with live runner)')
@@ -98,7 +98,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
 
         # V10.6: Per-symbol BOS control
         disable_bos = symbol in ['ES', 'MES']
-        # V10.14: Global consecutive loss stop (ES/MES only)
+        # V10.15: Global consecutive loss stop (ES/MES only)
         max_consec_losses = 2 if symbol in ['ES', 'MES'] else 0
 
         # Run V10 strategy with all filters
@@ -124,7 +124,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
             max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
-            max_consec_losses=max_consec_losses,  # V10.14: Global consecutive loss stop
+            max_consec_losses=max_consec_losses,  # V10.15: Global consecutive loss stop
             fvg_mode=fvg_mode,  # FVG detection: "wick" or "body"
             opposing_fvg_exit=opp_fvg_exit,
             opposing_fvg_min_ticks=opp_fvg_min_ticks,
