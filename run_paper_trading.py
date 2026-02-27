@@ -10,7 +10,7 @@ Features:
 - Skips weekends automatically
 """
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 import subprocess
 import sys

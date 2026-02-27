@@ -8,7 +8,7 @@ Sends real-time alerts for:
 - Errors/warnings
 """
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 import os
 import html

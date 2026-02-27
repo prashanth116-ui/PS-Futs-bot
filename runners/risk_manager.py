@@ -12,7 +12,7 @@ Implements risk controls including:
 import sys
 sys.path.insert(0, '.')
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 from datetime import datetime, time as dt_time
 from typing import Optional, Dict, List, Callable

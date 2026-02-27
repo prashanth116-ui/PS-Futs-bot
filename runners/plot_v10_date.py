@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, '.')
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 from datetime import date, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars

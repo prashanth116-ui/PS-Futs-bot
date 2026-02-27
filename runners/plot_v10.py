@@ -14,7 +14,7 @@ V10.7 BOS Settings:
 import sys
 sys.path.insert(0, '.')
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 import matplotlib.pyplot as plt
 from datetime import time as dt_time

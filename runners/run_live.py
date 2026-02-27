@@ -19,7 +19,7 @@ Usage:
 import sys
 sys.path.insert(0, '.')
 
-STRATEGY_VERSION = "V10.15"
+from version import STRATEGY_VERSION
 
 import argparse
 import time
