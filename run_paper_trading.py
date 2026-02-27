@@ -117,15 +117,20 @@ def run_health_check():
         return True, "All checks passed"
 
 
-def run_paper_trading(use_webhook=False):
+def run_paper_trading(use_webhook=False, use_direct_api=False, direct_api_config=None, symbols=None):
     """Run the paper trading script and capture output."""
+    sym_list = symbols or ["ES"]
     cmd = [
         sys.executable, "-m", "runners.run_live",
         "--paper",
-        "--symbols", "ES"
+        "--symbols", *sym_list,
     ]
     if use_webhook:
         cmd.append("--webhook")
+    if use_direct_api:
+        cmd.append("--direct-api")
+        if direct_api_config:
+            cmd.extend(["--direct-api-config", direct_api_config])
 
     log_file = get_log_file()
     start_time = datetime.now()
@@ -174,9 +179,33 @@ def run_paper_trading(use_webhook=False):
 def main():
     """Main entry point with auto-restart logic."""
     use_webhook = "--webhook" in sys.argv
+    use_direct_api = "--direct-api" in sys.argv
+    direct_api_config = None
+    if "--direct-api-config" in sys.argv:
+        idx = sys.argv.index("--direct-api-config")
+        if idx + 1 < len(sys.argv):
+            direct_api_config = sys.argv[idx + 1]
+    symbols = None
+    if "--symbols" in sys.argv:
+        idx = sys.argv.index("--symbols")
+        symbols = []
+        for arg in sys.argv[idx + 1:]:
+            if arg.startswith("--"):
+                break
+            symbols.append(arg)
+        if not symbols:
+            symbols = None
+
+    mode_parts = []
+    if use_webhook:
+        mode_parts.append("webhook")
+    if use_direct_api:
+        mode_parts.append("direct-api")
+    mode_str = f" ({' + '.join(mode_parts)})" if mode_parts else ""
+    sym_str = f" [{' '.join(symbols)}]" if symbols else ""
 
     log("=" * 60)
-    log(f"Paper Trading Wrapper {STRATEGY_VERSION} Started{' (webhook)' if use_webhook else ''}")
+    log(f"Paper Trading Wrapper {STRATEGY_VERSION} Started{mode_str}{sym_str}")
     log("=" * 60)
 
     # Check if it's a weekday
@@ -228,7 +257,12 @@ def main():
         log(f"Starting paper trading (attempt {restart_count + 1}/{MAX_RESTARTS_PER_DAY})")
 
         try:
-            exit_code = run_paper_trading(use_webhook=use_webhook)
+            exit_code = run_paper_trading(
+                        use_webhook=use_webhook,
+                        use_direct_api=use_direct_api,
+                        direct_api_config=direct_api_config,
+                        symbols=symbols,
+                    )
 
             if exit_code == 0:
                 log("Paper trading exited normally")

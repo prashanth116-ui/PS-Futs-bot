@@ -268,8 +268,12 @@ class TradovateClient:
         if not self.connected or not self.access_token:
             raise RuntimeError("Not connected. Call connect() first.")
 
-        # Check token expiry
-        if self.token_expiry and datetime.now() >= self.token_expiry - timedelta(minutes=5):
+        # Check token expiry (handle both naive and aware datetimes)
+        now = datetime.now()
+        expiry = self.token_expiry
+        if expiry and expiry.tzinfo is not None:
+            now = now.astimezone(expiry.tzinfo)
+        if expiry and now >= expiry - timedelta(minutes=5):
             print("Token expiring soon, reconnecting...")
             self.connect()
 
