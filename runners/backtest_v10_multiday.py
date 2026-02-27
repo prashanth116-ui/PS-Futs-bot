@@ -4,6 +4,8 @@ V10.15 Multi-Day Backtest - Validate strategy across multiple trading days.
 import sys
 sys.path.insert(0, '.')
 
+STRATEGY_VERSION = "V10.15"
+
 from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.bar_storage import load_bars_with_history

@@ -7,6 +7,9 @@ Sends real-time alerts for:
 - Daily summaries
 - Errors/warnings
 """
+
+STRATEGY_VERSION = "V10.15"
+
 import os
 import html
 import requests

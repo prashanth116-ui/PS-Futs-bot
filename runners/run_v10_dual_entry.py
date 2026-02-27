@@ -51,6 +51,8 @@ V10.3: Midday cutoff, PM cutoff for NQ
 import sys
 sys.path.insert(0, '.')
 
+STRATEGY_VERSION = "V10.15"
+
 from datetime import time as dt_time
 try:
     from zoneinfo import ZoneInfo

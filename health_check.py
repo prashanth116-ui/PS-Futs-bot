@@ -28,6 +28,55 @@ def main():
             print(f"  {module}: FAILED - {e}")
             errors.append(f"{module}: {e}")
 
+    # Check version consistency across runners
+    print("\nVersion Sync:")
+    from pathlib import Path
+    from collections import Counter
+    import re
+    version_files = [
+        "run_paper_trading.py",
+        "runners/run_live.py",
+        "runners/run_v10_dual_entry.py",
+        "runners/run_v10_equity.py",
+        "runners/backtest_v10_multiday.py",
+        "runners/plot_v10.py",
+        "runners/plot_v10_date.py",
+        "runners/notifier.py",
+        "runners/risk_manager.py",
+    ]
+    versions_found = {}
+    # Search for STRATEGY_VERSION = "V10.XX" constant in each file
+    version_pattern = re.compile(r'STRATEGY_VERSION\s*=\s*["\']V(10\.\d+)["\']')
+    for vf in version_files:
+        vpath = Path(vf)
+        if vpath.exists():
+            content = vpath.read_text(errors="ignore")
+            match = version_pattern.search(content)
+            if match:
+                versions_found[vf] = f"V{match.group(1)}"
+            else:
+                versions_found[vf] = "NONE"
+                errors.append(f"Version missing: {vf} has no STRATEGY_VERSION")
+        else:
+            versions_found[vf] = "MISSING"
+            errors.append(f"File missing: {vf}")
+
+    version_vals = [v for v in versions_found.values() if v not in ("NONE", "MISSING")]
+    if version_vals:
+        expected = max(version_vals, key=lambda v: int(v.split('.')[1]))
+        all_match = True
+        for vf, ver in versions_found.items():
+            if ver not in (expected, "NONE", "MISSING"):
+                print(f"  {vf}: {ver} (expected {expected})")
+                errors.append(f"Version mismatch: {vf} is {ver}, expected {expected}")
+                all_match = False
+        if all_match and not any(v in ("NONE", "MISSING") for v in versions_found.values()):
+            print(f"  All {len(version_files)} runners: {expected}")
+        elif all_match:
+            print(f"  Matched runners: {expected}")
+    else:
+        print("  No STRATEGY_VERSION found in any runner")
+
     # Check config files
     print("\nConfig files:")
     from pathlib import Path

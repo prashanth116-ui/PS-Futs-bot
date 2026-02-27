@@ -19,6 +19,8 @@ Usage:
 import sys
 sys.path.insert(0, '.')
 
+STRATEGY_VERSION = "V10.15"
+
 import argparse
 import time
 import signal

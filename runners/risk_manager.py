@@ -12,6 +12,8 @@ Implements risk controls including:
 import sys
 sys.path.insert(0, '.')
 
+STRATEGY_VERSION = "V10.15"
+
 from datetime import datetime, time as dt_time
 from typing import Optional, Dict, List, Callable
 from dataclasses import dataclass, field
