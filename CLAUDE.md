@@ -379,10 +379,32 @@ python -m runners.backtest_v10_multiday ES 18 --opp-fvg-exit --opp-fvg-min-ticks
 python -m runners.backtest_v10_multiday NQ 18 --opp-fvg-exit --opp-fvg-min-ticks=5 --opp-fvg-after-6r
 ```
 
+### V10.15 Bar-Aligned Scanning (Feb 26, 2026)
+Live bot scanned on a fixed 180s interval, which often fired mid-bar when TradingView OHLC data was still incomplete. This produced phantom FVGs that disappeared once the bar finalized — generating extra low-quality entries that don't exist in backtest.
+
+**9-Day Comparison (Feb 16–26, before fix):**
+| Metric | Backtest (ES) | Live Paper |
+|--------|--:|--:|
+| Trades | 83 | 115 |
+| Win Rate | 84.3% | 60.0% |
+| Total P/L | +$65,094 | +$52,120 |
+| Worst Day | -$413 | -$5,563 |
+
+**Root cause**: Fixed 180s sleep fired at arbitrary wall-clock times. If a scan landed at :01:30 (90s into a 3-min bar), TradingView's OHLC for that bar was incomplete — wicks and body still forming. FVGs computed from incomplete data are phantoms.
+
+**Fix**: Replaced `self._interruptible_sleep(self.scan_interval)` with `self._sleep_until_next_bar_close()` that calculates the next 3-minute boundary and sleeps until boundary + 5 seconds. Scans now fire at :00:05, :03:05, :06:05, etc. — always processing finalized bars.
+
+**Implementation**: `_sleep_until_next_bar_close()` in `run_live.py`:
+- Calculates `seconds_into_bar = (minute * 60 + second) % 180`
+- Sleeps `180 - seconds_into_bar + 5` seconds (minimum 10s to avoid double-fires)
+
+**Status**: Deployed Feb 26. Monitoring for gap closure. If gap persists, remaining fixes: (1) drop last bar from array before `run_session_v10()`, (2) FVG confirmation filter requiring persistence on next scan.
+
 ### Strategy Features
 - **Opposing FVG Exit (V10.14)**: Exit T2/Runner on opposing FVG after 6R (ES: 10 ticks, NQ: 5 ticks) — ES +$9.5k/18d
 - **Global Consecutive Loss Stop (V10.13)**: ES/MES stop all trading after 2 consecutive losses (NQ/MNQ exempt — consec losses precede big recoveries)
 - **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)
+- **Bar-Aligned Scanning (V10.15)**: Scan timing synced to 3-min bar close + 5s buffer — eliminates phantom FVGs from incomplete bars
 - **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
 - **Local Bar Storage**: Saves 3m bars to CSV daily, merges with live TradingView data for 30+ day backtests (90-day retention)
 - **Retrace Risk Cap (V10.11)**: ES/MES retrace risk > 8pts → force 1 contract (NQ/MNQ uncapped)
@@ -674,6 +696,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.15 | Bar-aligned scanning: sync to 3-min bar close + 5s buffer — **eliminates phantom FVGs from incomplete bars** |
 | V10.14 | Opposing FVG exit for T2/Runner: per-symbol (ES:10t, NQ:5t) after 6R - **ES +$9.5k/18d (+5.8%)** |
 | V10.13 | Global consecutive loss stop: ES/MES stop after 2 consec losses (NQ exempt) - **+$488 ES, Feb 19 loss halved** |
 | V10.12 | Backtest parity fixes: trail logic, parameter matching, risk manager tracking - **~11% gap → ~2-3%** |
