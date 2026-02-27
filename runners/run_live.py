@@ -40,6 +40,7 @@ from runners.risk_manager import RiskManager, create_default_risk_manager
 from runners.notifier import notify_entry, notify_exit, notify_daily_summary, notify_status, notify_next_day_outlook
 from runners.bar_storage import save_daily_bars, load_bars_with_history
 from runners.webhook_executor import WebhookExecutor
+from runners.executor_interface import ExecutorInterface
 from runners.divergence_tracker import save_live_trades, compare_day, format_console_report, format_telegram_alert
 
 # EST timezone for all trading operations
@@ -251,7 +252,7 @@ class LiveTrader:
         paper_mode: bool = True,
         symbols: List[str] = None,
         equity_risk: int = 500,
-        webhook_executor: Optional[WebhookExecutor] = None,
+        webhook_executor: Optional[ExecutorInterface] = None,
     ):
         """
         Initialize live trader.
@@ -262,7 +263,8 @@ class LiveTrader:
             paper_mode: If True, only log signals without executing
             symbols: List of symbols to trade (default: ['ES', 'NQ'])
             equity_risk: Risk per trade for equities in dollars
-            webhook_executor: PickMyTrade webhook executor (None = no webhooks)
+            webhook_executor: Executor backend (WebhookExecutor, TradovateExecutor,
+                            or MultiExecutor). None = no broker execution.
         """
         self.client = client
         self.risk_manager = risk_manager or create_default_risk_manager()
@@ -326,9 +328,10 @@ class LiveTrader:
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
         if self.webhook:
-            print(f"Webhook: ACTIVE ({self.webhook.get_account_count()} account(s))")
+            executor_name = type(self.webhook).__name__
+            print(f"Executor: {executor_name} ({self.webhook.get_account_count()} account(s))")
         else:
-            print("Webhook: OFF")
+            print("Executor: OFF (paper only)")
         if self.futures_symbols:
             print(f"Futures: {', '.join(self.futures_symbols)} (2-tick buffer)")
         if self.equity_symbols:
@@ -1478,6 +1481,17 @@ class LiveTrader:
             if elapsed >= 3600:  # 1 hour
                 send_telegram = True
 
+        # Position reconciliation every 15 min (TradovateExecutor only)
+        if self.webhook and hasattr(self.webhook, 'reconcile_positions'):
+            if self.last_telegram_heartbeat is None or safe_datetime_diff_seconds(now, self.last_telegram_heartbeat) >= 900:
+                try:
+                    warnings = self.webhook.reconcile_positions(self.paper_trades)
+                    for w in warnings:
+                        log(f"  {w}")
+                        notify_status(w)
+                except Exception as e:
+                    log(f"  [RECONCILE] Error: {e}")
+
         if send_telegram:
             self.last_telegram_heartbeat = now
             mode = "PAPER" if self.paper_mode else "LIVE"
@@ -1750,6 +1764,10 @@ def main():
                        help='PickMyTrade strategy group (default: ict_v10)')
     parser.add_argument('--webhook-config', default='config/pickmytrade_accounts.json',
                        help='Path to PickMyTrade config (default: config/pickmytrade_accounts.json)')
+    parser.add_argument('--direct-api', action='store_true',
+                       help='Enable Tradovate direct API execution (personal accounts)')
+    parser.add_argument('--direct-api-config', default='config/tradovate_direct.json',
+                       help='Path to Tradovate direct API config (default: config/tradovate_direct.json)')
     args = parser.parse_args()
 
     # Validate symbols
@@ -1789,15 +1807,41 @@ def main():
             print("Falling back to paper mode")
             paper_mode = True
 
-    # Create webhook executor if requested
-    webhook_executor = None
+    # Create executor(s) based on CLI flags
+    executors = []
+
+    if args.direct_api:
+        try:
+            from runners.tradovate_executor import TradovateExecutor
+            direct_executor = TradovateExecutor(args.direct_api_config)
+            executors.append(direct_executor)
+            print(f"Direct API: ACTIVE (env={direct_executor.environment}, account={direct_executor.client.account_id})")
+
+            # Check for orphaned positions on startup
+            orphan_warnings = direct_executor.check_orphaned_positions()
+            for w in orphan_warnings:
+                print(f"  WARNING: {w}")
+        except Exception as e:
+            print(f"Failed to create Tradovate executor: {e}")
+            print("Continuing without direct API")
+
     if args.webhook:
         try:
-            webhook_executor = WebhookExecutor(args.webhook_config, args.strategy_group)
-            print(f"Webhook: ACTIVE ({webhook_executor.get_account_count()} account(s))")
+            wh_executor = WebhookExecutor(args.webhook_config, args.strategy_group)
+            executors.append(wh_executor)
+            print(f"Webhook: ACTIVE ({wh_executor.get_account_count()} account(s))")
         except Exception as e:
             print(f"Failed to create webhook executor: {e}")
             print("Continuing without webhooks")
+
+    # Combine executors
+    webhook_executor = None
+    if len(executors) > 1:
+        from runners.multi_executor import MultiExecutor
+        webhook_executor = MultiExecutor(executors)
+        print(f"Executor: MultiExecutor ({webhook_executor.get_account_count()} total account(s))")
+    elif len(executors) == 1:
+        webhook_executor = executors[0]
 
     # Create trader
     trader = LiveTrader(

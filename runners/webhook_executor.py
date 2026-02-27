@@ -26,6 +26,8 @@ from typing import Dict, List, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+from runners.executor_interface import ExecutorInterface
+
 logger = logging.getLogger(__name__)
 
 # Point values per tick for dollar_sl calculation
@@ -38,7 +40,7 @@ POINT_VALUES = {
 }
 
 
-class WebhookExecutor:
+class WebhookExecutor(ExecutorInterface):
     """Sends trade events to PickMyTrade webhook API.
 
     Fires HTTP calls to all enabled accounts in parallel using a thread pool.

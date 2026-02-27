@@ -149,10 +149,19 @@ class TradovateClient:
         'MNQ': 'MNQH5',  # Micro E-mini Nasdaq 100
     }
 
-    def __init__(self, config: Optional[TradovateConfig] = None):
-        """Initialize the Tradovate client."""
+    def __init__(self, config: Optional[TradovateConfig] = None, contract_months: Optional[Dict[str, str]] = None):
+        """Initialize the Tradovate client.
+
+        Args:
+            config: Authentication config. Falls back to env vars if None.
+            contract_months: Optional override for CONTRACT_MAP (e.g. {"ES": "ESM6"}).
+                           If provided, these are used instead of the class-level map.
+        """
         self.config = config or TradovateConfig.from_env()
         self.base_url = self.DEMO_URL if self.config.environment == Environment.DEMO else self.LIVE_URL
+
+        # Instance-level contract map (overrides class-level if provided)
+        self._contract_months = contract_months
 
         # Authentication state
         self.access_token: Optional[str] = None
@@ -276,9 +285,10 @@ class TradovateClient:
         """
         self._ensure_connected()
 
-        # Map generic symbols to specific contracts
-        if symbol in self.CONTRACT_MAP:
-            symbol = self.CONTRACT_MAP[symbol]
+        # Map generic symbols to specific contracts (instance override first)
+        contract_map = self._contract_months if self._contract_months else self.CONTRACT_MAP
+        if symbol in contract_map:
+            symbol = contract_map[symbol]
 
         # Check cache
         if symbol in self._contract_cache:

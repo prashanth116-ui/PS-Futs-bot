@@ -16,6 +16,7 @@ Thumbs.db
 config/.env
 config/tradingview.env
 config/pickmytrade_accounts.json
+config/tradovate_direct.json
 .env
 *.pem
 *.key

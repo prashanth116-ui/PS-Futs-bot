@@ -1,0 +1,12 @@
+{
+    "credentials_path": "config/tradovate_credentials.json",
+    "environment": "demo",
+    "contract_months": {
+        "ES": "ESM6",
+        "NQ": "NQM6",
+        "MES": "MESM6",
+        "MNQ": "MNQM6"
+    },
+    "retry_max": 2,
+    "retry_delay_sec": 1.0
+}
