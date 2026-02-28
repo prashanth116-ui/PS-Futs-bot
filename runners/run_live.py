@@ -321,13 +321,17 @@ class LiveTrader:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _check_broker_health(self):
-        """Periodic broker health check. Attempts reconnect if down, alerts via Telegram."""
+        """Periodic broker health check. Attempts reconnect if down, alerts via Telegram.
+
+        Checks every 15 min when healthy, every 5 min when down (faster recovery).
+        """
         if not self.webhook or not hasattr(self.webhook, 'client'):
             return
 
         now = get_est_now()
+        interval = 300 if not self._broker_healthy else self._broker_health_interval  # 5 min when down
         if (self._last_broker_health_check and
-                (now - self._last_broker_health_check).total_seconds() < self._broker_health_interval):
+                (now - self._last_broker_health_check).total_seconds() < interval):
             return
 
         self._last_broker_health_check = now
@@ -918,17 +922,8 @@ class LiveTrader:
             runner_last_swing=entry_price,
         )
 
-        self.paper_trades[trade_id] = paper_trade
-
-        # Track in risk manager (paper mode parity with live execution)
-        self.risk_manager.record_trade_entry(symbol, contracts)
-
-        sizing_note = " (no runner)" if not has_runner else ""
-        log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
-        log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | T1: {target_4r:.2f} | Trail: {target_8r:.2f}")
-        log(f"    Trade ID: {trade_id}")
-
-        # Webhook: open position on broker accounts
+        # Broker-first gating: if webhook is configured, broker must succeed
+        # before we create the paper trade. Prevents paper/broker divergence.
         if self.webhook and asset_type == 'futures':
             try:
                 result_dict = self.webhook.open_position(
@@ -941,11 +936,25 @@ class LiveTrader:
                 )
                 if result_dict and not result_dict.get('success'):
                     error = result_dict.get('error', 'unknown')
-                    log(f"    [WEBHOOK] Entry failed: {error}")
-                    notify_status(f"[BROKER] Entry {trade_id} failed: {error}")
+                    log(f"    [BROKER] Entry REJECTED — skipping paper trade: {error}")
+                    notify_status(f"[BROKER] Entry {trade_id} rejected: {error}")
+                    self._broker_healthy = False
+                    return
             except Exception as e:
-                log(f"    [WEBHOOK] Entry failed: {e}")
+                log(f"    [BROKER] Entry FAILED — skipping paper trade: {e}")
                 notify_status(f"[BROKER] Entry {trade_id} failed: {e}")
+                self._broker_healthy = False
+                return
+
+        self.paper_trades[trade_id] = paper_trade
+
+        # Track in risk manager (paper mode parity with live execution)
+        self.risk_manager.record_trade_entry(symbol, contracts)
+
+        sizing_note = " (no runner)" if not has_runner else ""
+        log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
+        log(f"    Entry: {entry_price:.2f} | Stop: {stop_price:.2f} | T1: {target_4r:.2f} | Trail: {target_8r:.2f}")
+        log(f"    Trade ID: {trade_id}")
 
     def _manage_paper_trades(self):
         """Manage open paper trades - matches backtest exit logic exactly.
