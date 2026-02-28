@@ -350,7 +350,7 @@ def create_default_risk_manager() -> RiskManager:
     """Create risk manager with default V10.15 limits."""
     limits = RiskLimits(
         max_daily_loss=2000.0,
-        max_daily_trades=10,
+        max_daily_trades=0,  # 0 = unlimited
         max_consecutive_losses=3,
         max_open_trades=3,              # Parity with backtest (was 2, blocked 2nd/3rd entries)
         max_contracts_per_trade=3,
