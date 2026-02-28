@@ -24,7 +24,7 @@ from version import STRATEGY_VERSION
 import argparse
 import time
 import signal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time as dt_time
 from enum import Enum
 from typing import Optional, Dict, List
@@ -139,6 +139,10 @@ class PaperTrade:
     t1_last_swing: float = 0.0
     t2_last_swing: float = 0.0
     runner_last_swing: float = 0.0
+
+    # Pending broker operations — retried every scan until they succeed
+    # Each entry: {'op': 'close'|'partial_close'|'update_stop', **kwargs}
+    pending_broker_ops: List = field(default_factory=list)
 
     @property
     def is_long(self) -> bool:
@@ -367,6 +371,62 @@ class LiveTrader:
             "but NO broker execution. Check credentials/connection."
         )
 
+    def _retry_pending_broker_ops(self):
+        """Retry failed broker operations (close, partial_close, update_stop).
+
+        Each scan cycle, attempts any queued operations. On success, removes
+        from the queue. On failure, keeps retrying. Sends alert on first failure.
+        """
+        # Collect all trades with pending ops (including closed trades not yet cleaned up)
+        all_trades = list(self.paper_trades.values())
+        for trade in all_trades:
+            if not hasattr(trade, 'pending_broker_ops') or not trade.pending_broker_ops:
+                continue
+
+            remaining_ops = []
+            for op in trade.pending_broker_ops:
+                op_type = op['op']
+                success = False
+                try:
+                    if op_type == 'close':
+                        result = self.webhook.close_position(
+                            symbol=trade.symbol, direction=trade.direction,
+                            paper_trade_id=trade.id,
+                        )
+                        success = result and result.get('success', False)
+                    elif op_type == 'partial_close':
+                        result = self.webhook.partial_close(
+                            symbol=trade.symbol, direction=trade.direction,
+                            contracts=op['contracts'], paper_trade_id=trade.id,
+                        )
+                        success = result and result.get('success', False)
+                    elif op_type == 'update_stop':
+                        result = self.webhook.update_stop(
+                            symbol=trade.symbol, direction=trade.direction,
+                            new_stop_price=op['stop_price'],
+                            entry_price=trade.entry_price,
+                            paper_trade_id=trade.id,
+                        )
+                        success = result and result.get('success', False)
+                except Exception as e:
+                    log(f"    [BROKER RETRY] {op_type} {trade.id} still failing: {e}")
+
+                if success:
+                    log(f"    [BROKER RETRY] {op_type} {trade.id} succeeded")
+                else:
+                    remaining_ops.append(op)
+
+            trade.pending_broker_ops = remaining_ops
+
+    def _queue_broker_op(self, trade, op_type: str, **kwargs):
+        """Queue a failed broker operation for retry on next scan."""
+        if not hasattr(trade, 'pending_broker_ops'):
+            trade.pending_broker_ops = []
+        op = {'op': op_type, **kwargs}
+        trade.pending_broker_ops.append(op)
+        log(f"    [BROKER] Queued {op_type} for retry: {trade.id}")
+        notify_status(f"[BROKER] {op_type} failed for {trade.id} — queued for retry")
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
         print("\nShutdown signal received...")
@@ -517,6 +577,10 @@ class LiveTrader:
                 # Manage paper trades (in paper mode)
                 if self.paper_mode and self.paper_trades:
                     self._manage_paper_trades()
+
+                # Retry any failed broker operations
+                if self.webhook:
+                    self._retry_pending_broker_ops()
 
                 # Print status
                 try:
@@ -1101,17 +1165,26 @@ class LiveTrader:
                     # Webhook: partial close T1 (1ct) + move stop to breakeven
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.partial_close(
+                            r = self.webhook.partial_close(
                                 symbol=trade.symbol, direction=trade.direction,
                                 contracts=cts_t1, paper_trade_id=trade.id,
                             )
-                            self.webhook.update_stop(
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'partial_close', contracts=cts_t1)
+                        except Exception as e:
+                            log(f"    [WEBHOOK] T1 partial close failed: {e}")
+                            self._queue_broker_op(trade, 'partial_close', contracts=cts_t1)
+                        try:
+                            r = self.webhook.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.entry_price, entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.entry_price)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T1 exit failed: {e}")
+                            log(f"    [WEBHOOK] T1 stop update failed: {e}")
+                            self._queue_broker_op(trade, 'update_stop', stop_price=trade.entry_price)
 
             # === CHECK 6R TOUCH (activates T2/runner trails) ===
             if trade.t1_hit and not trade.touched_8r:
@@ -1129,13 +1202,16 @@ class LiveTrader:
                     # Webhook: move broker stop to 3R floor
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.update_stop(
+                            r = self.webhook.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.plus_4r, entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
                         except Exception as e:
                             log(f"    [WEBHOOK] 6R stop update failed: {e}")
+                            self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
 
             # === STOP CHECKS ===
 
@@ -1167,12 +1243,15 @@ class LiveTrader:
                     # Webhook: close all remaining (broker stop may have fired already)
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.close_position(
+                            r = self.webhook.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'close')
                         except Exception as e:
                             log(f"    [WEBHOOK] Stop close failed: {e}")
+                            self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
                     continue
@@ -1213,12 +1292,15 @@ class LiveTrader:
                     # Webhook: close remaining (T2+Runner exiting together)
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.close_position(
+                            r = self.webhook.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'close')
                         except Exception as e:
                             log(f"    [WEBHOOK] Trail stop close failed: {e}")
+                            self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
                     continue
@@ -1254,12 +1336,15 @@ class LiveTrader:
                         # Webhook: close remaining (2-ct, no runner)
                         if self.webhook and trade.asset_type == 'futures':
                             try:
-                                self.webhook.close_position(
+                                r = self.webhook.close_position(
                                     symbol=trade.symbol, direction=trade.direction,
                                     paper_trade_id=trade.id,
                                 )
+                                if not (r and r.get('success')):
+                                    self._queue_broker_op(trade, 'close')
                             except Exception as e:
                                 log(f"    [WEBHOOK] T2 close failed: {e}")
+                                self._queue_broker_op(trade, 'close')
 
                         closed_trades.append(trade_id)
                         continue
@@ -1268,18 +1353,27 @@ class LiveTrader:
                     # Webhook: partial close T2 (1ct) + move stop to runner trail
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.partial_close(
+                            r = self.webhook.partial_close(
                                 symbol=trade.symbol, direction=trade.direction,
                                 contracts=cts_t2, paper_trade_id=trade.id,
                             )
-                            self.webhook.update_stop(
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'partial_close', contracts=cts_t2)
+                        except Exception as e:
+                            log(f"    [WEBHOOK] T2 partial close failed: {e}")
+                            self._queue_broker_op(trade, 'partial_close', contracts=cts_t2)
+                        try:
+                            r = self.webhook.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.runner_trail_stop,
                                 entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.runner_trail_stop)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T2 partial close failed: {e}")
+                            log(f"    [WEBHOOK] T2 stop update failed: {e}")
+                            self._queue_broker_op(trade, 'update_stop', stop_price=trade.runner_trail_stop)
 
             # After 6R: Runner trail stop (only after T2 exited)
             if trade.touched_8r and trade.t2_hit and not trade.runner_exit and trade.has_runner:
@@ -1309,12 +1403,15 @@ class LiveTrader:
                     # Webhook: close runner (last contract)
                     if self.webhook and trade.asset_type == 'futures':
                         try:
-                            self.webhook.close_position(
+                            r = self.webhook.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'close')
                         except Exception as e:
                             log(f"    [WEBHOOK] Runner close failed: {e}")
+                            self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
                     continue
@@ -1379,14 +1476,17 @@ class LiveTrader:
                                     pnl=trade.total_pnl, contracts=trade.contracts,
                                 )
 
-                                if self.webhook:
+                                if self.webhook and trade.asset_type == 'futures':
                                     try:
-                                        self.webhook.close_position(
+                                        r = self.webhook.close_position(
                                             symbol=trade.symbol, direction=trade.direction,
                                             paper_trade_id=trade.id,
                                         )
+                                        if not (r and r.get('success')):
+                                            self._queue_broker_op(trade, 'close')
                                     except Exception as e:
                                         log(f"    [WEBHOOK] OPP FVG close failed: {e}")
+                                        self._queue_broker_op(trade, 'close')
 
                                 closed_trades.append(trade_id)
                             break  # Only need first matching opposing FVG
