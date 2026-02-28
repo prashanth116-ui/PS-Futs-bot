@@ -6,6 +6,9 @@ Run the health check script at the beginning of each session:
 python health_check.py
 ```
 
+## CRITICAL: No Deploys During Market Hours
+**NEVER deploy code or restart the paper-trading service during market hours (04:00-16:30 ET Mon-Fri) without explicit user confirmation.** Mid-session restarts kill open trades and wipe trading history. Always deploy before 04:00 ET or after 16:30 ET. If a deploy is urgently needed during market hours, ALERT the user with a clear warning about the impact before proceeding.
+
 ## Important: Data Verification
 **ALWAYS verify numerical data before making claims about prices.** Do NOT rely on visual interpretation of chart images. The backtest and plot scripts now print RTH key levels:
 ```
