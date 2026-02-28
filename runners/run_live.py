@@ -298,6 +298,11 @@ class LiveTrader:
         self.paper_daily_losses = 0
         self.paper_trade_history: List[Dict] = []  # Snapshots of closed trades for divergence tracking
 
+        # Broker health tracking
+        self._broker_healthy: bool = True
+        self._last_broker_health_check: Optional[datetime] = None
+        self._broker_health_interval = 900  # 15 minutes between health checks
+
         # Cached bars and FVGs for opposing FVG exit (refreshed each scan cycle)
         self._cached_all_bars: Dict[str, list] = {}
         self._cached_fvgs: Dict[str, list] = {}
@@ -314,6 +319,49 @@ class LiveTrader:
         # Signal for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _check_broker_health(self):
+        """Periodic broker health check. Attempts reconnect if down, alerts via Telegram."""
+        if not self.webhook or not hasattr(self.webhook, 'client'):
+            return
+
+        now = get_est_now()
+        if (self._last_broker_health_check and
+                (now - self._last_broker_health_check).total_seconds() < self._broker_health_interval):
+            return
+
+        self._last_broker_health_check = now
+        try:
+            positions = self.webhook.client.get_positions()
+            # get_positions() returns empty list on success (even with no positions)
+            # but raises or returns None-ish on auth failure
+            if positions is not None:
+                if not self._broker_healthy:
+                    log("[BROKER] Connection restored")
+                    notify_status("[BROKER] Connection restored — resuming broker execution")
+                self._broker_healthy = True
+                return
+        except Exception as e:
+            log(f"[BROKER] Health check failed: {e}")
+
+        # Broker is down — try to reconnect
+        if self._broker_healthy:
+            # First failure — try reconnect before alerting
+            log("[BROKER] Connection lost, attempting reconnect...")
+            try:
+                if self.webhook.client.connect():
+                    log("[BROKER] Reconnected successfully")
+                    self._broker_healthy = True
+                    return
+            except Exception:
+                pass
+
+        self._broker_healthy = False
+        log("[BROKER] DOWN — paper trades will continue but broker orders will fail")
+        notify_status(
+            "[BROKER DOWN] Tradovate API unreachable. Paper trades continuing "
+            "but NO broker execution. Check credentials/connection."
+        )
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -477,6 +525,10 @@ class LiveTrader:
                     # Debug: dump paper_trades contents
                     for tid, t in self.paper_trades.items():
                         log(f"  paper_trades[{tid}] = {type(t).__name__}: {t!r}")
+
+                # Periodic broker health check (every 15 min)
+                self._check_broker_health()
+
                 self._sleep_until_next_bar_close()
 
             except KeyboardInterrupt:
@@ -879,7 +931,7 @@ class LiveTrader:
         # Webhook: open position on broker accounts
         if self.webhook and asset_type == 'futures':
             try:
-                self.webhook.open_position(
+                result_dict = self.webhook.open_position(
                     symbol=symbol,
                     direction=result['direction'],
                     contracts=contracts,
@@ -887,9 +939,13 @@ class LiveTrader:
                     entry_price=entry_price,
                     paper_trade_id=trade_id,
                 )
+                if result_dict and not result_dict.get('success'):
+                    error = result_dict.get('error', 'unknown')
+                    log(f"    [WEBHOOK] Entry failed: {error}")
+                    notify_status(f"[BROKER] Entry {trade_id} failed: {error}")
             except Exception as e:
                 log(f"    [WEBHOOK] Entry failed: {e}")
-                notify_status(f"[WEBHOOK ERROR] Entry {trade_id}: {e}")
+                notify_status(f"[BROKER] Entry {trade_id} failed: {e}")
 
     def _manage_paper_trades(self):
         """Manage open paper trades - matches backtest exit logic exactly.
