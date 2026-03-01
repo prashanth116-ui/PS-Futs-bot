@@ -375,6 +375,8 @@ class TestRetry:
         class FailOnceHandler(BaseHTTPRequestHandler):
             def do_POST(self):
                 nonlocal call_count
+                length = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(length)
                 call_count += 1
                 if call_count == 1:
                     self.send_response(500)
@@ -411,6 +413,8 @@ class TestRetry:
         class BadRequestHandler(BaseHTTPRequestHandler):
             def do_POST(self):
                 nonlocal call_count
+                length = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(length)
                 call_count += 1
                 self.send_response(400)
                 self.end_headers()
