@@ -256,7 +256,7 @@ class LiveTrader:
         paper_mode: bool = True,
         symbols: List[str] = None,
         equity_risk: int = 500,
-        webhook_executor: Optional[ExecutorInterface] = None,
+        executor: Optional[ExecutorInterface] = None,
     ):
         """
         Initialize live trader.
@@ -267,15 +267,15 @@ class LiveTrader:
             paper_mode: If True, only log signals without executing
             symbols: List of symbols to trade (default: ['ES', 'NQ'])
             equity_risk: Risk per trade for equities in dollars
-            webhook_executor: Executor backend (WebhookExecutor, TradovateExecutor,
-                            or MultiExecutor). None = no broker execution.
+            executor: Executor backend (TradovateExecutor, WebhookExecutor,
+                      or MultiExecutor). None = no broker execution.
         """
         self.client = client
         self.risk_manager = risk_manager or create_default_risk_manager()
         self.paper_mode = paper_mode
         self.symbols = symbols or ['ES', 'NQ']
         self.equity_risk = equity_risk
-        self.webhook = webhook_executor
+        self.executor = executor
 
         # Categorize symbols
         self.futures_symbols = [s for s in self.symbols if s in self.FUTURES_SYMBOLS]
@@ -302,6 +302,9 @@ class LiveTrader:
         self.paper_daily_losses = 0
         self.paper_trade_history: List[Dict] = []  # Snapshots of closed trades for divergence tracking
 
+        # Orphaned broker ops from closed trades (retried until they succeed)
+        self._orphaned_broker_ops: List[Dict] = []
+
         # Broker health tracking
         self._broker_healthy: bool = True
         self._last_broker_health_check: Optional[datetime] = None
@@ -310,6 +313,7 @@ class LiveTrader:
         # Cached bars and FVGs for opposing FVG exit (refreshed each scan cycle)
         self._cached_all_bars: Dict[str, list] = {}
         self._cached_fvgs: Dict[str, list] = {}
+        self._cached_fvgs_time: Dict[str, datetime] = {}  # Track when FVG cache was last updated
 
         # Price tracking for heartbeat
         self.last_prices: Dict[str, float] = {}
@@ -329,7 +333,7 @@ class LiveTrader:
 
         Checks every 15 min when healthy, every 5 min when down (faster recovery).
         """
-        if not self.webhook or not hasattr(self.webhook, 'client'):
+        if not self.executor or not hasattr(self.executor, 'client'):
             return
 
         now = get_est_now()
@@ -340,7 +344,7 @@ class LiveTrader:
 
         self._last_broker_health_check = now
         try:
-            positions = self.webhook.client.get_positions()
+            positions = self.executor.client.get_positions()
             # get_positions() returns empty list on success (even with no positions)
             # but raises or returns None-ish on auth failure
             if positions is not None:
@@ -357,7 +361,7 @@ class LiveTrader:
             # First failure — try reconnect before alerting
             log("[BROKER] Connection lost, attempting reconnect...")
             try:
-                if self.webhook.client.connect():
+                if self.executor.client.connect():
                     log("[BROKER] Reconnected successfully")
                     self._broker_healthy = True
                     return
@@ -389,19 +393,19 @@ class LiveTrader:
                 success = False
                 try:
                     if op_type == 'close':
-                        result = self.webhook.close_position(
+                        result = self.executor.close_position(
                             symbol=trade.symbol, direction=trade.direction,
                             paper_trade_id=trade.id,
                         )
                         success = result and result.get('success', False)
                     elif op_type == 'partial_close':
-                        result = self.webhook.partial_close(
+                        result = self.executor.partial_close(
                             symbol=trade.symbol, direction=trade.direction,
                             contracts=op['contracts'], paper_trade_id=trade.id,
                         )
                         success = result and result.get('success', False)
                     elif op_type == 'update_stop':
-                        result = self.webhook.update_stop(
+                        result = self.executor.update_stop(
                             symbol=trade.symbol, direction=trade.direction,
                             new_stop_price=op['stop_price'],
                             entry_price=trade.entry_price,
@@ -418,8 +422,62 @@ class LiveTrader:
 
             trade.pending_broker_ops = remaining_ops
 
-    def _queue_broker_op(self, trade, op_type: str, **kwargs):
-        """Queue a failed broker operation for retry on next scan."""
+        # Retry orphaned ops from deleted trades
+        if self._orphaned_broker_ops:
+            still_orphaned = []
+            for op in self._orphaned_broker_ops:
+                op_type = op['op']
+                trade_id = op.get('_trade_id', 'unknown')
+                success = False
+                try:
+                    if op_type == 'close':
+                        result = self.executor.close_position(
+                            symbol=op['_symbol'], direction=op['_direction'],
+                            paper_trade_id=trade_id,
+                        )
+                        success = result and result.get('success', False)
+                    elif op_type == 'partial_close':
+                        result = self.executor.partial_close(
+                            symbol=op['_symbol'], direction=op['_direction'],
+                            contracts=op['contracts'], paper_trade_id=trade_id,
+                        )
+                        success = result and result.get('success', False)
+                    elif op_type == 'update_stop':
+                        result = self.executor.update_stop(
+                            symbol=op['_symbol'], direction=op['_direction'],
+                            new_stop_price=op['stop_price'],
+                            entry_price=op['_entry_price'],
+                            paper_trade_id=trade_id,
+                        )
+                        success = result and result.get('success', False)
+                except Exception as e:
+                    log(f"    [BROKER RETRY] orphaned {op_type} {trade_id} still failing: {e}")
+
+                if success:
+                    log(f"    [BROKER RETRY] orphaned {op_type} {trade_id} succeeded")
+                else:
+                    still_orphaned.append(op)
+
+            self._orphaned_broker_ops = still_orphaned
+
+    def _should_retry_broker_op(self, result) -> bool:
+        """Check if a failed broker op should be retried.
+
+        Returns False for permanent failures (e.g., stop order already fired)
+        that would loop forever in the retry queue.
+        """
+        if result and result.get('permanent'):
+            return False
+        return True
+
+    def _queue_broker_op(self, trade, op_type: str, result=None, **kwargs):
+        """Queue a failed broker operation for retry on next scan.
+
+        Skips queueing if the failure is permanent (stop already fired, etc.).
+        """
+        if result and result.get('permanent'):
+            log(f"    [BROKER] {op_type} {trade.id} failed permanently — not retrying")
+            return
         if not hasattr(trade, 'pending_broker_ops'):
             trade.pending_broker_ops = []
         op = {'op': op_type, **kwargs}
@@ -439,9 +497,9 @@ class LiveTrader:
         print(f"{STRATEGY_VERSION} LIVE TRADER - Combined Futures + Equities")
         print("=" * 70)
         print(f"Mode: {'PAPER' if self.paper_mode else 'LIVE'}")
-        if self.webhook:
-            executor_name = type(self.webhook).__name__
-            print(f"Executor: {executor_name} ({self.webhook.get_account_count()} account(s))")
+        if self.executor:
+            executor_name = type(self.executor).__name__
+            print(f"Executor: {executor_name} ({self.executor.get_account_count()} account(s))")
         else:
             print("Executor: OFF (paper only)")
         if self.futures_symbols:
@@ -488,33 +546,33 @@ class LiveTrader:
                     if bars:
                         self.order_manager.close_trade_eod(trade, bars[-1].close)
 
-        # Webhook: close all open paper trades at EOD
-        if self.webhook and self.paper_trades:
-            log(f"  [WEBHOOK] EOD: closing {len(self.paper_trades)} open trade(s)")
+        # Broker: close all open paper trades at EOD
+        if self.executor and self.paper_trades:
+            log(f"  [BROKER] EOD: closing {len(self.paper_trades)} open trade(s)")
             for trade_id, trade in self.paper_trades.items():
                 if trade.status == PaperTradeStatus.OPEN and trade.asset_type == 'futures':
                     try:
-                        self.webhook.close_position(
+                        self.executor.close_position(
                             symbol=trade.symbol, direction=trade.direction,
                             paper_trade_id=trade.id,
                         )
                     except Exception as e:
-                        log(f"    [WEBHOOK] EOD close {trade.id} failed: {e}")
+                        log(f"    [BROKER] EOD close {trade.id} failed: {e}")
 
         # Safety net: flatten all broker positions and verify
-        if self.webhook and hasattr(self.webhook, 'close_all'):
+        if self.executor and hasattr(self.executor, 'close_all'):
             import time
             time.sleep(2)
             try:
-                self.webhook.close_all()
+                self.executor.close_all()
                 time.sleep(3)
             except Exception as e:
-                log(f"    [WEBHOOK] EOD flatten_all failed: {e}")
+                log(f"    [BROKER] EOD flatten_all failed: {e}")
 
             # Verify positions are flat
-            if hasattr(self.webhook, 'client'):
+            if hasattr(self.executor, 'client'):
                 try:
-                    remaining = [p for p in self.webhook.client.get_positions() if p.net_pos != 0]
+                    remaining = [p for p in self.executor.client.get_positions() if p.net_pos != 0]
                     if remaining:
                         log(f"  [EOD] WARNING: {len(remaining)} position(s) still open after close!")
                         for p in remaining:
@@ -527,6 +585,10 @@ class LiveTrader:
 
         if self.client:
             self.client.disconnect()
+
+        # Calculate P/L for all open paper trades before summary
+        if self.paper_mode:
+            self._close_paper_trades_eod()
 
         # Print summary
         self._print_summary()
@@ -578,7 +640,7 @@ class LiveTrader:
                     self._manage_paper_trades()
 
                 # Retry any failed broker operations
-                if self.webhook:
+                if self.executor:
                     self._retry_pending_broker_ops()
 
                 # Print status
@@ -702,6 +764,7 @@ class LiveTrader:
                         if fvg.mitigated:
                             break
             self._cached_fvgs[symbol] = fvgs
+            self._cached_fvgs_time[symbol] = get_est_now()
 
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
@@ -985,11 +1048,11 @@ class LiveTrader:
             runner_last_swing=entry_price,
         )
 
-        # Broker-first gating: if webhook is configured, broker must succeed
+        # Broker-first gating: if executor is configured, broker must succeed
         # before we create the paper trade. Prevents paper/broker divergence.
-        if self.webhook and asset_type == 'futures':
+        if self.executor and asset_type == 'futures':
             try:
-                result_dict = self.webhook.open_position(
+                result_dict = self.executor.open_position(
                     symbol=symbol,
                     direction=result['direction'],
                     contracts=contracts,
@@ -1039,6 +1102,7 @@ class LiveTrader:
             # Fetch current price (20 bars for swing detection context)
             bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=20, timeout=15)
             if not bars or len(bars) < 1:
+                log(f"    [WARNING] No bars for {trade.symbol} ({trade.id}) — trade unmanaged this cycle")
                 continue
 
             current_high = bars[-1].high
@@ -1072,16 +1136,19 @@ class LiveTrader:
                             if new_trail < trade.t1_trail_stop:
                                 trade.t1_trail_stop = new_trail
                                 trade.t1_last_swing = swing
-                # Webhook: update broker stop to new t1 trail
-                if self.webhook and trade.asset_type == 'futures' and trade.t1_trail_stop != old_t1_trail:
+                # Broker: update stop to new t1 trail
+                if self.executor and trade.asset_type == 'futures' and trade.t1_trail_stop != old_t1_trail:
                     try:
-                        self.webhook.update_stop(
+                        r = self.executor.update_stop(
                             symbol=trade.symbol, direction=trade.direction,
                             new_stop_price=trade.t1_trail_stop, entry_price=trade.entry_price,
                             paper_trade_id=trade.id,
                         )
+                        if not (r and r.get('success')):
+                            self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.t1_trail_stop)
                     except Exception as e:
-                        log(f"    [WEBHOOK] T1 trail update failed: {e}")
+                        log(f"    [BROKER] T1 trail update failed: {e}")
+                        self._queue_broker_op(trade, 'update_stop', stop_price=trade.t1_trail_stop)
 
             # T2 trail: update after 6R touch (4-tick buffer)
             # Match backtest: check single bar at i-2 with last_swing gate
@@ -1104,16 +1171,19 @@ class LiveTrader:
                             if new_trail < trade.t2_trail_stop:
                                 trade.t2_trail_stop = new_trail
                                 trade.t2_last_swing = swing
-                # Webhook: set broker stop to tighter T2 trail (covers T2+Runner)
-                if self.webhook and trade.asset_type == 'futures' and trade.t2_trail_stop != old_t2_trail:
+                # Broker: set stop to tighter T2 trail (covers T2+Runner)
+                if self.executor and trade.asset_type == 'futures' and trade.t2_trail_stop != old_t2_trail:
                     try:
-                        self.webhook.update_stop(
+                        r = self.executor.update_stop(
                             symbol=trade.symbol, direction=trade.direction,
                             new_stop_price=trade.t2_trail_stop, entry_price=trade.entry_price,
                             paper_trade_id=trade.id,
                         )
+                        if not (r and r.get('success')):
+                            self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.t2_trail_stop)
                     except Exception as e:
-                        log(f"    [WEBHOOK] T2 trail update failed: {e}")
+                        log(f"    [BROKER] T2 trail update failed: {e}")
+                        self._queue_broker_op(trade, 'update_stop', stop_price=trade.t2_trail_stop)
 
             # Runner trail: update after 6R touch AND T2 exited (6-tick buffer)
             # Match backtest: check single bar at i-2 with last_swing gate
@@ -1136,17 +1206,20 @@ class LiveTrader:
                             if new_trail < trade.runner_trail_stop:
                                 trade.runner_trail_stop = new_trail
                                 trade.runner_last_swing = swing
-                # Webhook: update broker stop to runner trail (only runner remains)
-                if self.webhook and trade.asset_type == 'futures' and trade.runner_trail_stop != old_runner_trail:
+                # Broker: update stop to runner trail (only runner remains)
+                if self.executor and trade.asset_type == 'futures' and trade.runner_trail_stop != old_runner_trail:
                     try:
-                        self.webhook.update_stop(
+                        r = self.executor.update_stop(
                             symbol=trade.symbol, direction=trade.direction,
                             new_stop_price=trade.runner_trail_stop,
                             entry_price=trade.entry_price,
                             paper_trade_id=trade.id,
                         )
+                        if not (r and r.get('success')):
+                            self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.runner_trail_stop)
                     except Exception as e:
-                        log(f"    [WEBHOOK] Runner trail update failed: {e}")
+                        log(f"    [BROKER] Runner trail update failed: {e}")
+                        self._queue_broker_op(trade, 'update_stop', stop_price=trade.runner_trail_stop)
 
             # === CHECK 3R TOUCH (T1 exit) ===
             if not trade.t1_hit:
@@ -1161,28 +1234,28 @@ class LiveTrader:
                     log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (3R)")
                     log(f"    Breakeven trail active for {trade.contracts - cts_t1} remaining cts")
 
-                    # Webhook: partial close T1 (1ct) + move stop to breakeven
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: partial close T1 (1ct) + move stop to breakeven
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.partial_close(
+                            r = self.executor.partial_close(
                                 symbol=trade.symbol, direction=trade.direction,
                                 contracts=cts_t1, paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'partial_close', contracts=cts_t1)
+                                self._queue_broker_op(trade, 'partial_close', result=r, contracts=cts_t1)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T1 partial close failed: {e}")
+                            log(f"    [BROKER] T1 partial close failed: {e}")
                             self._queue_broker_op(trade, 'partial_close', contracts=cts_t1)
                         try:
-                            r = self.webhook.update_stop(
+                            r = self.executor.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.entry_price, entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.entry_price)
+                                self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.entry_price)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T1 stop update failed: {e}")
+                            log(f"    [BROKER] T1 stop update failed: {e}")
                             self._queue_broker_op(trade, 'update_stop', stop_price=trade.entry_price)
 
             # === CHECK 6R TOUCH (activates T2/runner trails) ===
@@ -1198,18 +1271,18 @@ class LiveTrader:
                     trade.runner_last_swing = current_high if trade.is_long else current_low
                     log(f"\n  [PAPER] 6R TOUCHED: {trade.symbol} - T2/Runner trails at 3R floor")
 
-                    # Webhook: move broker stop to 3R floor
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: move stop to 3R floor
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.update_stop(
+                            r = self.executor.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.plus_4r, entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
+                                self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.plus_4r)
                         except Exception as e:
-                            log(f"    [WEBHOOK] 6R stop update failed: {e}")
+                            log(f"    [BROKER] 6R stop update failed: {e}")
                             self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
 
             # === STOP CHECKS ===
@@ -1239,17 +1312,17 @@ class LiveTrader:
                         pnl=trade.total_pnl, contracts=trade.contracts,
                     )
 
-                    # Webhook: close all remaining (broker stop may have fired already)
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: close all remaining (stop may have fired already)
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.close_position(
+                            r = self.executor.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'close')
+                                self._queue_broker_op(trade, 'close', result=r)
                         except Exception as e:
-                            log(f"    [WEBHOOK] Stop close failed: {e}")
+                            log(f"    [BROKER] Stop close failed: {e}")
                             self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
@@ -1288,17 +1361,17 @@ class LiveTrader:
                         pnl=trade.total_pnl, contracts=trade.contracts,
                     )
 
-                    # Webhook: close remaining (T2+Runner exiting together)
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: close remaining (T2+Runner exiting together)
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.close_position(
+                            r = self.executor.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'close')
+                                self._queue_broker_op(trade, 'close', result=r)
                         except Exception as e:
-                            log(f"    [WEBHOOK] Trail stop close failed: {e}")
+                            log(f"    [BROKER] Trail stop close failed: {e}")
                             self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
@@ -1332,46 +1405,46 @@ class LiveTrader:
                             pnl=trade.total_pnl, contracts=trade.contracts,
                         )
 
-                        # Webhook: close remaining (2-ct, no runner)
-                        if self.webhook and trade.asset_type == 'futures':
+                        # Broker: close remaining (2-ct, no runner)
+                        if self.executor and trade.asset_type == 'futures':
                             try:
-                                r = self.webhook.close_position(
+                                r = self.executor.close_position(
                                     symbol=trade.symbol, direction=trade.direction,
                                     paper_trade_id=trade.id,
                                 )
                                 if not (r and r.get('success')):
-                                    self._queue_broker_op(trade, 'close')
+                                    self._queue_broker_op(trade, 'close', result=r)
                             except Exception as e:
-                                log(f"    [WEBHOOK] T2 close failed: {e}")
+                                log(f"    [BROKER] T2 close failed: {e}")
                                 self._queue_broker_op(trade, 'close')
 
                         closed_trades.append(trade_id)
                         continue
 
                     # 3-ct trade: T2 exits, runner continues
-                    # Webhook: partial close T2 (1ct) + move stop to runner trail
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: partial close T2 (1ct) + move stop to runner trail
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.partial_close(
+                            r = self.executor.partial_close(
                                 symbol=trade.symbol, direction=trade.direction,
                                 contracts=cts_t2, paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'partial_close', contracts=cts_t2)
+                                self._queue_broker_op(trade, 'partial_close', result=r, contracts=cts_t2)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T2 partial close failed: {e}")
+                            log(f"    [BROKER] T2 partial close failed: {e}")
                             self._queue_broker_op(trade, 'partial_close', contracts=cts_t2)
                         try:
-                            r = self.webhook.update_stop(
+                            r = self.executor.update_stop(
                                 symbol=trade.symbol, direction=trade.direction,
                                 new_stop_price=trade.runner_trail_stop,
                                 entry_price=trade.entry_price,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'update_stop', stop_price=trade.runner_trail_stop)
+                                self._queue_broker_op(trade, 'update_stop', result=r, stop_price=trade.runner_trail_stop)
                         except Exception as e:
-                            log(f"    [WEBHOOK] T2 stop update failed: {e}")
+                            log(f"    [BROKER] T2 stop update failed: {e}")
                             self._queue_broker_op(trade, 'update_stop', stop_price=trade.runner_trail_stop)
 
             # After 6R: Runner trail stop (only after T2 exited)
@@ -1399,17 +1472,17 @@ class LiveTrader:
                         pnl=trade.total_pnl, contracts=trade.contracts,
                     )
 
-                    # Webhook: close runner (last contract)
-                    if self.webhook and trade.asset_type == 'futures':
+                    # Broker: close runner (last contract)
+                    if self.executor and trade.asset_type == 'futures':
                         try:
-                            r = self.webhook.close_position(
+                            r = self.executor.close_position(
                                 symbol=trade.symbol, direction=trade.direction,
                                 paper_trade_id=trade.id,
                             )
                             if not (r and r.get('success')):
-                                self._queue_broker_op(trade, 'close')
+                                self._queue_broker_op(trade, 'close', result=r)
                         except Exception as e:
-                            log(f"    [WEBHOOK] Runner close failed: {e}")
+                            log(f"    [BROKER] Runner close failed: {e}")
                             self._queue_broker_op(trade, 'close')
 
                     closed_trades.append(trade_id)
@@ -1419,6 +1492,10 @@ class LiveTrader:
             if trade.status == PaperTradeStatus.OPEN and trade.t1_hit and trade.asset_type == 'futures':
                 sym_config = self.FUTURES_SYMBOLS.get(trade.symbol, {})
                 if sym_config.get('opp_fvg_exit') and trade.symbol in self._cached_fvgs:
+                    # Skip opposing FVG check if cache is stale (> 360s = 2 scan cycles)
+                    cache_time = self._cached_fvgs_time.get(trade.symbol)
+                    if cache_time and safe_datetime_diff_seconds(get_est_now(), cache_time) > 360:
+                        continue
                     trigger_met = trade.touched_8r if sym_config.get('opp_fvg_after_6r') else trade.t1_hit
                     if trigger_met:
                         opposing_dir = 'BULLISH' if not trade.is_long else 'BEARISH'
@@ -1475,16 +1552,16 @@ class LiveTrader:
                                     pnl=trade.total_pnl, contracts=trade.contracts,
                                 )
 
-                                if self.webhook and trade.asset_type == 'futures':
+                                if self.executor and trade.asset_type == 'futures':
                                     try:
-                                        r = self.webhook.close_position(
+                                        r = self.executor.close_position(
                                             symbol=trade.symbol, direction=trade.direction,
                                             paper_trade_id=trade.id,
                                         )
                                         if not (r and r.get('success')):
-                                            self._queue_broker_op(trade, 'close')
+                                            self._queue_broker_op(trade, 'close', result=r)
                                     except Exception as e:
-                                        log(f"    [WEBHOOK] OPP FVG close failed: {e}")
+                                        log(f"    [BROKER] OPP FVG close failed: {e}")
                                         self._queue_broker_op(trade, 'close')
 
                                 closed_trades.append(trade_id)
@@ -1498,7 +1575,93 @@ class LiveTrader:
                 is_win=trade.total_pnl > 0,
             )
             self.paper_trade_history.append(self._snapshot_paper_trade(trade))
+            # Preserve any pending broker ops before deleting the trade
+            if hasattr(trade, 'pending_broker_ops') and trade.pending_broker_ops:
+                for op in trade.pending_broker_ops:
+                    op['_trade_id'] = trade.id
+                    op['_symbol'] = trade.symbol
+                    op['_direction'] = trade.direction
+                    op['_entry_price'] = trade.entry_price
+                self._orphaned_broker_ops.extend(trade.pending_broker_ops)
+                log(f"    [BROKER] {len(trade.pending_broker_ops)} op(s) orphaned from {trade.id}")
             del self.paper_trades[trade_id]
+
+    def _close_paper_trades_eod(self):
+        """Calculate P/L for all open paper trades at EOD shutdown.
+
+        Iterates all open paper trades (futures + equity), fetches current price,
+        calculates per-leg P/L for remaining contracts, updates daily counters,
+        records in risk manager, snapshots to history, sends Telegram exit.
+        """
+        if not self.paper_trades:
+            return
+
+        log(f"\n  [EOD] Closing {len(self.paper_trades)} open paper trade(s) with P/L calculation")
+
+        for trade_id, trade in list(self.paper_trades.items()):
+            if trade.status != PaperTradeStatus.OPEN:
+                continue
+
+            # Get current price: try fresh bars, fallback to last_prices, then entry_price
+            current_price = None
+            try:
+                bars = fetch_futures_bars(trade.symbol, interval='3m', n_bars=1, timeout=10)
+                if bars:
+                    current_price = bars[-1].close
+            except Exception:
+                pass
+
+            if current_price is None:
+                current_price = self.last_prices.get(trade.symbol, trade.entry_price)
+
+            # Contract split
+            cts_t1 = 1
+            cts_t2 = 1
+            cts_runner = max(0, trade.contracts - cts_t1 - cts_t2)
+
+            # Calculate P/L for remaining legs
+            if not trade.t1_hit:
+                trade.t1_pnl = trade.calculate_pnl(current_price, cts_t1)
+            if not trade.t2_hit:
+                trade.t2_pnl = trade.calculate_pnl(current_price, cts_t2)
+            if trade.has_runner and not trade.runner_exit:
+                trade.runner_pnl = trade.calculate_pnl(current_price, cts_runner)
+
+            trade.status = PaperTradeStatus.CLOSED
+            trade.exit_time = get_est_now()
+            trade.exit_price = current_price
+            trade.exit_reason = "EOD"
+
+            # Update daily counters
+            self.paper_daily_pnl += trade.total_pnl
+            self.paper_daily_trades += 1
+            if trade.total_pnl > 0:
+                self.paper_daily_wins += 1
+            else:
+                self.paper_daily_losses += 1
+
+            # Record in risk manager
+            self.risk_manager.record_trade_exit(
+                trade.symbol, trade.contracts, trade.total_pnl,
+                is_win=trade.total_pnl > 0,
+            )
+
+            # Snapshot for divergence tracking
+            self.paper_trade_history.append(self._snapshot_paper_trade(trade))
+
+            log(f"    [EOD] {trade.symbol} {trade.direction} @ {current_price:.2f}")
+            log(f"      T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}" +
+                (f" | Runner: ${trade.runner_pnl:+,.2f}" if trade.has_runner else ""))
+            log(f"      Total P/L: ${trade.total_pnl:+,.2f}")
+
+            notify_exit(
+                symbol=trade.symbol, direction=trade.direction,
+                exit_type="EOD", exit_price=current_price,
+                pnl=trade.total_pnl, contracts=trade.contracts,
+            )
+
+        # Clear all paper trades after processing
+        self.paper_trades.clear()
 
     def _snapshot_paper_trade(self, trade: PaperTrade) -> Dict:
         """Capture a closed PaperTrade as a plain dict for divergence tracking."""
@@ -1676,10 +1839,10 @@ class LiveTrader:
                 send_telegram = True
 
         # Position reconciliation every 15 min (TradovateExecutor only)
-        if self.webhook and hasattr(self.webhook, 'reconcile_positions'):
+        if self.executor and hasattr(self.executor, 'reconcile_positions'):
             if self.last_telegram_heartbeat is None or safe_datetime_diff_seconds(now, self.last_telegram_heartbeat) >= 900:
                 try:
-                    warnings = self.webhook.reconcile_positions(self.paper_trades)
+                    warnings = self.executor.reconcile_positions(self.paper_trades)
                     for w in warnings:
                         log(f"  {w}")
                         notify_status(w)
@@ -2035,13 +2198,13 @@ def main():
             print("Continuing without webhooks")
 
     # Combine executors
-    webhook_executor = None
+    broker_executor = None
     if len(executors) > 1:
         from runners.multi_executor import MultiExecutor
-        webhook_executor = MultiExecutor(executors)
-        print(f"Executor: MultiExecutor ({webhook_executor.get_account_count()} total account(s))")
+        broker_executor = MultiExecutor(executors)
+        print(f"Executor: MultiExecutor ({broker_executor.get_account_count()} total account(s))")
     elif len(executors) == 1:
-        webhook_executor = executors[0]
+        broker_executor = executors[0]
 
     # Create trader
     trader = LiveTrader(
@@ -2049,7 +2212,7 @@ def main():
         paper_mode=paper_mode,
         symbols=args.symbols,
         equity_risk=args.equity_risk,
-        webhook_executor=webhook_executor,
+        executor=broker_executor,
     )
 
     # Start trading

@@ -282,7 +282,7 @@ class TradovateExecutor(ExecutorInterface):
             logger.warning(
                 "[TRADOVATE] No stop order to update for %s", paper_trade_id,
             )
-            return {"success": False, "error": "No stop order found"}
+            return {"success": False, "error": "No stop order found", "permanent": True}
 
         logger.info(
             "[TRADOVATE] UPDATE STOP: %s new_stop=%.2f [%s]",
@@ -303,7 +303,8 @@ class TradovateExecutor(ExecutorInterface):
                 "[TRADOVATE] Stop modify failed for %s (may have already fired)",
                 paper_trade_id,
             )
-            return {"success": False, "error": "Stop modify failed"}
+            # Mark as permanent so run_live doesn't retry endlessly
+            return {"success": False, "error": "Stop modify failed", "permanent": True}
 
         return {"success": True}
 
