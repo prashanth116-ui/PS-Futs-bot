@@ -326,10 +326,12 @@ class TestBug3StaleFvgCache:
         trader = _make_trader()
         assert 'ES' not in trader._cached_fvgs_time
 
-        # After scan, timestamp should be set
+        # After scan, timestamp should be set (use mid-session time to avoid session filter)
+        today = datetime.now(EST).date()
+        session_ts = datetime(today.year, today.month, today.day, 10, 0, tzinfo=EST)
         fake_bars = [FakeBar(
             open=5000.0, high=5010.0, low=4990.0, close=5005.0, volume=100,
-            timestamp=datetime.now(EST),
+            timestamp=session_ts,
         )] * 30
 
         with patch('runners.run_live.load_bars_with_history', return_value=fake_bars):
