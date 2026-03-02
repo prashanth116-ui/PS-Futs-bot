@@ -543,30 +543,29 @@ class LiveTrader:
                     self._interruptible_sleep(60)
                     continue
 
-                # Check risk status
-                if not self.risk_manager.is_trading_allowed():
+                # Check risk status (only gates new entries — open trades always managed)
+                trading_allowed = self.risk_manager.is_trading_allowed()
+                if not trading_allowed:
                     status = self.risk_manager.get_summary()
                     log(f"[{current_time.strftime('%H:%M:%S')}] Trading blocked: {status['blocked_reason']}")
-                    self._interruptible_sleep(60)
-                    continue
 
-                # Scan futures symbols
-                for symbol in self.futures_symbols:
-                    if not self.running:
-                        break
-                    try:
-                        self._scan_futures_symbol(symbol)
-                    except Exception as e:
-                        log(f"  Error scanning {symbol}: {e}")
+                # Scan for new entries (only if trading allowed)
+                if trading_allowed:
+                    for symbol in self.futures_symbols:
+                        if not self.running:
+                            break
+                        try:
+                            self._scan_futures_symbol(symbol)
+                        except Exception as e:
+                            log(f"  Error scanning {symbol}: {e}")
 
-                # Scan equity symbols
-                for symbol in self.equity_symbols:
-                    if not self.running:
-                        break
-                    try:
-                        self._scan_equity_symbol(symbol)
-                    except Exception as e:
-                        log(f"  Error scanning {symbol}: {e}")
+                    for symbol in self.equity_symbols:
+                        if not self.running:
+                            break
+                        try:
+                            self._scan_equity_symbol(symbol)
+                        except Exception as e:
+                            log(f"  Error scanning {symbol}: {e}")
 
                 sys.stdout.flush()
 

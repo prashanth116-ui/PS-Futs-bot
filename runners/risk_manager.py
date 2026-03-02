@@ -306,9 +306,11 @@ class RiskManager:
                 return RiskStatus.KILLED
 
             if self.state.daily_pnl <= -self.limits.max_daily_loss:
+                self.state.blocked_reason = f"Daily loss limit (${abs(self.state.daily_pnl):.0f})"
                 return RiskStatus.BLOCKED
 
             if self.state.consecutive_losses >= self.limits.max_consecutive_losses:
+                self.state.blocked_reason = f"Consecutive losses ({self.state.consecutive_losses})"
                 return RiskStatus.BLOCKED
 
             if self.state.daily_pnl <= -self.limits.max_daily_loss * 0.5:
