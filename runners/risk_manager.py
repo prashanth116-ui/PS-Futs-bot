@@ -66,7 +66,7 @@ class RiskLimits:
     # Daily limits
     max_daily_loss: float = 2000.0        # Stop trading after this loss
     max_daily_trades: int = 0             # 0 = unlimited (other controls are sufficient)
-    max_consecutive_losses: int = 3       # Pause after N consecutive losses
+    max_consecutive_losses: int = 0       # Global consecutive loss limit (0=disabled, per-symbol handles it)
 
     # Position limits
     max_open_trades: int = 3              # Max simultaneous trades (parity with backtest)
@@ -98,6 +98,7 @@ class RiskState:
     daily_pnl: float = 0.0
     daily_trades: int = 0
     consecutive_losses: int = 0
+    consecutive_losses_by_symbol: Dict[str, int] = field(default_factory=dict)
     open_trades: int = 0
     open_contracts: int = 0
     contracts_by_symbol: Dict[str, int] = field(default_factory=dict)
@@ -144,6 +145,7 @@ class RiskManager:
             self.state.daily_pnl = 0.0
             self.state.daily_trades = 0
             self.state.consecutive_losses = 0
+            self.state.consecutive_losses_by_symbol = {}
             self.state.current_date = today
             self.state.blocked_reason = None
             print(f"Daily reset: {today}")
@@ -162,6 +164,14 @@ class RiskManager:
             self.state.kill_switch_active = False
             self.state.blocked_reason = None
             print("Kill switch deactivated")
+
+    def _get_symbol_consec_limit(self, symbol: str) -> int:
+        """Per-symbol consecutive loss limit. ES/MES=2, NQ/MNQ=3, others=0 (disabled)."""
+        if symbol in ('ES', 'MES'):
+            return 2
+        elif symbol in ('NQ', 'MNQ'):
+            return 3
+        return 0
 
     def can_enter_trade(
         self,
@@ -204,9 +214,15 @@ class RiskManager:
             if self.limits.max_daily_trades > 0 and self.state.daily_trades >= self.limits.max_daily_trades:
                 return False, "Max daily trades reached"
 
-            # Consecutive losses
-            if self.state.consecutive_losses >= self.limits.max_consecutive_losses:
+            # Global consecutive losses (0=disabled)
+            if self.limits.max_consecutive_losses > 0 and self.state.consecutive_losses >= self.limits.max_consecutive_losses:
                 return False, f"Max consecutive losses ({self.limits.max_consecutive_losses}) reached"
+
+            # Per-symbol consecutive losses: ES/MES=2, NQ/MNQ=3
+            symbol_consec_limit = self._get_symbol_consec_limit(symbol)
+            symbol_consec = self.state.consecutive_losses_by_symbol.get(symbol, 0)
+            if symbol_consec_limit > 0 and symbol_consec >= symbol_consec_limit:
+                return False, f"Consecutive losses for {symbol} ({symbol_consec}/{symbol_consec_limit})"
 
             # Open trade limit
             if self.state.open_trades >= self.limits.max_open_trades:
@@ -265,13 +281,24 @@ class RiskManager:
 
             if is_win:
                 self.state.consecutive_losses = 0
+                self.state.consecutive_losses_by_symbol[symbol] = 0
                 self.state.last_trade_result = 'win'
             else:
                 self.state.consecutive_losses += 1
+                self.state.consecutive_losses_by_symbol[symbol] = self.state.consecutive_losses_by_symbol.get(symbol, 0) + 1
                 self.state.last_trade_result = 'loss'
 
-                # Check for alerts
-                if self.state.consecutive_losses >= self.limits.max_consecutive_losses:
+                # Per-symbol consecutive loss alert
+                symbol_consec = self.state.consecutive_losses_by_symbol[symbol]
+                symbol_limit = self._get_symbol_consec_limit(symbol)
+                if symbol_limit > 0 and symbol_consec >= symbol_limit:
+                    self._send_alert(
+                        f"Consecutive loss limit for {symbol} ({symbol_consec}/{symbol_limit}) — {symbol} entries blocked",
+                        "warning"
+                    )
+
+                # Global consecutive loss alert (if enabled)
+                if self.limits.max_consecutive_losses > 0 and self.state.consecutive_losses >= self.limits.max_consecutive_losses:
                     self._send_alert(
                         f"Max consecutive losses reached ({self.state.consecutive_losses})",
                         "warning"
@@ -309,14 +336,27 @@ class RiskManager:
                 self.state.blocked_reason = f"Daily loss limit (${abs(self.state.daily_pnl):.0f})"
                 return RiskStatus.BLOCKED
 
-            if self.state.consecutive_losses >= self.limits.max_consecutive_losses:
+            if self.limits.max_consecutive_losses > 0 and self.state.consecutive_losses >= self.limits.max_consecutive_losses:
                 self.state.blocked_reason = f"Consecutive losses ({self.state.consecutive_losses})"
+                return RiskStatus.BLOCKED
+
+            # Check if ALL symbols with limits are blocked
+            all_blocked = True
+            blocked_symbols = []
+            for sym, consec in self.state.consecutive_losses_by_symbol.items():
+                limit = self._get_symbol_consec_limit(sym)
+                if limit > 0 and consec >= limit:
+                    blocked_symbols.append(sym)
+                elif limit > 0:
+                    all_blocked = False
+            if blocked_symbols and all_blocked:
+                self.state.blocked_reason = f"Consecutive losses ({', '.join(blocked_symbols)})"
                 return RiskStatus.BLOCKED
 
             if self.state.daily_pnl <= -self.limits.max_daily_loss * 0.5:
                 return RiskStatus.WARNING
 
-            if self.state.consecutive_losses >= 2:
+            if blocked_symbols:
                 return RiskStatus.WARNING
 
             return RiskStatus.OK
@@ -331,6 +371,7 @@ class RiskManager:
                 'daily_pnl': self.state.daily_pnl,
                 'daily_trades': self.state.daily_trades,
                 'consecutive_losses': self.state.consecutive_losses,
+                'consecutive_losses_by_symbol': dict(self.state.consecutive_losses_by_symbol),
                 'open_trades': self.state.open_trades,
                 'open_contracts': self.state.open_contracts,
                 'kill_switch': self.state.kill_switch_active,
@@ -353,7 +394,7 @@ def create_default_risk_manager() -> RiskManager:
     limits = RiskLimits(
         max_daily_loss=2000.0,
         max_daily_trades=0,  # 0 = unlimited
-        max_consecutive_losses=3,
+        max_consecutive_losses=0,  # Disabled — per-symbol limits handle this
         max_open_trades=3,              # Parity with backtest (was 2, blocked 2nd/3rd entries)
         max_contracts_per_trade=3,
         max_total_contracts=6,

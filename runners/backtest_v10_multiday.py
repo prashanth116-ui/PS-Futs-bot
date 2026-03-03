@@ -108,8 +108,9 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
 
         # V10.6: Per-symbol BOS control
         disable_bos = symbol in ['ES', 'MES']
-        # V10.15: Global consecutive loss stop (ES/MES only)
-        max_consec_losses = 2 if symbol in ['ES', 'MES'] else 0
+        # Per-symbol consecutive loss stop: ES/MES=2, NQ/MNQ=3
+        consec_limits = {'ES': 2, 'MES': 2, 'NQ': 3, 'MNQ': 3}
+        max_consec_losses = consec_limits.get(symbol, 0)
 
         # Run V10 strategy with all filters
         results = run_session_v10(

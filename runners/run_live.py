@@ -622,23 +622,24 @@ class LiveTrader:
                     status = self.risk_manager.get_summary()
                     log(f"[{current_time.strftime('%H:%M:%S')}] Trading blocked: {status['blocked_reason']}")
 
-                # Scan for new entries (only if trading allowed)
-                if trading_allowed:
-                    for symbol in self.futures_symbols:
-                        if not self.running:
-                            break
-                        try:
-                            self._scan_futures_symbol(symbol)
-                        except Exception as e:
-                            log(f"  Error scanning {symbol}: {e}")
+                # Scan for new entries
+                # Even if globally blocked, scan anyway — per-symbol limits may allow some symbols
+                # can_enter_trade() in risk_manager gates each symbol individually
+                for symbol in self.futures_symbols:
+                    if not self.running:
+                        break
+                    try:
+                        self._scan_futures_symbol(symbol)
+                    except Exception as e:
+                        log(f"  Error scanning {symbol}: {e}")
 
-                    for symbol in self.equity_symbols:
-                        if not self.running:
-                            break
-                        try:
-                            self._scan_equity_symbol(symbol)
-                        except Exception as e:
-                            log(f"  Error scanning {symbol}: {e}")
+                for symbol in self.equity_symbols:
+                    if not self.running:
+                        break
+                    try:
+                        self._scan_equity_symbol(symbol)
+                    except Exception as e:
+                        log(f"  Error scanning {symbol}: {e}")
 
                 sys.stdout.flush()
 
@@ -808,7 +809,7 @@ class LiveTrader:
             t1_r_target=3,
             trail_r_trigger=6,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
-            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.15: ES/MES only
+            max_consec_losses=0,  # Per-symbol consec losses handled by risk_manager
             # Opposing FVG exit
             opposing_fvg_exit=config.get('opp_fvg_exit', False),
             opposing_fvg_min_ticks=config.get('opp_fvg_min_ticks', 5),
