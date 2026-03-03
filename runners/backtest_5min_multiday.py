@@ -8,6 +8,7 @@ sys.path.insert(0, '.')
 from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
+from version import STRATEGY_VERSION
 
 
 def backtest_5min_multiday(symbol='ES', days=30, contracts=3):
@@ -44,7 +45,7 @@ def backtest_5min_multiday(symbol='ES', days=30, contracts=3):
     print(f'Date range: {trading_dates[0]} to {trading_dates[-1]}')
     print()
     print('='*80)
-    print(f'{symbol} V10 5-MIN BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
+    print(f'{symbol} {STRATEGY_VERSION} 5-MIN BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
     print('Strategy: V10.7 Quad Entry (5-Minute Bars)')
     print(f'  - Min risk: {min_risk_pts} pts')

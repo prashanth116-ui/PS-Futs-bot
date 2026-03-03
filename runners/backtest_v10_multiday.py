@@ -61,7 +61,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     print(f'Date range: {trading_dates[0]} to {trading_dates[-1]}')
     print()
     print('='*80)
-    print(f'{symbol} V10 MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
+    print(f'{symbol} {STRATEGY_VERSION} MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*80)
     print(f'Strategy: {STRATEGY_VERSION} Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
     print(f'  - FVG Mode: {fvg_mode.upper()} ({"high/low" if fvg_mode == "wick" else "open/close"})')

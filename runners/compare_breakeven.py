@@ -5,6 +5,7 @@ sys.path.insert(0, '.')
 from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
+from version import STRATEGY_VERSION
 
 
 def run_comparison(symbol='ES', days=30, contracts=3):
@@ -45,7 +46,7 @@ def run_comparison(symbol='ES', days=30, contracts=3):
     results_with_be = {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0, 'stops': 0, 'be_exits': 0, 'daily': []}
 
     print('='*100)
-    print(f'{symbol} V10 BREAKEVEN COMPARISON - {len(trading_dates)} Days - {contracts} Contracts')
+    print(f'{symbol} {STRATEGY_VERSION} BREAKEVEN COMPARISON - {len(trading_dates)} Days - {contracts} Contracts')
     print('='*100)
     print()
     print(f'{"Date":<12} {"NO BE P/L":>12} {"WITH BE P/L":>12} {"Diff":>10} {"NO BE Stops":>12} {"BE Stops":>10} {"BE Exits":>10}')
