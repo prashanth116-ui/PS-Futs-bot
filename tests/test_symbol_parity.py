@@ -175,6 +175,90 @@ class TestEquityKwargsMatchSignature:
         assert kwargs['bos_daily_loss_limit'] == 1
 
 
+class TestKwargsCompleteness:
+    """
+    REVERSE CHECK: every run_session_v10() parameter must be covered by
+    get_session_v10_kwargs() OR explicitly listed in the allowlist below.
+
+    If you add a new param to run_session_v10() or run_session_v10_equity(),
+    this test will FAIL until you either:
+      1. Add it to the kwargs builder in symbol_defaults.py, OR
+      2. Add it to the allowlist here with a comment explaining why.
+    """
+
+    # Params intentionally NOT centralized (CLI-only flags, A/B testing, deprecated)
+    FUTURES_ALLOWLIST = {
+        'session_bars',           # positional arg
+        'all_bars',               # positional arg
+        'use_opposing_fvg_exit',  # deprecated — replaced by opposing_fvg_exit
+        'fvg_mode',               # runtime CLI flag (--fvg-mode=body), not per-symbol
+        'opposing_fvg_mode',      # runtime CLI flag, not per-symbol
+        'entry_min_fvg_ticks',    # A/B testing CLI flag
+        'post_t1_trail_r',        # A/B testing CLI flag (trail improvement option B)
+        'time_decay_bars',        # A/B testing CLI flag (trail improvement option D)
+        'time_decay_r',           # A/B testing CLI flag (trail improvement option D)
+    }
+
+    EQUITY_ALLOWLIST = {
+        'session_bars',           # positional arg
+        'all_bars',               # positional arg
+    }
+
+    def test_futures_kwargs_cover_all_params(self):
+        """Every run_session_v10() param must be in kwargs output or allowlist."""
+        sig = inspect.signature(run_session_v10)
+        all_params = set(sig.parameters.keys())
+
+        kwargs = get_session_v10_kwargs('ES')
+        covered = set(kwargs.keys()) | self.FUTURES_ALLOWLIST
+
+        uncovered = all_params - covered
+        assert not uncovered, (
+            f"run_session_v10() has params not covered by get_session_v10_kwargs() "
+            f"and not in allowlist: {uncovered}\n"
+            f"Either add them to get_session_v10_kwargs() in symbol_defaults.py, "
+            f"or add them to FUTURES_ALLOWLIST in this test with a comment."
+        )
+
+    def test_equity_kwargs_cover_all_params(self):
+        """Every run_session_v10_equity() param must be in kwargs output or allowlist."""
+        sig = inspect.signature(run_session_v10_equity)
+        all_params = set(sig.parameters.keys())
+
+        kwargs = get_session_v10_equity_kwargs('SPY')
+        covered = set(kwargs.keys()) | self.EQUITY_ALLOWLIST
+
+        uncovered = all_params - covered
+        assert not uncovered, (
+            f"run_session_v10_equity() has params not covered by "
+            f"get_session_v10_equity_kwargs() and not in allowlist: {uncovered}\n"
+            f"Either add them to get_session_v10_equity_kwargs() in symbol_defaults.py, "
+            f"or add them to EQUITY_ALLOWLIST in this test with a comment."
+        )
+
+    def test_futures_allowlist_is_minimal(self):
+        """Allowlist entries must actually exist in the function signature (no stale entries)."""
+        sig = inspect.signature(run_session_v10)
+        all_params = set(sig.parameters.keys())
+
+        stale = self.FUTURES_ALLOWLIST - all_params
+        assert not stale, (
+            f"FUTURES_ALLOWLIST contains params that no longer exist in "
+            f"run_session_v10(): {stale}. Remove them."
+        )
+
+    def test_equity_allowlist_is_minimal(self):
+        """Allowlist entries must actually exist in the function signature (no stale entries)."""
+        sig = inspect.signature(run_session_v10_equity)
+        all_params = set(sig.parameters.keys())
+
+        stale = self.EQUITY_ALLOWLIST - all_params
+        assert not stale, (
+            f"EQUITY_ALLOWLIST contains params that no longer exist in "
+            f"run_session_v10_equity(): {stale}. Remove them."
+        )
+
+
 class TestMiniMicroParity:
     """ES must match MES on all strategy params (only tick_value differs). Same for NQ/MNQ."""
 
