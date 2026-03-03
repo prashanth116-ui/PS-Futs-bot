@@ -21,6 +21,7 @@ from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
 from runners.run_v10_equity import run_session_v10_equity
+from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs, is_futures as _is_futures
 
 
 def calculate_ema(closes, period):
@@ -40,19 +41,12 @@ def calculate_ema(closes, period):
 def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval='3m', risk_per_trade=50, losses_only=False, fvg_mode="wick"):
     """Plot today's trades with V10.16 Quad Entry strategy. Supports futures and equities."""
 
-    is_equity = symbol.upper() in ['SPY', 'QQQ']
+    is_equity = not _is_futures(symbol.upper())
 
-    if is_equity:
-        tick_size = 0.01
-        tick_value = 1.0
-    else:
-        tick_size = 0.25
-        tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
-    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
-    max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    max_retrace_risk = 8.0 if symbol in ['ES', 'MES'] else None
-    # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
-    disable_bos = symbol in ['ES', 'MES']
+    cfg = get_symbol_config(symbol)
+    tick_size = cfg['tick_size']
+    tick_value = cfg['tick_value']
+    disable_bos = cfg['disable_bos']
 
     print(f'Fetching {symbol} {interval} data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=3000 if is_equity else 1000)
@@ -94,37 +88,16 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval=
             overnight_retrace_min_adx=22,
         )
     else:
-        # Per-symbol opposing FVG exit: ES/MES=B2 (6R, 10 ticks), NQ/MNQ=B1 (6R, 5 ticks)
-        opp_fvg_min = 10 if symbol in ['ES', 'MES'] else 5
+        # Build kwargs from centralized config
+        kwargs = get_session_v10_kwargs(symbol)
+        kwargs['contracts'] = contracts
+        kwargs['retracement_morning_only'] = retracement_morning_only
+        kwargs['fvg_mode'] = fvg_mode
 
         all_results = run_session_v10(
             session_bars,
             all_bars,
-            tick_size=tick_size,
-            tick_value=tick_value,
-            contracts=contracts,
-            min_risk_pts=min_risk_pts,
-            enable_creation_entry=True,
-            enable_retracement_entry=True,
-            enable_bos_entry=True,
-            retracement_morning_only=retracement_morning_only,
-            t1_fixed_4r=True,
-            overnight_retrace_min_adx=22,
-            midday_cutoff=True,
-            pm_cutoff_nq=True,
-            symbol=symbol,
-            max_bos_risk_pts=max_bos_risk,
-            high_displacement_override=3.0,
-            disable_bos_retrace=disable_bos,
-            bos_daily_loss_limit=1,
-            max_retrace_risk_pts=max_retrace_risk,  # V10.12: Reduce retrace cts if high risk
-            consol_threshold=0.0,  # V10.12: Disabled until A/B validated
-            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.16
-            fvg_mode=fvg_mode,
-            # Opposing FVG exit for T2/Runner
-            opposing_fvg_exit=True,
-            opposing_fvg_min_ticks=opp_fvg_min,
-            opposing_fvg_after_6r_only=True,
+            **kwargs,
         )
 
     if losses_only:

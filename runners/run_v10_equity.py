@@ -41,28 +41,18 @@ from runners.run_v10_dual_entry import (
     get_est_hour,  # V10.7: EST timezone for time filters
 )
 from strategies.ict.signals.fvg import detect_fvgs
+from runners.symbol_defaults import EQUITY_DEFAULTS
 
 
-# Equity instrument configurations
+# Equity instrument configurations — from centralized symbol_defaults.py
 EQUITY_CONFIG = {
-    'SPY': {
-        'name': 'S&P 500 ETF',
-        'min_fvg_points': 0.20,      # Min FVG size in dollars
-        'min_risk_points': 0.30,      # Min risk per trade
-        'default_risk_dollars': 500,  # Risk per trade in dollars
-    },
-    'QQQ': {
-        'name': 'Nasdaq 100 ETF',
-        'min_fvg_points': 0.40,      # Min FVG size in dollars
-        'min_risk_points': 0.50,      # Min risk per trade
-        'default_risk_dollars': 500,  # Risk per trade in dollars
-    },
-    'IWM': {
-        'name': 'Russell 2000 ETF',
-        'min_fvg_points': 0.15,
-        'min_risk_points': 0.25,
-        'default_risk_dollars': 500,
-    },
+    sym: {
+        'name': cfg['name'],
+        'min_fvg_points': cfg['min_fvg_points'],
+        'min_risk_points': cfg['min_risk'],
+        'default_risk_dollars': cfg['default_risk_dollars'],
+    }
+    for sym, cfg in EQUITY_DEFAULTS.items()
 }
 
 
@@ -121,7 +111,7 @@ def run_session_v10_equity(
     use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
     # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L in A/B test)
     t1_r_target=3,      # R-multiple for T1 fixed exit (default: 3R)
-    trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
+    trail_r_trigger=4,   # R-multiple for T2/Runner trail activation (V10.16: lowered from 6R)
 ):
     """
     Run V10 strategy on equity bars.
@@ -919,7 +909,7 @@ def run_session_v10_equity(
     return final_results
 
 
-def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, trail_r=6):
+def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, trail_r=4):
     """Run V10 strategy on equity for today."""
     print(f"Fetching {symbol} data...")
     bars = fetch_futures_bars(symbol, interval='3m', n_bars=n_bars)
@@ -1017,7 +1007,7 @@ if __name__ == "__main__":
 
     # Parse optional R-target flags
     t1_r = 3
-    trail_r = 6
+    trail_r = 4
     for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])

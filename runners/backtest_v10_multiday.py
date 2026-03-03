@@ -10,6 +10,7 @@ from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.bar_storage import load_bars_with_history
 from runners.run_v10_dual_entry import run_session_v10
+from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs
 
 
 def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
@@ -19,15 +20,12 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
                           post_t1_trail_r=0, t2_fixed_r=0, time_decay_bars=0, time_decay_r=0):
     """Run V10 backtest across multiple days."""
 
-    tick_size = 0.25
-    # Tick values: ES=$12.50, NQ=$5.00, MES=$1.25 (1/10 ES), MNQ=$0.50 (1/10 NQ)
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
-    # Min risk in points (same for micro and mini)
-    min_risk_pts = min_risk_override if min_risk_override is not None else (1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5)
-    # V10.4: Cap BOS entry risk to avoid oversized losses (same for micro and mini)
-    max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only — NQ retraces win big)
-    max_retrace_risk_pts = 8.0 if symbol in ['ES', 'MES'] else None
+    cfg = get_symbol_config(symbol)
+    tick_size = cfg['tick_size']
+    tick_value = cfg['tick_value']
+    min_risk_pts = min_risk_override if min_risk_override is not None else cfg['min_risk']
+    max_bos_risk_pts = cfg['max_bos_risk']
+    max_retrace_risk_pts = cfg.get('max_retrace_risk')
 
     print(f'Loading {symbol} 3m data for {days}-day backtest (local + live)...')
     # Load local stored bars + live TradingView bars for deeper history
@@ -79,7 +77,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
     if post_t1_trail_r > 0:
         print(f'  - Post-T1 Trail: +{post_t1_trail_r}R (instead of breakeven)')
     # Show effective T2 fixed R (per-symbol default or CLI override)
-    effective_t2_fixed_r = t2_fixed_r if t2_fixed_r > 0 else (5 if symbol in ('ES', 'MES') else 0)
+    effective_t2_fixed_r = t2_fixed_r if t2_fixed_r > 0 else cfg.get('t2_fixed_r', 0)
     if effective_t2_fixed_r > 0:
         print(f'  - T2 Fixed Exit: {effective_t2_fixed_r}R (ES/MES only)')
     if time_decay_bars > 0:
@@ -115,47 +113,38 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
         if len(session_bars) < MIN_SESSION_BARS:
             continue
 
-        # V10.6: Per-symbol BOS control
-        disable_bos = symbol in ['ES', 'MES']
-        # Per-symbol consecutive loss stop: ES/MES=2, NQ/MNQ=3
-        consec_limits = {'ES': 2, 'MES': 2, 'NQ': 3, 'MNQ': 3}
-        max_consec_losses = consec_limits.get(symbol, 0)
+        # Build kwargs from centralized config with CLI overrides
+        cli_overrides = {}
+        if t1_r != cfg.get('t1_r_target', 3):
+            cli_overrides['t1_r_target'] = t1_r
+        if trail_r != cfg.get('trail_r_trigger', 4):
+            cli_overrides['trail_r_trigger'] = trail_r
+        if min_risk_override is not None:
+            cli_overrides['min_risk'] = min_risk_override
+        if t2_fixed_r > 0:
+            cli_overrides['t2_fixed_r'] = t2_fixed_r
+
+        kwargs = get_session_v10_kwargs(symbol, **cli_overrides)
+
+        # Add backtest-specific params not in centralized config
+        kwargs['fvg_mode'] = fvg_mode
+        kwargs['opposing_fvg_mode'] = opp_fvg_mode
+        kwargs['entry_min_fvg_ticks'] = min_fvg_ticks
+        kwargs['post_t1_trail_r'] = post_t1_trail_r
+        kwargs['time_decay_bars'] = time_decay_bars
+        kwargs['time_decay_r'] = time_decay_r
+
+        # CLI overrides for opposing FVG (only if explicitly passed)
+        if opp_fvg_exit:
+            kwargs['opposing_fvg_exit'] = opp_fvg_exit
+            kwargs['opposing_fvg_min_ticks'] = opp_fvg_min_ticks
+            kwargs['opposing_fvg_after_6r_only'] = opp_fvg_after_6r
 
         # Run V10 strategy with all filters
         results = run_session_v10(
             session_bars,
             all_bars,
-            tick_size=tick_size,
-            tick_value=tick_value,
-            contracts=contracts,
-            min_risk_pts=min_risk_pts,
-            enable_creation_entry=True,
-            enable_retracement_entry=True,
-            enable_bos_entry=True,
-            retracement_morning_only=False,  # Parity with run_live.py (allow overnight retrace all day)
-            t1_fixed_4r=True,
-            midday_cutoff=True,       # V10.2: No entries 12:00-14:00
-            pm_cutoff_nq=True,        # V10.2: No NQ entries after 14:00
-            max_bos_risk_pts=max_bos_risk_pts,  # V10.4: Cap BOS risk
-            symbol=symbol,
-            t1_r_target=t1_r,
-            trail_r_trigger=trail_r,  # V10.16: Default 4R
-            disable_bos_retrace=disable_bos,      # V10.6: ES/MES BOS off
-            bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
-            high_displacement_override=3.0,        # V10.5: 3x skip ADX
-            max_retrace_risk_pts=max_retrace_risk_pts,  # V10.11: Reduce retrace cts if high risk
-            max_consec_losses=max_consec_losses,  # V10.16: Global consecutive loss stop
-            fvg_mode=fvg_mode,  # FVG detection: "wick" or "body"
-            opposing_fvg_exit=opp_fvg_exit,
-            opposing_fvg_min_ticks=opp_fvg_min_ticks,
-            opposing_fvg_after_6r_only=opp_fvg_after_6r,
-            opposing_fvg_mode=opp_fvg_mode,
-            entry_min_fvg_ticks=min_fvg_ticks,
-            post_t1_trail_r=post_t1_trail_r,
-            # V10.16: T2 fixed at 5R for ES/MES (NQ/MNQ let runners ride) unless CLI overrides
-            t2_fixed_r=t2_fixed_r if t2_fixed_r > 0 else (5 if symbol in ('ES', 'MES') else 0),
-            time_decay_bars=time_decay_bars,
-            time_decay_r=time_decay_r,
+            **kwargs,
         )
 
         # Tally results

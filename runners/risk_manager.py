@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, '.')
 
 from version import STRATEGY_VERSION
+from runners.symbol_defaults import get_consec_loss_limit, FUTURES_DEFAULTS
 
 from datetime import datetime, time as dt_time
 from typing import Optional, Dict, List, Callable
@@ -84,9 +85,9 @@ class RiskLimits:
     rth_start: dt_time = dt_time(9, 30)             # RTH start
     rth_end: dt_time = dt_time(16, 0)               # RTH end
 
-    # BOS risk caps (V10.4)
-    max_bos_risk_es: float = 8.0          # Max risk for ES BOS entries
-    max_bos_risk_nq: float = 20.0         # Max risk for NQ BOS entries
+    # BOS risk caps (V10.4) — from centralized symbol_defaults
+    max_bos_risk_es: float = FUTURES_DEFAULTS['ES']['max_bos_risk']
+    max_bos_risk_nq: float = FUTURES_DEFAULTS['NQ']['max_bos_risk']
 
     # SPY INTRADAY filter (V10.4)
     disable_spy_intraday: bool = True     # Disable SPY INTRADAY entries
@@ -166,12 +167,8 @@ class RiskManager:
             print("Kill switch deactivated")
 
     def _get_symbol_consec_limit(self, symbol: str) -> int:
-        """Per-symbol consecutive loss limit. ES/MES=2, NQ/MNQ=3, others=0 (disabled)."""
-        if symbol in ('ES', 'MES'):
-            return 2
-        elif symbol in ('NQ', 'MNQ'):
-            return 3
-        return 0
+        """Per-symbol consecutive loss limit from centralized config."""
+        return get_consec_loss_limit(symbol)
 
     def can_enter_trade(
         self,

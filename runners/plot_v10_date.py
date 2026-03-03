@@ -7,16 +7,15 @@ from version import STRATEGY_VERSION
 from datetime import date, time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
+from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs
 import matplotlib.pyplot as plt
 
 
 def plot_v10_date(symbol, target_date, contracts=3):
-    tick_size = 0.25
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50
-    min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
-    max_bos_risk = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    # V10.7: ES/MES BOS disabled, NQ/MNQ BOS enabled with loss limit
-    disable_bos = symbol in ['ES', 'MES']
+    cfg = get_symbol_config(symbol)
+    tick_size = cfg['tick_size']
+    tick_value = cfg['tick_value']
+    disable_bos = cfg['disable_bos']
 
     print(f'Fetching {symbol} 3m data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=2000)
@@ -35,28 +34,15 @@ def plot_v10_date(symbol, target_date, contracts=3):
         print('Not enough bars')
         return
 
-    # Run V10.16 with Hybrid exit
+    # Run V10.16 with Hybrid exit using centralized config
+    kwargs = get_session_v10_kwargs(symbol)
+    kwargs['contracts'] = contracts
+    kwargs['retracement_morning_only'] = True
+
     all_results = run_session_v10(
         session_bars,
         all_bars,
-        tick_size=tick_size,
-        tick_value=tick_value,
-        contracts=contracts,
-        min_risk_pts=min_risk_pts,
-        enable_creation_entry=True,
-        enable_retracement_entry=True,
-        enable_bos_entry=True,
-        retracement_morning_only=True,
-        t1_fixed_4r=True,
-        overnight_retrace_min_adx=22,  # V10.1: ADX filter for overnight
-        midday_cutoff=True,  # V10.2: No entries 12-14
-        pm_cutoff_nq=True,  # V10.2: No NQ after 14:00
-        symbol=symbol,
-        max_bos_risk_pts=max_bos_risk,  # V10.4: Cap BOS risk
-        high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
-        disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
-        bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
-        max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.16
+        **kwargs,
     )
 
     if not all_results:

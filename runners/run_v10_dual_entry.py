@@ -59,6 +59,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 from runners.tradingview_loader import fetch_futures_bars
+from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
 
 
@@ -397,7 +398,7 @@ def run_session_v10(
     use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
     # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L, 90.6% WR in 11-day A/B test)
     t1_r_target=3,      # R-multiple for T1 fixed exit (default: 3R)
-    trail_r_trigger=6,   # R-multiple for T2/Runner trail activation (default: 6R)
+    trail_r_trigger=4,   # R-multiple for T2/Runner trail activation (V10.16: lowered from 6R)
     # V10.12: Consolidation detection filter
     consol_threshold=0.0,  # Range/ATR ratio threshold (0=disabled). Skip entries when ratio < threshold.
     # V10.16: Global consecutive loss stop (ES/MES only)
@@ -1254,7 +1255,7 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
                   interval='3m', retracement_morning_only=False, retracement_trend_aligned=False,
                   overnight_retrace_min_adx=22,  # V11: ADX filter for overnight retrace
                   t1_fixed_4r=True,  # HYBRID default: T1 takes profit at 4R
-                  t1_r=3, trail_r=6,  # R-target tuning (V10.9)
+                  t1_r=3, trail_r=4,  # R-target tuning (V10.16)
                   consol_threshold=0.0,  # V10.12: Consolidation filter (0=disabled)
                   fvg_mode="wick"):  # FVG detection: "wick" or "body"
     """Run V10 backtest for today.
@@ -1269,13 +1270,12 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         t1_fixed_4r: HYBRID - Take T1 profit at 4R instead of trailing
     """
 
-    tick_size = 0.25
-    # Tick values: ES=$12.50, NQ=$5.00, MES=$1.25 (1/10 ES), MNQ=$0.50 (1/10 NQ)
-    tick_value = 12.50 if symbol == 'ES' else 5.00 if symbol == 'NQ' else 1.25 if symbol == 'MES' else 0.50 if symbol == 'MNQ' else 1.25
+    cfg = get_symbol_config(symbol)
+    tick_size = cfg['tick_size']
+    tick_value = cfg['tick_value']
 
     if min_risk_pts is None:
-        # Min risk in points (same for micro and mini contracts)
-        min_risk_pts = 1.5 if symbol in ['ES', 'MES'] else 6.0 if symbol in ['NQ', 'MNQ'] else 1.5
+        min_risk_pts = cfg['min_risk']
 
     print(f'Fetching {symbol} {interval} data...')
     all_bars = fetch_futures_bars(symbol=symbol, interval=interval, n_bars=1000)
@@ -1320,12 +1320,9 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print('  - HTF bias: EMA 20/50')
     print('  - ADX filter: >= 11 (or 3x displacement with ADX >= 10)')
     print(f'  - Max open trades: {max_open_trades}')
-    # Max BOS risk in points (same for micro and mini contracts)
-    max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
-    # V10.11: Reduce retrace contracts when risk exceeds threshold (ES/MES only)
-    max_retrace_risk_pts = 8.0 if symbol in ['ES', 'MES'] else None
-    # V10.6: Per-symbol BOS control - ES/MES disabled, NQ/MNQ enabled with loss limit
-    disable_bos = symbol in ['ES', 'MES']
+    max_bos_risk_pts = cfg['max_bos_risk']
+    max_retrace_risk_pts = cfg.get('max_retrace_risk')
+    disable_bos = cfg['disable_bos']
     print(f'  - Min risk: {min_risk_pts} pts')
     print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
     print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
@@ -1339,50 +1336,28 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         print(f'  - Consolidation filter: ratio < {consol_threshold} (V10.12)')
     print('='*70)
 
-    # Per-symbol consecutive loss stop (parity with backtest_v10_multiday)
-    consec_limits = {'ES': 2, 'MES': 2, 'NQ': 3, 'MNQ': 3}
-    max_consec_losses = consec_limits.get(symbol, 0)
-
-    # Opposing FVG exit config (parity with run_live.py)
-    opp_fvg_configs = {
-        'ES': (True, 10, True), 'MES': (True, 10, True),
-        'NQ': (True, 5, True), 'MNQ': (True, 5, True),
-    }
-    opp_exit, opp_min_ticks, opp_after_6r = opp_fvg_configs.get(symbol, (False, 5, False))
+    # Build kwargs from centralized config with local overrides
+    kwargs = get_session_v10_kwargs(symbol,
+        t1_r_target=t1_r,
+        trail_r_trigger=trail_r,
+    )
+    kwargs['contracts'] = contracts
+    kwargs['max_open_trades'] = max_open_trades
+    kwargs['min_risk_pts'] = min_risk_pts
+    kwargs['enable_creation_entry'] = enable_creation
+    kwargs['enable_retracement_entry'] = enable_retracement
+    kwargs['enable_bos_entry'] = enable_bos
+    kwargs['retracement_morning_only'] = retracement_morning_only
+    kwargs['retracement_trend_aligned'] = retracement_trend_aligned
+    kwargs['overnight_retrace_min_adx'] = overnight_retrace_min_adx
+    kwargs['t1_fixed_4r'] = t1_fixed_4r
+    kwargs['consol_threshold'] = consol_threshold
+    kwargs['fvg_mode'] = fvg_mode
 
     all_results = run_session_v10(
         session_bars,
         all_bars,
-        tick_size=tick_size,
-        tick_value=tick_value,
-        contracts=contracts,
-        max_open_trades=max_open_trades,
-        min_risk_pts=min_risk_pts,
-        enable_creation_entry=enable_creation,
-        enable_retracement_entry=enable_retracement,
-        enable_bos_entry=enable_bos,
-        retracement_morning_only=retracement_morning_only,
-        retracement_trend_aligned=retracement_trend_aligned,
-        overnight_retrace_min_adx=overnight_retrace_min_adx,
-        t1_fixed_4r=t1_fixed_4r,
-        midday_cutoff=True,
-        pm_cutoff_nq=True,
-        max_bos_risk_pts=max_bos_risk_pts,
-        symbol=symbol,
-        t1_r_target=t1_r,
-        trail_r_trigger=trail_r,
-        disable_bos_retrace=disable_bos,
-        bos_daily_loss_limit=1,
-        high_displacement_override=3.0,
-        max_retrace_risk_pts=max_retrace_risk_pts,
-        consol_threshold=consol_threshold,
-        fvg_mode=fvg_mode,
-        max_consec_losses=max_consec_losses,
-        opposing_fvg_exit=opp_exit,
-        opposing_fvg_min_ticks=opp_min_ticks,
-        opposing_fvg_after_6r_only=opp_after_6r,
-        # V10.16: T2 fixed exit at 5R for ES/MES (NQ/MNQ let runners ride)
-        t2_fixed_r=5 if symbol in ('ES', 'MES') else 0,
+        **kwargs,
     )
 
     total_pnl = 0

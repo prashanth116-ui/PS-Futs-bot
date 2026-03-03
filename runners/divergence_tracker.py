@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 from runners.bar_storage import load_local_bars
 from runners.run_v10_dual_entry import run_session_v10
+from runners.symbol_defaults import get_session_v10_kwargs
 from version import STRATEGY_VERSION
 
 # Storage directory
@@ -103,52 +104,18 @@ def run_backtest_for_date(
     if len(session_bars) < 50:
         return [], {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0}
 
-    # Symbol-specific config (mirrors run_live.py and backtest_v10_multiday.py)
-    tick_size = 0.25
-    if symbol in ['ES', 'MES']:
-        tick_value = 12.50 if symbol == 'ES' else 1.25
-        min_risk_pts = 1.5
-        max_bos_risk_pts = 8.0
-        max_retrace_risk_pts = 8.0
-        disable_bos = True
-        max_consec_losses = 2
-    elif symbol in ['NQ', 'MNQ']:
-        tick_value = 5.00 if symbol == 'NQ' else 0.50
-        min_risk_pts = 6.0
-        max_bos_risk_pts = 20.0
-        max_retrace_risk_pts = None
-        disable_bos = False
-        max_consec_losses = 3
-    else:
+    # Build kwargs from centralized config (parity with run_live.py)
+    try:
+        kwargs = get_session_v10_kwargs(symbol)
+    except KeyError:
         return [], {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0}
 
-    # Run with exact same params as run_live.py:509-537
+    kwargs['contracts'] = contracts
+
     results = run_session_v10(
         session_bars,
         all_bars,
-        tick_size=tick_size,
-        tick_value=tick_value,
-        contracts=contracts,
-        max_open_trades=3,
-        min_risk_pts=min_risk_pts,
-        enable_creation_entry=True,
-        enable_retracement_entry=True,
-        enable_bos_entry=True,
-        retracement_morning_only=False,
-        overnight_retrace_min_adx=22,
-        t1_fixed_4r=True,
-        midday_cutoff=True,
-        pm_cutoff_nq=True,
-        max_bos_risk_pts=max_bos_risk_pts,
-        max_retrace_risk_pts=max_retrace_risk_pts,
-        symbol=symbol,
-        high_displacement_override=3.0,
-        disable_bos_retrace=disable_bos,
-        bos_daily_loss_limit=1,
-        t1_r_target=3,
-        trail_r_trigger=6,
-        consol_threshold=0.0,
-        max_consec_losses=max_consec_losses,
+        **kwargs,
     )
 
     bt_trades = results

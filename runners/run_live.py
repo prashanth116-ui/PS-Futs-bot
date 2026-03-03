@@ -42,6 +42,7 @@ from runners.bar_storage import save_daily_bars, load_bars_with_history
 from runners.webhook_executor import WebhookExecutor
 from runners.executor_interface import ExecutorInterface
 from runners.divergence_tracker import save_live_trades, compare_day, format_console_report, format_telegram_alert
+from runners.symbol_defaults import get_live_futures_config, get_session_v10_kwargs, FUTURES_DEFAULTS, EQUITY_DEFAULTS
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -177,76 +178,19 @@ class LiveTrader:
     V10.16: Global consecutive loss stop (ES/MES: 2 consec losses → stop for day)
     """
 
-    # Futures symbol configurations
-    FUTURES_SYMBOLS = {
-        'ES': {
-            'tradovate_symbol': 'ESM6',
-            'tick_size': 0.25,
-            'tick_value': 12.50,
-            'min_risk': 1.5,
-            'max_bos_risk': 8.0,
-            'max_retrace_risk': 8.0,
-            'contracts': 3,
-            'type': 'futures',
-            'opp_fvg_exit': True,
-            'opp_fvg_min_ticks': 10,   # B2: after 6R, 10 ticks
-            'opp_fvg_after_6r': True,
-        },
-        'NQ': {
-            'tradovate_symbol': 'NQM6',
-            'tick_size': 0.25,
-            'tick_value': 5.00,
-            'min_risk': 6.0,
-            'max_bos_risk': 20.0,
-            'max_retrace_risk': None,
-            'contracts': 3,
-            'type': 'futures',
-            'opp_fvg_exit': True,
-            'opp_fvg_min_ticks': 5,    # B1: after 6R, 5 ticks
-            'opp_fvg_after_6r': True,
-        },
-        'MES': {
-            'tradovate_symbol': 'MESM6',
-            'tick_size': 0.25,
-            'tick_value': 1.25,
-            'min_risk': 1.5,
-            'max_bos_risk': 8.0,
-            'max_retrace_risk': 8.0,
-            'contracts': 3,
-            'type': 'futures',
-            'opp_fvg_exit': True,
-            'opp_fvg_min_ticks': 10,   # B2: after 6R, 10 ticks (same as ES)
-            'opp_fvg_after_6r': True,
-        },
-        'MNQ': {
-            'tradovate_symbol': 'MNQM6',
-            'tick_size': 0.25,
-            'tick_value': 0.50,
-            'min_risk': 6.0,
-            'max_bos_risk': 20.0,
-            'max_retrace_risk': None,
-            'contracts': 3,
-            'type': 'futures',
-            'opp_fvg_exit': True,
-            'opp_fvg_min_ticks': 5,    # B1: after 6R, 5 ticks (same as NQ)
-            'opp_fvg_after_6r': True,
-        },
-    }
+    # Futures symbol configurations — from centralized symbol_defaults.py
+    FUTURES_SYMBOLS = {sym: get_live_futures_config(sym) for sym in FUTURES_DEFAULTS}
 
-    # Equity symbol configurations
+    # Equity symbol configurations — from centralized symbol_defaults.py
     EQUITY_SYMBOLS = {
-        'SPY': {
-            'name': 'S&P 500 ETF',
-            'min_risk': 0.30,
-            'risk_per_trade': 500,  # $ risk per trade
+        sym: {
+            'name': cfg['name'],
+            'min_risk': cfg['min_risk'],
+            'risk_per_trade': cfg['default_risk_dollars'],
             'type': 'equity',
-        },
-        'QQQ': {
-            'name': 'Nasdaq 100 ETF',
-            'min_risk': 0.50,
-            'risk_per_trade': 500,  # $ risk per trade
-            'type': 'equity',
-        },
+        }
+        for sym, cfg in EQUITY_DEFAULTS.items()
+        if sym in ('SPY', 'QQQ')  # Only trade SPY/QQQ in live
     }
 
     def __init__(
@@ -778,44 +722,12 @@ class LiveTrader:
             self._cached_fvgs[symbol] = fvgs
             self._cached_fvgs_time[symbol] = get_est_now()
 
-        # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
-        disable_bos = symbol in ['ES', 'MES']
-
-        # Run V10.16 strategy to get signals (all params explicit for backtest parity)
+        # Run V10.16 strategy using centralized config (max_consec_losses=0 — handled by risk_manager)
+        kwargs = get_session_v10_kwargs(symbol, max_consec_losses=0)
         results = run_session_v10(
             session_bars,
             bars,
-            tick_size=config['tick_size'],
-            tick_value=config['tick_value'],
-            contracts=config['contracts'],
-            max_open_trades=3,
-            min_risk_pts=config['min_risk'],
-            enable_creation_entry=True,
-            enable_retracement_entry=True,
-            enable_bos_entry=True,
-            retracement_morning_only=False,  # Backtest parity: allow overnight retrace all day
-            overnight_retrace_min_adx=22,
-            t1_fixed_4r=True,
-            midday_cutoff=True,
-            pm_cutoff_nq=True,
-            max_bos_risk_pts=config['max_bos_risk'],
-            max_retrace_risk_pts=config['max_retrace_risk'],  # V10.11: Reduce retrace cts if high risk
-            symbol=symbol,
-            high_displacement_override=3.0,
-            # V10.10 BOS controls
-            disable_bos_retrace=disable_bos,  # ES/MES: off, NQ/MNQ: on
-            bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
-            # V10.9 R-targets (explicit)
-            t1_r_target=3,
-            trail_r_trigger=4,  # V10.16: Lowered from 6R — +$15k ES, +$14k NQ over 18 days
-            # V10.16: T2 fixed exit at 5R for ES/MES (NQ/MNQ let runners ride)
-            t2_fixed_r=5 if symbol in ('ES', 'MES') else 0,
-            consol_threshold=0.0,  # V10.12: Disabled until A/B validated
-            max_consec_losses=0,  # Per-symbol consec losses handled by risk_manager
-            # Opposing FVG exit
-            opposing_fvg_exit=config.get('opp_fvg_exit', False),
-            opposing_fvg_min_ticks=config.get('opp_fvg_min_ticks', 5),
-            opposing_fvg_after_6r_only=config.get('opp_fvg_after_6r', False),
+            **kwargs,
         )
 
         # Process signals
@@ -851,10 +763,9 @@ class LiveTrader:
         self.last_prices[symbol] = current_price
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
-        # V10.10: SPY BOS disabled, QQQ BOS enabled with loss limit
-        disable_bos = symbol == 'SPY'
-
-        # Run V10.16 equity strategy
+        # Run V10.16 equity strategy using centralized config
+        from runners.symbol_defaults import get_symbol_config as _get_eq_cfg
+        eq_cfg = _get_eq_cfg(symbol)
         results = run_session_v10_equity(
             session_bars,
             bars,
@@ -865,10 +776,9 @@ class LiveTrader:
             overnight_retrace_min_adx=22,
             midday_cutoff=True,
             pm_cutoff_qqq=True,
-            disable_intraday_spy=True,
-            # V10.10 BOS controls
-            disable_bos_retrace=disable_bos,  # SPY: off, QQQ: on
-            bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
+            disable_intraday_spy=eq_cfg.get('disable_intraday_spy', True),
+            disable_bos_retrace=eq_cfg['disable_bos'],
+            bos_daily_loss_limit=1,
         )
 
         # Process signals
@@ -1099,13 +1009,14 @@ class LiveTrader:
     def _manage_paper_trades(self):
         """Manage open paper trades - matches backtest exit logic exactly.
 
-        Two-stage trail system (V10.9 parity):
+        V10.16 trail system:
         1. Before T1 (3R): full stop → all contracts exit at stop
         2. At T1 (3R): T1 exits fixed profit, t1_trail_stop set at entry
-        3. Between T1 and 6R: t1_trail_stop structure-trails (2-tick buffer)
+        3. Between T1 and 4R: t1_trail_stop structure-trails (2-tick buffer)
            - If hit, ALL remaining contracts exit (breakeven floor)
-        4. At 6R touch: T2/runner trails activate at plus_4r (3R floor)
-        5. After 6R: T2 trail (4-tick), runner trail (6-tick) independently
+        4. At 4R touch: T2/runner trails activate at plus_3r (3R floor)
+        5. T2_FIXED (ES/MES only): T2 exits at 5R fixed profit
+        6. After 4R: Runner trail (6-tick) continues independently
         """
         closed_trades = []
 
@@ -1298,6 +1209,67 @@ class LiveTrader:
                         except Exception as e:
                             log(f"    [BROKER] 6R stop update failed: {e}")
                             self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
+
+            # === T2_FIXED EXIT (V10.16: ES/MES only — fixed T2 at 5R) ===
+            t2_fixed_r = 5 if trade.symbol in ('ES', 'MES') else 0
+            if t2_fixed_r > 0 and trade.t1_hit and not trade.t2_hit:
+                risk_pts = trade.risk_pts
+                t2_target = (trade.entry_price + t2_fixed_r * risk_pts) if trade.is_long else (trade.entry_price - t2_fixed_r * risk_pts)
+                t2_fixed_hit = (current_high >= t2_target) if trade.is_long else (current_low <= t2_target)
+                if t2_fixed_hit:
+                    trade.t2_hit = True
+                    trade.t2_pnl = trade.calculate_pnl(t2_target, cts_t2)
+                    log(f"\n  [PAPER] T2 FIXED: {trade.symbol} ${trade.t2_pnl:+,.2f} (5R)")
+
+                    # For 2-ct trades (no runner), trade is done
+                    if not trade.has_runner:
+                        trade.status = PaperTradeStatus.CLOSED
+                        trade.exit_time = get_est_now()
+                        trade.exit_price = t2_target
+                        trade.exit_reason = "T2_FIXED"
+
+                        self.paper_daily_pnl += trade.total_pnl
+                        self.paper_daily_trades += 1
+                        self.paper_daily_wins += 1
+
+                        log(f"    CLOSED (2-ct): T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}")
+                        log(f"    Total P/L: ${trade.total_pnl:+,.2f}")
+
+                        notify_exit(
+                            symbol=trade.symbol, direction=trade.direction,
+                            exit_type="T2_FIXED", exit_price=t2_target,
+                            pnl=trade.total_pnl, contracts=trade.contracts,
+                        )
+
+                        # Broker: close remaining
+                        if self.executor and trade.asset_type == 'futures':
+                            try:
+                                r = self.executor.close_position(
+                                    symbol=trade.symbol, direction=trade.direction,
+                                    paper_trade_id=trade.id,
+                                )
+                                if not (r and r.get('success')):
+                                    self._queue_broker_op(trade, 'close', result=r)
+                            except Exception as e:
+                                log(f"    [BROKER] T2 fixed close failed: {e}")
+                                self._queue_broker_op(trade, 'close')
+
+                        closed_trades.append(trade_id)
+                        continue
+
+                    # 3-ct trade: T2 exits fixed, runner continues trailing
+                    # Broker: partial close T2 (1ct)
+                    if self.executor and trade.asset_type == 'futures':
+                        try:
+                            r = self.executor.partial_close(
+                                symbol=trade.symbol, direction=trade.direction,
+                                contracts=cts_t2, paper_trade_id=trade.id,
+                            )
+                            if not (r and r.get('success')):
+                                self._queue_broker_op(trade, 'partial_close', result=r, contracts=cts_t2)
+                        except Exception as e:
+                            log(f"    [BROKER] T2 fixed partial close failed: {e}")
+                            self._queue_broker_op(trade, 'partial_close', contracts=cts_t2)
 
             # === STOP CHECKS ===
 
