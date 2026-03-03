@@ -559,25 +559,25 @@ python -m runners.plot_v10_date 2026 2 3
 ### Live Trading
 ```bash
 # Paper mode - all symbols (futures + equities)
-python -m runners.run_live --paper --symbols ES NQ MES MNQ SPY QQQ
+python -m runners.run_live --paper --symbols ES MES SPY QQQ
 
 # Paper mode - futures only
-python -m runners.run_live --paper --symbols ES NQ MES MNQ
+python -m runners.run_live --paper --symbols ES MES
 
 # Paper mode - equities only (custom risk per trade)
 python -m runners.run_live --paper --symbols SPY QQQ --equity-risk 1000
 
 # Paper + webhook (primary use case for live execution)
-python -m runners.run_live --paper --webhook --symbols ES NQ
+python -m runners.run_live --paper --webhook --symbols ES MES
 
 # Paper + webhook (custom strategy group / config path)
 python -m runners.run_live --paper --webhook --strategy-group ict_v10 --webhook-config config/pickmytrade_accounts.json
 
 # Demo mode (Tradovate sim account)
-python -m runners.run_live --symbols ES NQ
+python -m runners.run_live --symbols ES MES
 
 # Live mode (real money - be careful!)
-python -m runners.run_live --live --symbols ES NQ
+python -m runners.run_live --live --symbols ES MES
 ```
 
 ### Live Monitoring
@@ -649,7 +649,7 @@ python -m runners.run_replay
 
 1. **Morning**: `python health_check.py`
 2. **Pre-market**: `python -m runners.run_v10_dual_entry ES 3` (review signals)
-3. **Market hours**: `python -m runners.run_live --paper --symbols ES NQ SPY QQQ` (paper trade)
+3. **Market hours**: `python -m runners.run_live --paper --symbols ES MES` (paper trade)
 4. **Post-market**: `python -m runners.plot_v10 ES 3` (review)
 
 ## TradingView Connection

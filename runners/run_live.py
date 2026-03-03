@@ -11,7 +11,7 @@ V10.10 Changes:
 
 Usage:
     python -m runners.run_live --paper                    # Paper mode, default symbols
-    python -m runners.run_live --paper --symbols ES NQ    # Paper mode, specific futures
+    python -m runners.run_live --paper --symbols ES MES   # Paper mode, specific futures
     python -m runners.run_live --paper --symbols SPY QQQ  # Paper mode, equities
     python -m runners.run_live --paper --symbols ES NQ SPY QQQ  # All supported
     python -m runners.run_live --live                     # Live mode (be careful!)
@@ -273,7 +273,7 @@ class LiveTrader:
         self.client = client
         self.risk_manager = risk_manager or create_default_risk_manager()
         self.paper_mode = paper_mode
-        self.symbols = symbols or ['ES', 'NQ']
+        self.symbols = symbols or ['ES', 'MES']
         self.equity_risk = equity_risk
         self.executor = executor
 
@@ -2117,7 +2117,7 @@ def main():
     parser = argparse.ArgumentParser(description=f'{STRATEGY_VERSION} Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')
-    parser.add_argument('--symbols', nargs='+', default=['ES', 'NQ'],
+    parser.add_argument('--symbols', nargs='+', default=['ES', 'MES'],
                        help='Symbols to trade (ES, NQ, MES, MNQ, SPY, QQQ)')
     parser.add_argument('--equity-risk', type=int, default=500,
                        help='Risk per trade for equities in dollars (default: 500)')
