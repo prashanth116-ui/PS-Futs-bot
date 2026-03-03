@@ -477,7 +477,50 @@ Live bot scanned on a fixed 180s interval, which often fired mid-bar when Tradin
 
 **Status**: Deployed Feb 26. Monitoring for gap closure. If gap persists, remaining fixes: (1) drop last bar from array before `run_session_v10()`, (2) FVG confirmation filter requiring persistence on next scan.
 
+### Centralized Symbol Config (Mar 3, 2026)
+All per-symbol strategy parameters live in `runners/symbol_defaults.py`. Every runner, backtest, plot, and divergence tracker imports from this module instead of defining params inline.
+
+**Why**: V10.16 changed `trail_r_trigger` from 6→4 and added `t2_fixed_r=5` for ES/MES. These params were hardcoded in 10+ files independently — 6 files were missed during initial implementation. The centralized module prevents this class of drift.
+
+**Architecture:**
+- `FUTURES_DEFAULTS` dict — ES, NQ, MES, MNQ with all 20+ params each
+- `EQUITY_DEFAULTS` dict — SPY, QQQ, IWM
+- `get_symbol_config(symbol)` — returns a deep copy of config dict
+- `get_session_v10_kwargs(symbol, **overrides)` — maps config to `run_session_v10()` kwargs
+- `get_live_futures_config(symbol)` — format for `LiveTrader.FUTURES_SYMBOLS`
+- `get_consec_loss_limit(symbol)` — for `risk_manager.py`
+
+**To change a param (e.g., V10.17 raises trail_r_trigger to 5):**
+1. Edit ONE line in `runners/symbol_defaults.py`
+2. Run `python -m pytest tests/test_symbol_parity.py`
+3. Done — all callers pick up the change automatically
+
+**CLI overrides still work** via `**overrides` pattern:
+```bash
+# Override trail trigger for A/B test
+python -m runners.backtest_v10_multiday ES 18 --trail-r=6
+# get_session_v10_kwargs('ES', trail_r_trigger=6) overrides just that param
+```
+
+**8 files migrated:**
+| File | What changed |
+|------|-------------|
+| `backtest_v10_multiday.py` | Replaced 7 ternaries + `run_session_v10()` call with `get_session_v10_kwargs()` |
+| `run_live.py` | `FUTURES_SYMBOLS`/`EQUITY_SYMBOLS` dicts derived from centralized config |
+| `run_v10_dual_entry.py` | `run_today_v10()` uses centralized config |
+| `plot_v10.py` | Replaced 6 ternaries + 30-line call |
+| `plot_v10_date.py` | Replaced 4 ternaries + 20-line call |
+| `divergence_tracker.py` | Replaced 20-line if/elif config block |
+| `run_v10_equity.py` | `EQUITY_CONFIG` derived from `EQUITY_DEFAULTS` |
+| `risk_manager.py` | `_get_symbol_consec_limit()` + BOS risk caps from centralized config |
+
+**Parity tests** (`tests/test_symbol_parity.py` — 22 tests):
+1. **No hardcoded patterns** — regex scan of 7 critical files catches old inline ternary patterns
+2. **Kwargs match signature** — all `get_session_v10_kwargs()` keys verified against `run_session_v10()` signature
+3. **Mini/micro parity** — ES must match MES (and NQ match MNQ) on all strategy params (only tick_value differs)
+
 ### Strategy Features
+- **Centralized Symbol Config**: All per-symbol params in `runners/symbol_defaults.py` — single source of truth, 22 parity tests prevent drift
 - **Trail Improvement (V10.16)**: Trail trigger 6R→4R all symbols + T2 fixed at 5R for ES/MES — ES +$19k/18d (+14.6%), 100% winning days, zero DD
 - **Per-Symbol Consecutive Loss Stop (V10.16)**: ES/MES: 2 losses/symbol, NQ/MNQ: 3 losses/symbol (tracked in risk_manager, not strategy)
 - **Opposing FVG Exit (V10.14)**: Exit T2/Runner on opposing FVG after 6R (ES: 10 ticks, NQ: 5 ticks) — ES +$9.5k/18d
@@ -676,8 +719,11 @@ python -m runners.tv_login
 
 ### Testing
 ```bash
-# Run all tests
+# Run all tests (126 tests including 22 symbol parity tests)
 python -m pytest tests/
+
+# Run only symbol parity tests (fast — catches config drift)
+python -m pytest tests/test_symbol_parity.py -v
 
 # Run backtest replay
 python -m runners.run_replay
@@ -687,6 +733,7 @@ python -m runners.run_replay
 
 | File | Purpose |
 |------|---------|
+| `runners/symbol_defaults.py` | **Centralized symbol config** - single source of truth for all per-symbol params |
 | `runners/run_live.py` | **Combined live trader** - futures + equities + webhook integration |
 | `runners/webhook_executor.py` | **PickMyTrade webhook** - multi-account execution for Tradovate |
 | `runners/run_v10_dual_entry.py` | V10 Quad Entry strategy - futures (ES/NQ/MES/MNQ) |
