@@ -807,7 +807,9 @@ class LiveTrader:
             bos_daily_loss_limit=1,  # Stop BOS after 1 loss per day
             # V10.9 R-targets (explicit)
             t1_r_target=3,
-            trail_r_trigger=6,
+            trail_r_trigger=4,  # V10.16: Lowered from 6R — +$15k ES, +$14k NQ over 18 days
+            # V10.16: T2 fixed exit at 5R for ES/MES (NQ/MNQ let runners ride)
+            t2_fixed_r=5 if symbol in ('ES', 'MES') else 0,
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
             max_consec_losses=0,  # Per-symbol consec losses handled by risk_manager
             # Opposing FVG exit

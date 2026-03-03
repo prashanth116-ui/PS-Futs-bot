@@ -15,7 +15,8 @@ from runners.run_v10_dual_entry import run_session_v10
 def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
                           opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False,
                           opp_fvg_mode=None,
-                          min_fvg_ticks=5, min_risk_override=None):
+                          min_fvg_ticks=5, min_risk_override=None,
+                          post_t1_trail_r=0, t2_fixed_r=0, time_decay_bars=0, time_decay_r=0):
     """Run V10 backtest across multiple days."""
 
     tick_size = 0.25
@@ -75,6 +76,14 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
         trigger = "after 6R" if opp_fvg_after_6r else "after T1"
         opp_mode_label = (opp_fvg_mode or fvg_mode).upper()
         print(f'  - Opposing FVG Exit: ON ({trigger}, min {opp_fvg_min_ticks} ticks, {opp_mode_label} detection)')
+    if post_t1_trail_r > 0:
+        print(f'  - Post-T1 Trail: +{post_t1_trail_r}R (instead of breakeven)')
+    # Show effective T2 fixed R (per-symbol default or CLI override)
+    effective_t2_fixed_r = t2_fixed_r if t2_fixed_r > 0 else (5 if symbol in ('ES', 'MES') else 0)
+    if effective_t2_fixed_r > 0:
+        print(f'  - T2 Fixed Exit: {effective_t2_fixed_r}R (ES/MES only)')
+    if time_decay_bars > 0:
+        print(f'  - Time Decay: Tighten to +{time_decay_r}R after {time_decay_bars} bars past T1')
     print('='*80)
     print()
 
@@ -130,7 +139,7 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             max_bos_risk_pts=max_bos_risk_pts,  # V10.4: Cap BOS risk
             symbol=symbol,
             t1_r_target=t1_r,
-            trail_r_trigger=trail_r,
+            trail_r_trigger=trail_r,  # V10.16: Default 4R
             disable_bos_retrace=disable_bos,      # V10.6: ES/MES BOS off
             bos_daily_loss_limit=1,                # V10.6: 1 loss/day limit
             high_displacement_override=3.0,        # V10.5: 3x skip ADX
@@ -142,6 +151,11 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             opposing_fvg_after_6r_only=opp_fvg_after_6r,
             opposing_fvg_mode=opp_fvg_mode,
             entry_min_fvg_ticks=min_fvg_ticks,
+            post_t1_trail_r=post_t1_trail_r,
+            # V10.16: T2 fixed at 5R for ES/MES (NQ/MNQ let runners ride) unless CLI overrides
+            t2_fixed_r=t2_fixed_r if t2_fixed_r > 0 else (5 if symbol in ('ES', 'MES') else 0),
+            time_decay_bars=time_decay_bars,
+            time_decay_r=time_decay_r,
         )
 
         # Tally results
@@ -266,7 +280,7 @@ if __name__ == '__main__':
 
     # Parse optional flags
     t1_r = 3
-    trail_r = 6
+    trail_r = 4  # V10.16: Lowered from 6R
     verbose = False
     fvg_mode = "wick"
     opp_fvg_exit = False
@@ -275,6 +289,10 @@ if __name__ == '__main__':
     opp_fvg_mode = None
     min_fvg_ticks = 5
     min_risk_override = None
+    post_t1_trail_r = 0
+    t2_fixed_r = 0
+    time_decay_bars = 0
+    time_decay_r = 0
     for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
@@ -296,9 +314,19 @@ if __name__ == '__main__':
             min_fvg_ticks = int(arg.split('=')[1])
         elif arg.startswith('--min-risk='):
             min_risk_override = float(arg.split('=')[1])
+        elif arg.startswith('--post-t1-trail-r='):
+            post_t1_trail_r = float(arg.split('=')[1])
+        elif arg.startswith('--t2-fixed-r='):
+            t2_fixed_r = float(arg.split('=')[1])
+        elif arg.startswith('--time-decay-bars='):
+            time_decay_bars = int(arg.split('=')[1])
+        elif arg.startswith('--time-decay-r='):
+            time_decay_r = float(arg.split('=')[1])
 
     backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
                           verbose=verbose, fvg_mode=fvg_mode,
                           opp_fvg_exit=opp_fvg_exit, opp_fvg_min_ticks=opp_fvg_min_ticks,
                           opp_fvg_after_6r=opp_fvg_after_6r, opp_fvg_mode=opp_fvg_mode,
-                          min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override)
+                          min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override,
+                          post_t1_trail_r=post_t1_trail_r, t2_fixed_r=t2_fixed_r,
+                          time_decay_bars=time_decay_bars, time_decay_r=time_decay_r)

@@ -411,6 +411,11 @@ def run_session_v10(
     opposing_fvg_mode=None,           # FVG mode for opposing detection: None=same as fvg_mode, "body", "wick"
     # FVG size filter (A/B testing)
     entry_min_fvg_ticks=5,            # Min FVG size in ticks for entry (default: 5)
+    # Trail improvement A/B testing
+    post_t1_trail_r=0,                # Option B: After T1, trail at entry+NR instead of breakeven (0=breakeven)
+    t2_fixed_r=0,                     # Option C: Fixed T2 exit at this R-multiple (0=trail only)
+    time_decay_bars=0,                # Option D: Bars after T1 before tightening trail (0=disabled)
+    time_decay_r=0,                   # Option D: R-level to tighten to after decay
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -972,7 +977,13 @@ def run_session_v10(
                 t4r_hit = bar.high >= trade['target_4r'] if is_long else bar.low <= trade['target_4r']
                 if t4r_hit:
                     trade['touched_4r'] = True
-                    trade['t1_trail_stop'] = trade['entry_price']
+                    trade['t4r_bar_idx'] = i  # Track bar index for time decay (Option D)
+                    # Option B: Trail at entry+NR instead of breakeven after T1
+                    if post_t1_trail_r > 0:
+                        trail_level = trade['entry_price'] + (post_t1_trail_r * trade['risk']) if is_long else trade['entry_price'] - (post_t1_trail_r * trade['risk'])
+                        trade['t1_trail_stop'] = trail_level
+                    else:
+                        trade['t1_trail_stop'] = trade['entry_price']
                     trade['t1_last_swing'] = trade['entry_price']
 
                     # HYBRID: Take T1 profit at 4R immediately
@@ -1007,6 +1018,28 @@ def run_session_v10(
                     if 'BOS' in trade.get('entry_type', ''):
                         bos_loss_count += 1
                     remaining = 0
+
+            # Option C: Fixed T2 exit at specified R-multiple (between T1 and trail trigger)
+            if t2_fixed_r > 0 and trade['touched_4r'] and not trade['t2_exited'] and remaining > 0:
+                t2_target = trade['entry_price'] + (t2_fixed_r * trade['risk']) if is_long else trade['entry_price'] - (t2_fixed_r * trade['risk'])
+                t2_fixed_hit = bar.high >= t2_target if is_long else bar.low <= t2_target
+                if t2_fixed_hit:
+                    exit_cts = min(cts_t2, remaining)
+                    pnl = (t2_target - trade['entry_price']) * exit_cts if is_long else (trade['entry_price'] - t2_target) * exit_cts
+                    trade['exits'].append({'type': 'T2_FIXED', 'pnl': pnl, 'price': t2_target, 'time': bar.timestamp, 'cts': exit_cts})
+                    trade['remaining'] -= exit_cts
+                    trade['t2_exited'] = True
+                    remaining = trade['remaining']
+
+            # Option D: Time decay — tighten trail after N bars past T1 without hitting trail trigger
+            if time_decay_bars > 0 and trade['touched_4r'] and not trade['touched_8r'] and remaining > 0:
+                bars_since_t1 = i - trade.get('t4r_bar_idx', i)
+                if bars_since_t1 >= time_decay_bars and time_decay_r > 0:
+                    decay_level = trade['entry_price'] + (time_decay_r * trade['risk']) if is_long else trade['entry_price'] - (time_decay_r * trade['risk'])
+                    if is_long:
+                        trade['t1_trail_stop'] = max(trade['t1_trail_stop'], decay_level)
+                    else:
+                        trade['t1_trail_stop'] = min(trade['t1_trail_stop'], decay_level)
 
             # After 4R but before 8R
             if trade['touched_4r'] and not trade['touched_8r'] and remaining > 0:
@@ -1348,6 +1381,8 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         opposing_fvg_exit=opp_exit,
         opposing_fvg_min_ticks=opp_min_ticks,
         opposing_fvg_after_6r_only=opp_after_6r,
+        # V10.16: T2 fixed exit at 5R for ES/MES (NQ/MNQ let runners ride)
+        t2_fixed_r=5 if symbol in ('ES', 'MES') else 0,
     )
 
     total_pnl = 0
@@ -1406,7 +1441,7 @@ if __name__ == '__main__':
     trend_aligned = False
 
     t1_r = 3
-    trail_r = 6
+    trail_r = 4  # V10.16: Lowered from 6R
     consol_threshold = 0.0
     fvg_mode = "wick"
 
