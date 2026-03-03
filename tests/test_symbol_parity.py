@@ -17,12 +17,14 @@ from runners.symbol_defaults import (
     EQUITY_DEFAULTS,
     get_symbol_config,
     get_session_v10_kwargs,
+    get_session_v10_equity_kwargs,
     get_live_futures_config,
     get_consec_loss_limit,
     is_futures,
     is_equity,
 )
 from runners.run_v10_dual_entry import run_session_v10
+from runners.run_v10_equity import run_session_v10_equity
 
 
 # Critical files that MUST use centralized config (no inline ternaries)
@@ -51,8 +53,8 @@ HARDCODED_PATTERNS = [
     (r"max_retrace_risk(?:_pts)?\s*=\s*8\.0\s+if\s+symbol\s+in", "Hardcoded max_retrace_risk ternary"),
     # disable_bos ternaries
     (r"disable_bos\s*=\s*symbol\s+in\s+\[", "Hardcoded disable_bos ternary"),
-    # t2_fixed_r ternaries
-    (r"t2_fixed_r\s*=\s*5\s+if\s+symbol\s+in", "Hardcoded t2_fixed_r ternary"),
+    # t2_fixed_r ternaries (both forms: symbol in [...] and trade.symbol in (...))
+    (r"t2_fixed_r\s*=\s*5\s+if\s+(?:symbol|trade\.symbol)\s+in", "Hardcoded t2_fixed_r ternary"),
     # consec_limits dict
     (r"consec_limits\s*=\s*\{", "Hardcoded consec_limits dict"),
     # opp_fvg_configs dict
@@ -122,6 +124,55 @@ class TestKwargsMatchSignature:
             assert not missing, (
                 f"get_session_v10_kwargs('{symbol}') missing critical keys: {missing}"
             )
+
+
+class TestEquityKwargsMatchSignature:
+    """Verify get_session_v10_equity_kwargs() keys match run_session_v10_equity() parameters."""
+
+    def test_kwargs_are_valid_params(self):
+        """Every key from get_session_v10_equity_kwargs() must be a valid run_session_v10_equity() parameter."""
+        sig = inspect.signature(run_session_v10_equity)
+        valid_params = set(sig.parameters.keys())
+        valid_params -= {'session_bars', 'all_bars'}
+
+        for symbol in EQUITY_DEFAULTS:
+            kwargs = get_session_v10_equity_kwargs(symbol)
+            invalid_keys = set(kwargs.keys()) - valid_params
+            assert not invalid_keys, (
+                f"get_session_v10_equity_kwargs('{symbol}') returns keys not in "
+                f"run_session_v10_equity() signature: {invalid_keys}"
+            )
+
+    def test_critical_equity_params_present(self):
+        """Key equity strategy params must be present in kwargs output."""
+        critical_keys = [
+            'symbol', 'risk_per_trade', 'max_open_trades',
+            'disable_bos_retrace', 'bos_daily_loss_limit',
+            't1_r_target', 'trail_r_trigger', 'use_hybrid_filters',
+            'atr_buffer_multiplier', 'disable_intraday_spy',
+        ]
+        for symbol in EQUITY_DEFAULTS:
+            kwargs = get_session_v10_equity_kwargs(symbol)
+            missing = [k for k in critical_keys if k not in kwargs]
+            assert not missing, (
+                f"get_session_v10_equity_kwargs('{symbol}') missing critical keys: {missing}"
+            )
+
+    def test_equity_overrides_work(self):
+        """CLI overrides should replace default values."""
+        kwargs = get_session_v10_equity_kwargs('SPY', trail_r_trigger=8)
+        assert kwargs['trail_r_trigger'] == 8
+
+    def test_spy_bos_disabled(self):
+        """SPY should have BOS disabled."""
+        kwargs = get_session_v10_equity_kwargs('SPY')
+        assert kwargs['disable_bos_retrace'] is True
+
+    def test_qqq_bos_enabled(self):
+        """QQQ should have BOS enabled with loss limit."""
+        kwargs = get_session_v10_equity_kwargs('QQQ')
+        assert kwargs['disable_bos_retrace'] is False
+        assert kwargs['bos_daily_loss_limit'] == 1
 
 
 class TestMiniMicroParity:

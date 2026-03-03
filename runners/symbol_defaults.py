@@ -26,22 +26,28 @@ _FUTURES_BASE = {
     # --- Strategy params ---
     'contracts': 3,
     'max_open_trades': 3,
+    'max_losses_per_day': 3,
     't1_r_target': 3,
     'trail_r_trigger': 4,       # V10.16: Lowered from 6R
     'high_displacement_override': 3.0,
     'bos_daily_loss_limit': 1,
     'overnight_retrace_min_adx': 22,
+    'displacement_threshold': 1.0,
+    'min_adx': 11,              # V10.7: Lowered from 17
 
     # --- Standard flags ---
     'enable_creation_entry': True,
     'enable_retracement_entry': True,
     'enable_bos_entry': True,
     'retracement_morning_only': False,
+    'retracement_trend_aligned': False,
     't1_fixed_4r': True,
     'midday_cutoff': True,
     'pm_cutoff_nq': True,
     'use_hybrid_filters': True,
     'consol_threshold': 0.0,
+    'bos_lookback': 10,
+    'bos_fvg_window': 5,
 }
 
 FUTURES_DEFAULTS = {
@@ -108,39 +114,53 @@ FUTURES_DEFAULTS = {
 # Equity Symbol Defaults
 # =============================================================================
 
+_EQUITY_BASE = {
+    # --- Instrument ---
+    'tick_size': 0.01,
+    'tick_value': 1.0,
+    'type': 'equity',
+
+    # --- Strategy params ---
+    'max_open_trades': 3,
+    't1_fixed_4r': True,
+    'overnight_retrace_min_adx': 22,
+    'midday_cutoff': True,
+    'pm_cutoff_qqq': True,
+    'atr_buffer_multiplier': 0.5,
+    'high_displacement_override': 3.0,
+    'bos_daily_loss_limit': 1,
+    'use_hybrid_filters': True,
+    't1_r_target': 3,
+    'trail_r_trigger': 4,
+}
+
 EQUITY_DEFAULTS = {
     'SPY': {
+        **_EQUITY_BASE,
         'name': 'S&P 500 ETF',
-        'tick_size': 0.01,
-        'tick_value': 1.0,
         'min_fvg_points': 0.20,
         'min_risk': 0.30,
         'default_risk_dollars': 500,
         'disable_bos': True,       # SPY BOS off
         'disable_intraday_spy': True,
-        'type': 'equity',
     },
     'QQQ': {
+        **_EQUITY_BASE,
         'name': 'Nasdaq 100 ETF',
-        'tick_size': 0.01,
-        'tick_value': 1.0,
         'min_fvg_points': 0.40,
         'min_risk': 0.50,
         'default_risk_dollars': 500,
         'disable_bos': False,      # QQQ BOS on with loss limit
         'disable_intraday_spy': False,
-        'type': 'equity',
     },
     'IWM': {
+        **_EQUITY_BASE,
         'name': 'Russell 2000 ETF',
-        'tick_size': 0.01,
-        'tick_value': 1.0,
         'min_fvg_points': 0.15,
         'min_risk': 0.25,
         'default_risk_dollars': 500,
         'disable_bos': False,
         'disable_intraday_spy': False,
-        'type': 'equity',
     },
 }
 
@@ -197,11 +217,15 @@ def get_session_v10_kwargs(symbol, **overrides):
         'tick_value': cfg['tick_value'],
         'contracts': cfg['contracts'],
         'max_open_trades': cfg.get('max_open_trades', 3),
+        'max_losses_per_day': cfg.get('max_losses_per_day', 3),
         'min_risk_pts': cfg['min_risk'],
+        'displacement_threshold': cfg.get('displacement_threshold', 1.0),
+        'min_adx': cfg.get('min_adx', 11),
         'enable_creation_entry': cfg.get('enable_creation_entry', True),
         'enable_retracement_entry': cfg.get('enable_retracement_entry', True),
         'enable_bos_entry': cfg.get('enable_bos_entry', True),
         'retracement_morning_only': cfg.get('retracement_morning_only', False),
+        'retracement_trend_aligned': cfg.get('retracement_trend_aligned', False),
         'overnight_retrace_min_adx': cfg.get('overnight_retrace_min_adx', 22),
         't1_fixed_4r': cfg.get('t1_fixed_4r', True),
         'midday_cutoff': cfg.get('midday_cutoff', True),
@@ -212,6 +236,8 @@ def get_session_v10_kwargs(symbol, **overrides):
         'high_displacement_override': cfg.get('high_displacement_override', 3.0),
         'disable_bos_retrace': cfg['disable_bos'],
         'bos_daily_loss_limit': cfg.get('bos_daily_loss_limit', 1),
+        'bos_lookback': cfg.get('bos_lookback', 10),
+        'bos_fvg_window': cfg.get('bos_fvg_window', 5),
         't1_r_target': cfg.get('t1_r_target', 3),
         'trail_r_trigger': cfg.get('trail_r_trigger', 4),
         't2_fixed_r': cfg.get('t2_fixed_r', 0),
@@ -243,6 +269,44 @@ def get_live_futures_config(symbol):
         'opp_fvg_exit': cfg.get('opp_fvg_exit', False),
         'opp_fvg_min_ticks': cfg.get('opp_fvg_min_ticks', 5),
         'opp_fvg_after_6r': cfg.get('opp_fvg_after_6r', False),
+    }
+
+
+def get_session_v10_equity_kwargs(symbol, **overrides):
+    """
+    Build kwargs dict for run_session_v10_equity() from centralized config.
+
+    Maps config keys to run_session_v10_equity() parameter names.
+    CLI overrides replace the default value.
+
+    Args:
+        symbol: Equity symbol (SPY, QQQ, IWM)
+        **overrides: Override any config value (for A/B testing)
+
+    Returns:
+        dict ready to be unpacked into run_session_v10_equity(**kwargs)
+    """
+    cfg = get_symbol_config(symbol)
+    cfg.update(overrides)
+
+    return {
+        'symbol': symbol.upper(),
+        'risk_per_trade': cfg.get('default_risk_dollars', 500),
+        'max_open_trades': cfg.get('max_open_trades', 3),
+        'min_fvg_pts': cfg.get('min_fvg_points'),
+        'min_risk_pts': cfg.get('min_risk'),
+        't1_fixed_4r': cfg.get('t1_fixed_4r', True),
+        'overnight_retrace_min_adx': cfg.get('overnight_retrace_min_adx', 22),
+        'midday_cutoff': cfg.get('midday_cutoff', True),
+        'pm_cutoff_qqq': cfg.get('pm_cutoff_qqq', True),
+        'disable_intraday_spy': cfg.get('disable_intraday_spy', True),
+        'atr_buffer_multiplier': cfg.get('atr_buffer_multiplier', 0.5),
+        'high_displacement_override': cfg.get('high_displacement_override', 3.0),
+        'disable_bos_retrace': cfg.get('disable_bos', False),
+        'bos_daily_loss_limit': cfg.get('bos_daily_loss_limit', 1),
+        'use_hybrid_filters': cfg.get('use_hybrid_filters', True),
+        't1_r_target': cfg.get('t1_r_target', 3),
+        'trail_r_trigger': cfg.get('trail_r_trigger', 4),
     }
 
 

@@ -41,7 +41,7 @@ from runners.run_v10_dual_entry import (
     get_est_hour,  # V10.7: EST timezone for time filters
 )
 from strategies.ict.signals.fvg import detect_fvgs
-from runners.symbol_defaults import EQUITY_DEFAULTS
+from runners.symbol_defaults import EQUITY_DEFAULTS, get_session_v10_equity_kwargs
 
 
 # Equity instrument configurations — from centralized symbol_defaults.py
@@ -948,16 +948,14 @@ def run_today_v10_equity(symbol='SPY', risk_per_trade=500, n_bars=3000, t1_r=3, 
     print("Stop Buffer: ATR x 0.5 (V10.4)")
     print(f"T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R")
 
+    eq_kwargs = get_session_v10_equity_kwargs(
+        symbol, risk_per_trade=risk_per_trade,
+        t1_r_target=t1_r, trail_r_trigger=trail_r,
+    )
     results = run_session_v10_equity(
         session_bars,
         bars,
-        symbol=symbol,
-        risk_per_trade=risk_per_trade,
-        max_open_trades=3,
-        t1_fixed_4r=True,
-        overnight_retrace_min_adx=22,
-        t1_r_target=t1_r,
-        trail_r_trigger=trail_r,
+        **eq_kwargs,
     )
 
     if not results:

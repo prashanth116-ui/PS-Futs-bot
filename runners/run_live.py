@@ -42,7 +42,7 @@ from runners.bar_storage import save_daily_bars, load_bars_with_history
 from runners.webhook_executor import WebhookExecutor
 from runners.executor_interface import ExecutorInterface
 from runners.divergence_tracker import save_live_trades, compare_day, format_console_report, format_telegram_alert
-from runners.symbol_defaults import get_live_futures_config, get_session_v10_kwargs, FUTURES_DEFAULTS, EQUITY_DEFAULTS
+from runners.symbol_defaults import get_live_futures_config, get_session_v10_kwargs, get_session_v10_equity_kwargs, get_symbol_config, FUTURES_DEFAULTS, EQUITY_DEFAULTS
 
 # EST timezone for all trading operations
 EST = ZoneInfo('America/New_York')
@@ -764,21 +764,11 @@ class LiveTrader:
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
         # Run V10.16 equity strategy using centralized config
-        from runners.symbol_defaults import get_symbol_config as _get_eq_cfg
-        eq_cfg = _get_eq_cfg(symbol)
+        eq_kwargs = get_session_v10_equity_kwargs(symbol, risk_per_trade=config['risk_per_trade'])
         results = run_session_v10_equity(
             session_bars,
             bars,
-            symbol=symbol,
-            risk_per_trade=config['risk_per_trade'],
-            max_open_trades=3,
-            t1_fixed_4r=True,
-            overnight_retrace_min_adx=22,
-            midday_cutoff=True,
-            pm_cutoff_qqq=True,
-            disable_intraday_spy=eq_cfg.get('disable_intraday_spy', True),
-            disable_bos_retrace=eq_cfg['disable_bos'],
-            bos_daily_loss_limit=1,
+            **eq_kwargs,
         )
 
         # Process signals
@@ -1210,8 +1200,8 @@ class LiveTrader:
                             log(f"    [BROKER] 6R stop update failed: {e}")
                             self._queue_broker_op(trade, 'update_stop', stop_price=trade.plus_4r)
 
-            # === T2_FIXED EXIT (V10.16: ES/MES only — fixed T2 at 5R) ===
-            t2_fixed_r = 5 if trade.symbol in ('ES', 'MES') else 0
+            # === T2_FIXED EXIT (V10.16: per-symbol from centralized config) ===
+            t2_fixed_r = get_symbol_config(trade.symbol).get('t2_fixed_r', 0)
             if t2_fixed_r > 0 and trade.t1_hit and not trade.t2_hit:
                 risk_pts = trade.risk_pts
                 t2_target = (trade.entry_price + t2_fixed_r * risk_pts) if trade.is_long else (trade.entry_price - t2_fixed_r * risk_pts)

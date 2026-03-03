@@ -21,7 +21,7 @@ from datetime import time as dt_time
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10
 from runners.run_v10_equity import run_session_v10_equity
-from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs, is_futures as _is_futures
+from runners.symbol_defaults import get_symbol_config, get_session_v10_kwargs, get_session_v10_equity_kwargs, is_futures as _is_futures
 
 
 def calculate_ema(closes, period):
@@ -79,13 +79,11 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval=
         return
 
     if is_equity:
+        eq_kwargs = get_session_v10_equity_kwargs(symbol, risk_per_trade=risk_per_trade)
         all_results = run_session_v10_equity(
             session_bars,
             all_bars,
-            symbol=symbol,
-            risk_per_trade=risk_per_trade,
-            t1_fixed_4r=True,
-            overnight_retrace_min_adx=22,
+            **eq_kwargs,
         )
     else:
         # Build kwargs from centralized config
