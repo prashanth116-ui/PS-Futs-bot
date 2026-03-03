@@ -1,5 +1,5 @@
 """
-Plot today's trades with V10.15 Quad Entry Mode.
+Plot today's trades with V10.16 Quad Entry Mode.
 
 V10.7 Entry Types:
 - Type A (Creation): Enter when FVG forms with displacement
@@ -38,7 +38,7 @@ def calculate_ema(closes, period):
 
 
 def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval='3m', risk_per_trade=50, losses_only=False, fvg_mode="wick"):
-    """Plot today's trades with V10.15 Quad Entry strategy. Supports futures and equities."""
+    """Plot today's trades with V10.16 Quad Entry strategy. Supports futures and equities."""
 
     is_equity = symbol.upper() in ['SPY', 'QQQ']
 
@@ -119,7 +119,7 @@ def plot_v10(symbol='ES', contracts=3, retracement_morning_only=False, interval=
             bos_daily_loss_limit=1,
             max_retrace_risk_pts=max_retrace_risk,  # V10.12: Reduce retrace cts if high risk
             consol_threshold=0.0,  # V10.12: Disabled until A/B validated
-            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.15
+            max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.16
             fvg_mode=fvg_mode,
             # Opposing FVG exit for T2/Runner
             opposing_fvg_exit=True,

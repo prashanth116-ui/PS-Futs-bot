@@ -1,7 +1,7 @@
 """
-V10.15 Live Trading Runner - Combined Futures + Equities
+V10.16 Live Trading Runner - Combined Futures + Equities
 
-Main entry point for live trading with the V10.15 strategy.
+Main entry point for live trading with the V10.16 strategy.
 Supports both futures (ES, NQ, MES, MNQ) and equities (SPY, QQQ).
 
 V10.10 Changes:
@@ -170,11 +170,11 @@ class PaperTrade:
 
 class LiveTrader:
     """
-    V10.15 Live Trading System - Combined Futures + Equities
+    V10.16 Live Trading System - Combined Futures + Equities
 
     Runs the strategy in real-time, generating signals and executing trades.
 
-    V10.15: Global consecutive loss stop (ES/MES: 2 consec losses → stop for day)
+    V10.16: Global consecutive loss stop (ES/MES: 2 consec losses → stop for day)
     """
 
     # Futures symbol configurations
@@ -781,7 +781,7 @@ class LiveTrader:
         # V10.10: ES BOS disabled (20% WR), NQ BOS enabled with loss limit
         disable_bos = symbol in ['ES', 'MES']
 
-        # Run V10.15 strategy to get signals (all params explicit for backtest parity)
+        # Run V10.16 strategy to get signals (all params explicit for backtest parity)
         results = run_session_v10(
             session_bars,
             bars,
@@ -854,7 +854,7 @@ class LiveTrader:
         # V10.10: SPY BOS disabled, QQQ BOS enabled with loss limit
         disable_bos = symbol == 'SPY'
 
-        # Run V10.15 equity strategy
+        # Run V10.16 equity strategy
         results = run_session_v10_equity(
             session_bars,
             bars,

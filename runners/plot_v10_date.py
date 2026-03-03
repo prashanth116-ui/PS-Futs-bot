@@ -1,4 +1,4 @@
-"""Plot V10.15 strategy for a specific date."""
+"""Plot V10.16 strategy for a specific date."""
 import sys
 sys.path.insert(0, '.')
 
@@ -35,7 +35,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
         print('Not enough bars')
         return
 
-    # Run V10.15 with Hybrid exit
+    # Run V10.16 with Hybrid exit
     all_results = run_session_v10(
         session_bars,
         all_bars,
@@ -56,7 +56,7 @@ def plot_v10_date(symbol, target_date, contracts=3):
         high_displacement_override=3.0,  # V10.5: 3x displacement skips ADX
         disable_bos_retrace=disable_bos,  # V10.7: Per-symbol BOS control
         bos_daily_loss_limit=1,  # V10.7: Stop BOS after 1 loss/day
-        max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.15
+        max_consec_losses=2 if symbol in ['ES', 'MES'] else 0,  # V10.16
     )
 
     if not all_results:
