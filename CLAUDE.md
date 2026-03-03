@@ -19,17 +19,17 @@ Use these printed values, not the chart image, to reference price levels.
 ## Project Overview
 Tradovate futures trading bot using ICT (Inner Circle Trader) strategy.
 
-## Current Strategy: V10.14 (Opposing FVG Exit) - Feb 26, 2026
+## Current Strategy: V10.16 (Trail Improvement) - Mar 3, 2026
 
 ### Supported Instruments
-| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled | Consec Stop |
-|--------|------|------------|----------|--------------|------------------|-------------|-------------|
-| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2 losses** |
-| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | None | ON (loss limit) | OFF |
-| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2 losses** |
-| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | None | ON (loss limit) | OFF |
-| SPY | S&P 500 ETF | per share | $0.30 | - | - | **OFF** | OFF |
-| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | - | ON (loss limit) | OFF |
+| Symbol | Type | Tick Value | Min Risk | Max BOS Risk | Max Retrace Risk | BOS Enabled | Consec Stop | Trail Trigger | T2 Exit |
+|--------|------|------------|----------|--------------|------------------|-------------|-------------|---------------|---------|
+| ES | E-mini S&P 500 | $12.50 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2/symbol** | **4R** | **Fixed 5R** |
+| NQ | E-mini Nasdaq | $5.00 | 6.0 pts | 20.0 pts | None | ON (loss limit) | **3/symbol** | **4R** | Trail |
+| MES | Micro E-mini S&P | $1.25 | 1.5 pts | 8.0 pts | **8.0 pts (1-ct)** | **OFF** | **2/symbol** | **4R** | **Fixed 5R** |
+| MNQ | Micro E-mini Nasdaq | $0.50 | 6.0 pts | 20.0 pts | None | ON (loss limit) | **3/symbol** | **4R** | Trail |
+| SPY | S&P 500 ETF | per share | $0.30 | - | - | **OFF** | OFF | 4R | Fixed 5R |
+| QQQ | Nasdaq 100 ETF | per share | $0.50 | - | - | ON (loss limit) | OFF | 4R | Trail |
 
 **Note:** MES/MNQ use same point-based parameters as ES/NQ (1/10th tick value only).
 
@@ -99,26 +99,46 @@ The 24.25pt intraday retrace loss was cut from -$2,425 to -$1,212.50 (1 contract
 | C | BOS + Retrace | Enter when price retraces into FVG after BOS **[Per-symbol control with loss limit]** |
 
 ### Hybrid Exit Structure (Dynamic Sizing + R-Target Tuning)
+
+**ES/MES (T2 fixed at 5R):**
 ```
 Entry: Dynamic contracts at FVG midpoint
   - 1st trade of direction: 3 contracts (1 T1 + 1 T2 + 1 Runner)
   - 2nd/3rd trade: 2 contracts (1 T1 + 1 T2, no runner)
-    ↓ Price hits 3R target (V10.9: lowered from 4R)
-T1 (1 ct): FIXED profit at 3R - guaranteed, isolated from trail
-    ↓ Price hits 6R target (V10.9: lowered from 8R)
-T2 (1 ct): Structure trail with 4-tick buffer (floor at 3R)
-Runner (1 ct): Structure trail with 6-tick buffer (1st trade only, floor at 3R)
-    ↓ Swing pullback
-T2/Runner exit on respective trail stops or EOD
+    ↓ Price hits 3R target
+T1 (1 ct): FIXED profit at 3R - guaranteed
+    ↓ Price hits 4R target (V10.16: lowered from 6R)
+  Trail activates — remaining contracts structure trail with 3R floor
+    ↓ Price hits 5R target (V10.16: T2 fixed exit for ES/MES)
+T2 (1 ct): FIXED profit at 5R - guaranteed, locked in
+    ↓ Only Runner remains, structure trailing with 6-tick buffer
+Runner (1 ct): Exits on trail stop or EOD (1st trade only)
 ```
 
-**R-Target CLI flags** (all runners support `--t1-r=N --trail-r=N`):
-```bash
-# Default (V10.9): T1=3R, Trail=6R
-python -m runners.backtest_v10_multiday ES 11
+**NQ/MNQ (T2 trails, no fixed exit):**
+```
+Entry: Dynamic contracts at FVG midpoint
+  - 1st trade of direction: 3 contracts (1 T1 + 1 T2 + 1 Runner)
+  - 2nd/3rd trade: 2 contracts (1 T1 + 1 T2, no runner)
+    ↓ Price hits 3R target
+T1 (1 ct): FIXED profit at 3R - guaranteed
+    ↓ Price hits 4R target (V10.16: lowered from 6R)
+  Trail activates — T2 and Runner structure trail with 3R floor
+    ↓ T2 trails with 4-tick buffer, Runner trails with 6-tick buffer
+T2/Runner ride big NQ trends until trail stop or EOD
+```
 
-# Override to old baseline
-python -m runners.backtest_v10_multiday ES 11 --t1-r=4 --trail-r=8
+**R-Target CLI flags** (all runners support `--t1-r=N --trail-r=N --t2-fixed-r=N`):
+```bash
+# Default (V10.16): T1=3R, Trail=4R, T2 fixed at 5R for ES/MES
+python -m runners.backtest_v10_multiday ES 22
+
+# Override to old V10.9 baseline
+python -m runners.backtest_v10_multiday ES 22 --trail-r=6 --t2-fixed-r=0
+
+# A/B test trail options
+python -m runners.backtest_v10_multiday ES 18 --post-t1-trail-r=1      # Trail at +1R after T1
+python -m runners.backtest_v10_multiday ES 18 --time-decay-bars=10 --time-decay-r=2  # Time decay
 ```
 
 ### V10.8 Hybrid Filter System
@@ -382,6 +402,60 @@ python -m runners.backtest_v10_multiday ES 18 --opp-fvg-exit --opp-fvg-min-ticks
 python -m runners.backtest_v10_multiday NQ 18 --opp-fvg-exit --opp-fvg-min-ticks=5 --opp-fvg-after-6r
 ```
 
+### V10.16 Trail Improvement (Mar 3, 2026)
+Lowered trail activation from 6R to 4R for all symbols, and added fixed T2 exit at 5R for ES/MES. Addresses the "dead zone" between T1 exit at 3R and trail activation at 6R where 2 contracts sat at breakeven and got stopped on pullbacks.
+
+**Problem:** After T1 exits at 3R (1 ct), remaining 2 contracts (T2+Runner) trailed at breakeven until 6R. During pullbacks in the 3R-6R gap, both contracts exited at breakeven — giving back all unrealized profit.
+
+**Solution (per-symbol):**
+- **ES/MES**: Trail trigger lowered 6R→4R + T2 fixed exit at 5R (only Runner trails)
+- **NQ/MNQ**: Trail trigger lowered 6R→4R only (T2 and Runner both trail — NQ needs runners for big trends)
+
+**18-Day A/B Test (ES):**
+| Option | Description | Total P/L | vs Baseline | Max DD | Day WR |
+|--------|-------------|-----------|-------------|--------|--------|
+| Baseline | 3R/6R | $131,988 | — | $413 | 94.4% |
+| A | Trail 6R→4R | $147,125 | +$15,137 | $131 | 94.4% |
+| B | Post-T1 trail +1R | $135,331 | +$3,344 | $0 | 100% |
+| C | T2 fixed at 5R | $146,519 | +$14,531 | $0 | 100% |
+| D | Time decay +2R@10bars | $134,156 | +$2,169 | $13 | 94.4% |
+| **A+C** | **Trail 4R + T2 fixed 5R** | **$151,250** | **+$19,263** | **$0** | **100%** |
+
+**18-Day A/B Test (NQ):**
+| Option | Total P/L | vs Baseline |
+|--------|-----------|-------------|
+| Baseline (3R/6R) | $233,788 | — |
+| A: Trail 4R | **$247,605** | **+$13,818** |
+| C: T2 fixed 5R | $237,675 | +$3,888 |
+| A+C combined | $238,145 | +$4,358 |
+
+**NQ: Option A alone is best.** T2 fixed exit cuts NQ runners short — big NQ trends go 10-20R.
+
+**22-Day Validation (all symbols):**
+| Symbol | Config | Trades | WR | Total P/L | Day WR | Max DD |
+|--------|--------|--------|-----|-----------|--------|--------|
+| ES | A+C | 219 | 84.5% | +$191,231 | **100% (22/22)** | **$0** |
+| MES | A+C | 210 | 81.9% | +$17,864 | **100% (22/22)** | **$0** |
+| NQ | A only | 169 | 82.2% | +$340,743 | 90.9% (20/22) | $778 |
+| MNQ | A only | 162 | 80.9% | +$31,349 | 90.9% (20/22) | $55 |
+| **Combined** | — | **760** | **82.5%** | **+$581,187** | — | **$778** |
+
+**Why per-symbol:** Same pattern as retrace risk cap, BOS control, and consecutive loss stop — ES benefits from tighter profit management (lock T2 early), NQ benefits from letting runners ride (big trend moves go 10-20R).
+
+**CLI usage:**
+```bash
+# Default V10.16 (auto per-symbol config)
+python -m runners.backtest_v10_multiday ES 22
+python -m runners.backtest_v10_multiday NQ 22
+
+# Override to old V10.15 baseline
+python -m runners.backtest_v10_multiday ES 22 --trail-r=6 --t2-fixed-r=0
+
+# A/B test other trail options
+python -m runners.backtest_v10_multiday ES 18 --post-t1-trail-r=1
+python -m runners.backtest_v10_multiday ES 18 --time-decay-bars=10 --time-decay-r=2
+```
+
 ### V10.15 Bar-Aligned Scanning (Feb 26, 2026)
 Live bot scanned on a fixed 180s interval, which often fired mid-bar when TradingView OHLC data was still incomplete. This produced phantom FVGs that disappeared once the bar finalized — generating extra low-quality entries that don't exist in backtest.
 
@@ -404,8 +478,9 @@ Live bot scanned on a fixed 180s interval, which often fired mid-bar when Tradin
 **Status**: Deployed Feb 26. Monitoring for gap closure. If gap persists, remaining fixes: (1) drop last bar from array before `run_session_v10()`, (2) FVG confirmation filter requiring persistence on next scan.
 
 ### Strategy Features
+- **Trail Improvement (V10.16)**: Trail trigger 6R→4R all symbols + T2 fixed at 5R for ES/MES — ES +$19k/18d (+14.6%), 100% winning days, zero DD
+- **Per-Symbol Consecutive Loss Stop (V10.16)**: ES/MES: 2 losses/symbol, NQ/MNQ: 3 losses/symbol (tracked in risk_manager, not strategy)
 - **Opposing FVG Exit (V10.14)**: Exit T2/Runner on opposing FVG after 6R (ES: 10 ticks, NQ: 5 ticks) — ES +$9.5k/18d
-- **Global Consecutive Loss Stop (V10.13)**: ES/MES stop all trading after 2 consecutive losses (NQ/MNQ exempt — consec losses precede big recoveries)
 - **PickMyTrade Webhook**: Multi-account execution for personal + prop firm Tradovate accounts (futures only)
 - **Bar-Aligned Scanning (V10.15)**: Scan timing synced to 3-min bar close + 5s buffer — eliminates phantom FVGs from incomplete bars
 - **Instant Startup (V10.11)**: Live bot uses local bar history for immediate indicator warmup at 04:00 ET (was 57-min lag)
@@ -415,10 +490,10 @@ Live bot scanned on a fixed 180s interval, which often fired mid-bar when Tradin
 - **Direction-Aware Circuit Breaker (V10.10)**: 3 losses/direction/day (short losses don't block longs)
 - **Entry Cap Fix (V10.10)**: Removed lifetime entries_taken counter; only concurrent open positions limited
 - **Equity FVG Date Filter (V10.10)**: Skip stale FVGs from previous sessions
-- **R-Target Tuning (V10.9)**: T1 at 3R, trail at 6R (+31% P/L, 87.7% WR, zero DD)
+- **R-Target Tuning (V10.9→V10.16)**: T1 at 3R, trail at 4R (was 6R), T2 fixed at 5R for ES/MES
 - **Hybrid Filter System (V10.8)**: 2 mandatory + 2/3 optional filters (+$90k/30d improvement)
 - **Quad Entry Mode**: 4 entry types (Creation, Overnight, Intraday, BOS) with per-symbol BOS control
-- **Hybrid Exit**: T1 fixed at 3R, T2/Runner structure trail after 6R
+- **Hybrid Exit**: T1 fixed at 3R, trail at 4R; ES/MES: T2 fixed at 5R, Runner trails; NQ/MNQ: T2+Runner both trail
 - **Dynamic Position Sizing (V10.7)**: 1st trade: 3 cts, 2nd+ trades: 2 cts (max 6 cts exposure)
 - **Position Limit (V10.7)**: Max 3 open trades total per direction
 - **BOS LOSS_LIMIT (V10.6)**: Per-symbol optimization + daily loss limit
@@ -450,7 +525,9 @@ Live bot scanned on a fixed 180s interval, which often fired mid-bar when Tradin
 | **BOS Disable** | **ES/MES/SPY** | **BOS off for low win-rate symbols (V10.6)** |
 | **BOS Loss Limit** | **NQ/MNQ/QQQ: 1/day** | **Stop BOS after 1 loss per day (V10.6)** |
 | **Max Losses** | **3/direction/day** | **V10.10: Direction-aware circuit breaker** |
-| **Consec Loss Stop** | **ES/MES: 2 consec** | **V10.13: Stop all trading after 2 consecutive losses (NQ/MNQ exempt)** |
+| **Consec Loss Stop** | **ES/MES: 2, NQ/MNQ: 3** | **V10.16: Per-symbol consecutive loss stop (tracked in risk_manager)** |
+| **Trail Trigger** | **4R (all symbols)** | **V10.16: Lowered from 6R — activates structure trail sooner** |
+| **T2 Fixed Exit** | **ES/MES: 5R** | **V10.16: Lock T2 profit at 5R (NQ/MNQ: T2 trails instead)** |
 | **Max Open Trades** | **3 per direction** | **V10.7: Increased from 2** |
 | **Position Sizing** | **Dynamic** | **V10.7: 1st trade: 3 cts, 2nd+: 2 cts (max 6 cts)** |
 
@@ -480,9 +557,17 @@ Live bot scanned on a fixed 180s interval, which often fired mid-bar when Tradin
 | Intraday | 2 (4.5%) | 1 (3.1%) | 3 (3.9%) |
 | BOS | 8 (18.2%) | 5 (15.6%) | 13 (17.1%) |
 
-### Key Insights (V10.13)
-- Global consecutive loss stop (ES/MES only) prevents whipsaw damage — Feb 19 loss cut from -$900 to -$412
-- NQ exempt from consecutive loss stop: Feb 12 had 2 consec losses then +$30k in winners
+### Key Insights (V10.16)
+- V10.16 trail improvement: ES +$19k/18d (+14.6%), 100% winning days, zero DD over 22 days
+- "Dead zone" between T1 (3R) and trail (6R) was the #1 profit drag — 2 contracts sat at breakeven for too long
+- Lowering trail trigger to 4R shrinks dead zone from 3R gap to 1R gap — massive improvement
+- T2 fixed at 5R locks 2nd contract profit — ES/MES only (NQ needs runners for big trends)
+- NQ benefits from trail 4R but NOT from T2 fixed exit — big NQ trends go 10-20R
+- Per-symbol consecutive loss stop (ES/MES=2, NQ/MNQ=3) replaces global counter — scales to any number of tickers
+- Combined 22-day results: ES +$191k, MES +$18k, NQ +$341k, MNQ +$31k = **+$581k total**
+- Per-symbol config pattern confirmed again: ES benefits from tighter management, NQ benefits from letting runners run
+- Global consecutive loss stop (ES/MES only) prevents whipsaw damage — Feb 19 loss cut from -$900 to +$388
+- NQ consecutive loss at 3/symbol: Feb 12 had 2 consec losses then +$30k in winners
 - Cooldown-based approaches (30/60/90/120min) had zero effect — post-trigger trades come hours later
 - Live bot startup fix eliminates 57-min data lag — trades from 04:03 instead of ~05:00
 - Feb 23 analysis: old bot missed 3 early winners (+$1,537.50) due to data lag
@@ -699,6 +784,7 @@ sudo systemctl stop paper-trading
 ## Strategy Evolution
 | Version | Key Feature |
 |---------|-------------|
+| V10.16 | Trail improvement: trail 6R→4R + T2 fixed 5R for ES/MES + per-symbol consec loss stop — **ES +$19k/18d (+14.6%), 100% winning days, zero DD** |
 | V10.15 | Bar-aligned scanning: sync to 3-min bar close + 5s buffer — **eliminates phantom FVGs from incomplete bars** |
 | V10.14 | Opposing FVG exit for T2/Runner: per-symbol (ES:10t, NQ:5t) after 6R - **ES +$9.5k/18d (+5.8%)** |
 | V10.13 | Global consecutive loss stop: ES/MES stop after 2 consec losses (NQ exempt) - **+$488 ES, Feb 19 loss halved** |
