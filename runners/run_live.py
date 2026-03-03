@@ -180,7 +180,7 @@ class LiveTrader:
     # Futures symbol configurations
     FUTURES_SYMBOLS = {
         'ES': {
-            'tradovate_symbol': 'ESH5',
+            'tradovate_symbol': 'ESM6',
             'tick_size': 0.25,
             'tick_value': 12.50,
             'min_risk': 1.5,
@@ -193,7 +193,7 @@ class LiveTrader:
             'opp_fvg_after_6r': True,
         },
         'NQ': {
-            'tradovate_symbol': 'NQH5',
+            'tradovate_symbol': 'NQM6',
             'tick_size': 0.25,
             'tick_value': 5.00,
             'min_risk': 6.0,
@@ -206,7 +206,7 @@ class LiveTrader:
             'opp_fvg_after_6r': True,
         },
         'MES': {
-            'tradovate_symbol': 'MESH5',
+            'tradovate_symbol': 'MESM6',
             'tick_size': 0.25,
             'tick_value': 1.25,
             'min_risk': 1.5,
@@ -219,7 +219,7 @@ class LiveTrader:
             'opp_fvg_after_6r': True,
         },
         'MNQ': {
-            'tradovate_symbol': 'MNQH5',
+            'tradovate_symbol': 'MNQM6',
             'tick_size': 0.25,
             'tick_value': 0.50,
             'min_risk': 6.0,
@@ -318,7 +318,7 @@ class LiveTrader:
         # Price tracking for heartbeat
         self.last_prices: Dict[str, float] = {}
 
-        # Telegram heartbeat (every 30 min)
+        # Telegram heartbeat (every 1 hour)
         self.last_telegram_heartbeat: datetime = None
 
         # Scan interval (3 minutes to match bar interval)
@@ -858,7 +858,7 @@ class LiveTrader:
             bars,
             symbol=symbol,
             risk_per_trade=config['risk_per_trade'],
-            max_open_trades=2,
+            max_open_trades=3,
             t1_fixed_4r=True,
             overnight_retrace_min_adx=22,
             midday_cutoff=True,

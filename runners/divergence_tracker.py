@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 from runners.bar_storage import load_local_bars
 from runners.run_v10_dual_entry import run_session_v10
+from version import STRATEGY_VERSION
 
 # Storage directory
 _DIVERGENCE_DIR = Path(__file__).parent.parent / 'data' / 'divergence'
@@ -57,7 +58,7 @@ def save_live_trades(
     data = {
         'symbol': symbol,
         'date': trade_date.isoformat(),
-        'version': 'v10.13',
+        'version': STRATEGY_VERSION,
         'summary': summary,
         'trades': trades,
     }
@@ -117,7 +118,7 @@ def run_backtest_for_date(
         max_bos_risk_pts = 20.0
         max_retrace_risk_pts = None
         disable_bos = False
-        max_consec_losses = 0
+        max_consec_losses = 3
     else:
         return [], {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0}
 
@@ -166,14 +167,16 @@ def run_backtest_for_date(
 
 
 def _parse_time(t) -> Optional[datetime]:
-    """Parse a time value to datetime, handling both datetime and ISO string."""
+    """Parse a time value to naive datetime (strip timezone), handling both datetime and ISO string."""
     if t is None:
         return None
     if isinstance(t, datetime):
-        return t
+        # Strip timezone to avoid naive vs aware comparison errors
+        return t.replace(tzinfo=None) if t.tzinfo else t
     if isinstance(t, str):
         try:
-            return datetime.fromisoformat(t)
+            dt = datetime.fromisoformat(t)
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
         except ValueError:
             return None
     return None

@@ -147,10 +147,10 @@ class TradovateClient:
 
     # Contract IDs (updated periodically)
     CONTRACT_MAP = {
-        'ES': 'ESH5',  # E-mini S&P 500
-        'NQ': 'NQH5',  # E-mini Nasdaq 100
-        'MES': 'MESH5',  # Micro E-mini S&P 500
-        'MNQ': 'MNQH5',  # Micro E-mini Nasdaq 100
+        'ES': 'ESM6',  # E-mini S&P 500
+        'NQ': 'NQM6',  # E-mini Nasdaq 100
+        'MES': 'MESM6',  # Micro E-mini S&P 500
+        'MNQ': 'MNQM6',  # Micro E-mini Nasdaq 100
     }
 
     def __init__(self, config: Optional[TradovateConfig] = None, contract_months: Optional[Dict[str, str]] = None):

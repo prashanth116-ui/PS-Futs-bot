@@ -36,8 +36,8 @@ EXIT STRUCTURE (HYBRID + DYNAMIC SIZING):
 =========================================
 1st trade: 3 contracts (T1=1, T2=1, Runner=1)
 2nd+ trades: 2 contracts (T1=1, T2=1, no runner)
-T1: FIXED profit at 4R
-T2/Runner: Structure trail with 4-6 tick buffer after 8R
+T1: FIXED profit at 3R (V10.9: lowered from 4R)
+T2/Runner: Structure trail with 4-6 tick buffer after 6R (V10.9: lowered from 8R)
 
 VERSION HISTORY:
 ================
@@ -392,7 +392,7 @@ def run_session_v10(
     disable_bos_retrace=False,  # Disable BOS entries entirely (use for ES)
     bos_daily_loss_limit=1,  # Stop BOS after N losses per day (0=no limit)
     # Exit options
-    t1_fixed_4r=False,  # Hybrid: Take T1 profit at 4R instead of trailing
+    t1_fixed_4r=True,  # Hybrid: Take T1 profit at fixed R-target instead of trailing
     # V10.8 Hybrid filters
     use_hybrid_filters=True,  # Use 2 mandatory + 2/3 optional filter mode
     # R-target tuning (V10.9: lowered from 4R/8R — +26% P/L, 90.6% WR in 11-day A/B test)
@@ -530,33 +530,32 @@ def run_session_v10(
                     if not (disp_ok and adx_ok and ema_ok):
                         continue
 
-                if True:  # Filters passed
-                    stop_buffer_ticks = 2
-                    entry_price = fvg.midpoint
-                    stop_price = fvg.low - (stop_buffer_ticks * tick_size) if is_long else fvg.high + (stop_buffer_ticks * tick_size)
-                    risk = abs(entry_price - stop_price)
+                stop_buffer_ticks = 2
+                entry_price = fvg.midpoint
+                stop_price = fvg.low - (stop_buffer_ticks * tick_size) if is_long else fvg.high + (stop_buffer_ticks * tick_size)
+                risk = abs(entry_price - stop_price)
 
-                    if min_risk_pts > 0 and risk < min_risk_pts:
-                        continue
+                if min_risk_pts > 0 and risk < min_risk_pts:
+                    continue
 
-                    # V10.2 time filters (V10.7: use EST timezone)
-                    entry_hour = get_est_hour(creating_bar.timestamp)
-                    if midday_cutoff and 12 <= entry_hour < 14:
-                        continue  # Skip lunch lull (12:00-14:00 EST)
-                    if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
-                        continue  # Skip NQ afternoon entries (after 14:00 EST)
+                # V10.2 time filters (V10.7: use EST timezone)
+                entry_hour = get_est_hour(creating_bar.timestamp)
+                if midday_cutoff and 12 <= entry_hour < 14:
+                    continue  # Skip lunch lull (12:00-14:00 EST)
+                if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
+                    continue  # Skip NQ afternoon entries (after 14:00 EST)
 
-                    valid_entries[direction].append({
-                        'fvg': fvg,
-                        'direction': direction,
-                        'entry_type': 'CREATION',
-                        'entry_bar_idx': session_bar_idx,
-                        'entry_time': creating_bar.timestamp,
-                        'entry_price': entry_price,
-                        'stop_price': stop_price,
-                        'fvg_low': fvg.low,
-                        'fvg_high': fvg.high,
-                    })
+                valid_entries[direction].append({
+                    'fvg': fvg,
+                    'direction': direction,
+                    'entry_type': 'CREATION',
+                    'entry_bar_idx': session_bar_idx,
+                    'entry_time': creating_bar.timestamp,
+                    'entry_price': entry_price,
+                    'stop_price': stop_price,
+                    'fvg_low': fvg.low,
+                    'fvg_high': fvg.high,
+                })
 
     # === Entry Type B: FVG Retracement + Rejection (Overnight + Intraday) ===
     if enable_retracement_entry:
@@ -1280,13 +1279,13 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     print(f'  - Entry Type B (Retrace): {"ENABLED" if enable_retracement else "DISABLED"}')
     if enable_retracement:
         print(f'    - B1: Overnight FVGs (ADX >= {overnight_retrace_min_adx})')
-        print('    - B2: Intraday FVGs (5+ bars old)')
+        print('    - B2: Intraday FVGs (2+ bars old)')
         print(f'    - Morning only filter: {"YES" if retracement_morning_only else "NO"}')
         print(f'    - Trend aligned: {"YES" if retracement_trend_aligned else "NO"}')
     print(f'  - Entry Type C (BOS + Retrace): {"ENABLED" if enable_bos else "DISABLED"}')
     print('  - Stop buffer: +2 ticks')
     print('  - HTF bias: EMA 20/50')
-    print('  - ADX filter: > 17 (or 3x displacement with ADX >= 10)')
+    print('  - ADX filter: >= 11 (or 3x displacement with ADX >= 10)')
     print(f'  - Max open trades: {max_open_trades}')
     # Max BOS risk in points (same for micro and mini contracts)
     max_bos_risk_pts = 8.0 if symbol in ['ES', 'MES'] else 20.0 if symbol in ['NQ', 'MNQ'] else 8.0
@@ -1306,6 +1305,17 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
     if consol_threshold > 0:
         print(f'  - Consolidation filter: ratio < {consol_threshold} (V10.12)')
     print('='*70)
+
+    # Per-symbol consecutive loss stop (parity with backtest_v10_multiday)
+    consec_limits = {'ES': 2, 'MES': 2, 'NQ': 3, 'MNQ': 3}
+    max_consec_losses = consec_limits.get(symbol, 0)
+
+    # Opposing FVG exit config (parity with run_live.py)
+    opp_fvg_configs = {
+        'ES': (True, 10, True), 'MES': (True, 10, True),
+        'NQ': (True, 5, True), 'MNQ': (True, 5, True),
+    }
+    opp_exit, opp_min_ticks, opp_after_6r = opp_fvg_configs.get(symbol, (False, 5, False))
 
     all_results = run_session_v10(
         session_bars,
@@ -1334,6 +1344,10 @@ def run_today_v10(symbol='ES', contracts=3, max_open_trades=3, min_risk_pts=None
         max_retrace_risk_pts=max_retrace_risk_pts,
         consol_threshold=consol_threshold,
         fvg_mode=fvg_mode,
+        max_consec_losses=max_consec_losses,
+        opposing_fvg_exit=opp_exit,
+        opposing_fvg_min_ticks=opp_min_ticks,
+        opposing_fvg_after_6r_only=opp_after_6r,
     )
 
     total_pnl = 0

@@ -17,6 +17,9 @@ import sys
 import time
 from datetime import datetime, time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+EST = ZoneInfo('America/New_York')
 
 # Configuration
 MAX_RESTARTS_PER_DAY = 5
@@ -26,27 +29,32 @@ MARKET_CLOSE = dtime(16, 30)  # 4:30 PM ET (buffer after close)
 HEALTH_CHECK_RETRIES = 3     # Retry health check this many times before giving up
 
 
+def _now_est():
+    """Get current time in EST."""
+    return datetime.now(EST)
+
+
 def is_weekday():
     """Check if today is a weekday (Mon-Fri)."""
-    return datetime.now().weekday() < 5
+    return _now_est().weekday() < 5
 
 
 def is_market_hours():
-    """Check if current time is within market hours."""
-    now = datetime.now().time()
+    """Check if current time is within market hours (EST)."""
+    now = _now_est().time()
     return MARKET_OPEN <= now <= MARKET_CLOSE
 
 
 def get_log_file():
     """Get today's log file path."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _now_est().strftime("%Y-%m-%d")
     return LOG_DIR / f"paper_trading_{today}.log"
 
 
 def log(message: str):
     """Log message to console and file."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = _now_est().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{timestamp}] {message}"
     print(line, flush=True)
 
@@ -133,8 +141,8 @@ def run_paper_trading(use_webhook=False, use_direct_api=False, direct_api_config
             cmd.extend(["--direct-api-config", direct_api_config])
 
     log_file = get_log_file()
-    start_time = datetime.now()
-    last_wrapper_heartbeat = datetime.now()
+    start_time = _now_est()
+    last_wrapper_heartbeat = _now_est()
     WRAPPER_HEARTBEAT_INTERVAL = 300  # 5 minutes
 
     with open(log_file, "a") as f:
@@ -160,7 +168,7 @@ def run_paper_trading(use_webhook=False, use_direct_api=False, direct_api_config
                 return 0
 
             # Wrapper heartbeat every 5 minutes
-            now = datetime.now()
+            now = _now_est()
             if (now - last_wrapper_heartbeat).total_seconds() >= WRAPPER_HEARTBEAT_INTERVAL:
                 uptime_secs = int((now - start_time).total_seconds())
                 uptime_min = uptime_secs // 60
@@ -215,7 +223,7 @@ def main():
 
     # Wait for market to open if started early
     while not is_market_hours():
-        now = datetime.now()
+        now = _now_est()
         if now.time() > MARKET_CLOSE:
             log("Market already closed for today - exiting")
             return

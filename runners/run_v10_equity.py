@@ -156,7 +156,6 @@ def run_session_v10_equity(
 
     # Session time boundaries
     rth_start = dt_time(9, 30)
-    dt_time(16, 0)
     morning_end = dt_time(12, 0)
 
     # Detect all FVGs from all bars (similar to V10 futures)
@@ -418,7 +417,7 @@ def run_session_v10_equity(
             for fvg in session_fvgs:
                 if fvg['used_for_entry']:
                     continue
-                if i - fvg['creation_bar_idx'] < 5:
+                if i - fvg['creation_bar_idx'] < 2:  # V10.7: 2 bars (was 5)
                     continue
 
                 direction = fvg['direction']
@@ -555,7 +554,7 @@ def run_session_v10_equity(
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
-                    'entry_type': 'BOS',
+                    'entry_type': 'BOS_RETRACE',
                     'direction': 'LONG',
                     'entry_bar_idx': i,
                     'entry_time': bar.timestamp,
@@ -624,7 +623,7 @@ def run_session_v10_equity(
 
                 fvg['used_for_entry'] = True
                 all_valid_entries.append({
-                    'entry_type': 'BOS',
+                    'entry_type': 'BOS_RETRACE',
                     'direction': 'SHORT',
                     'entry_bar_idx': i,
                     'entry_time': bar.timestamp,
