@@ -474,12 +474,23 @@ class LiveTrader:
         """Queue a failed broker operation for retry on next scan.
 
         Skips queueing if the failure is permanent (stop already fired, etc.).
+        Deduplicates: if an op of the same type is already queued, updates its
+        parameters (e.g. stop_price) instead of appending a duplicate.
+        Only sends Telegram alert on the first failure, not on every retry.
         """
         if result and result.get('permanent'):
             log(f"    [BROKER] {op_type} {trade.id} failed permanently — not retrying")
             return
         if not hasattr(trade, 'pending_broker_ops'):
             trade.pending_broker_ops = []
+
+        # Deduplicate: update existing op of same type instead of appending
+        for existing_op in trade.pending_broker_ops:
+            if existing_op['op'] == op_type:
+                existing_op.update(kwargs)
+                log(f"    [BROKER] Updated pending {op_type} for {trade.id}")
+                return
+
         op = {'op': op_type, **kwargs}
         trade.pending_broker_ops.append(op)
         log(f"    [BROKER] Queued {op_type} for retry: {trade.id}")
