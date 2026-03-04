@@ -79,7 +79,9 @@ EQUITY_CONFIG = {
 
 
 def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
-                 t1_r: int = 2, trail_r: int = 4, risk_per_trade: float = 500):
+                 t1_r: int = 2, trail_r: int = 4, risk_per_trade: float = 500,
+                 htf_interval: str = '5m', ltf_interval: str = '3m',
+                 no_pd: bool = False, min_hybrid: int = 2):
     """
     Run ICT OTE strategy backtest.
 
@@ -90,6 +92,10 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         t1_r: R-multiple for T1 fixed exit (default 3)
         trail_r: R-multiple for structure trail activation (default 6)
         risk_per_trade: Dollar risk per trade (equities only)
+        htf_interval: HTF timeframe for impulse detection (default 5m)
+        ltf_interval: LTF timeframe for entry confirmation (default 3m)
+        no_pd: Disable premium/discount mandatory filter
+        min_hybrid: Minimum optional filter passes required (default 2)
     """
     is_equity = symbol.upper() in EQUITY_SYMBOLS
 
@@ -128,31 +134,36 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
     if contracts == 0:
         contracts = 1
 
-    # Bars needed
-    htf_bars_per_day = 78   # 5m bars in RTH
-    ltf_bars_per_day = 130  # 3m bars in RTH
+    # Bars needed — calculate based on timeframe
+    interval_minutes = {'1m': 1, '2m': 2, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60}
+    htf_min = interval_minutes.get(htf_interval, 5)
+    ltf_min = interval_minutes.get(ltf_interval, 3)
+    session_minutes = 720  # 4:00-16:00
+    htf_bars_per_day = session_minutes // htf_min
+    ltf_bars_per_day = session_minutes // ltf_min
 
     htf_bars_needed = days * htf_bars_per_day + 1000
     ltf_bars_needed = days * ltf_bars_per_day + 1500
 
-    print(f"Fetching {symbol} HTF (5m) data...")
-    htf_bars = fetch_futures_bars(symbol=symbol, interval='5m', n_bars=htf_bars_needed)
+    print(f"Fetching {symbol} HTF ({htf_interval}) data...")
+    htf_bars = fetch_futures_bars(symbol=symbol, interval=htf_interval, n_bars=htf_bars_needed)
 
-    print(f"Fetching {symbol} LTF (3m) data...")
-    ltf_bars = fetch_futures_bars(symbol=symbol, interval='3m', n_bars=ltf_bars_needed)
+    print(f"Fetching {symbol} LTF ({ltf_interval}) data...")
+    ltf_bars = fetch_futures_bars(symbol=symbol, interval=ltf_interval, n_bars=ltf_bars_needed)
 
-    # Fetch 2m bars for trend filter
-    trend_bars_needed = days * 240 + 1500
-    print(f"Fetching {symbol} trend (2m) data for EMA...")
-    trend_bars = fetch_futures_bars(symbol=symbol, interval='2m', n_bars=trend_bars_needed)
+    # Fetch trend bars — use a timeframe between HTF and LTF, or 2m as fallback
+    trend_interval = '2m' if ltf_min <= 3 else ltf_interval
+    trend_bars_needed = days * (session_minutes // interval_minutes.get(trend_interval, 2)) + 1500
+    print(f"Fetching {symbol} trend ({trend_interval}) data for EMA...")
+    trend_bars = fetch_futures_bars(symbol=symbol, interval=trend_interval, n_bars=trend_bars_needed)
 
     # Fetch correlated symbol for SMT divergence
     correlated_symbol = get_correlated_symbol(symbol)
     correlated_htf_bars = []
     if correlated_symbol:
-        print(f"Fetching {correlated_symbol} HTF (5m) data for SMT divergence...")
+        print(f"Fetching {correlated_symbol} HTF ({htf_interval}) data for SMT divergence...")
         correlated_htf_bars = fetch_futures_bars(
-            symbol=correlated_symbol, interval='5m', n_bars=htf_bars_needed
+            symbol=correlated_symbol, interval=htf_interval, n_bars=htf_bars_needed
         ) or []
         print(f"  {correlated_symbol} bars: {len(correlated_htf_bars)}")
 
@@ -175,7 +186,7 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         'avg_body_lookback': 20,
         'min_impulse_ticks': min_impulse_ticks,
         'swing_lookback': 3,
-        'impulse_max_bars_back': 30,
+        'impulse_max_bars_back': max(30, 150 // htf_min),  # ~2.5hrs lookback
         'require_fvg_confluence': False,
         'min_fvg_ticks': min_fvg_ticks,
         'stop_buffer_ticks': 2,
@@ -186,7 +197,7 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         'require_killzone': False,
         'max_daily_trades': 3,
         'max_daily_losses': 2,
-        'max_ote_age_bars': 25,          # ~2hrs on 5m
+        'max_ote_age_bars': max(25, 120 // htf_min),  # ~2hrs regardless of TF
         # Trend filter ON — EMA 20/50 as optional in hybrid chain
         'use_trend_filter': True,
         'ema_fast_period': 20,           # was 10 — match V10 proven pair
@@ -199,7 +210,7 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         'debug': '--debug' in sys.argv,
         # MMXM enhancements
         'correlated_symbol': correlated_symbol or '',
-        'premium_discount': {'enabled': True, 'method': 'session'},
+        'premium_discount': {'enabled': not no_pd, 'method': 'session'},
         'dealing_range': {'enabled': True, 'swing_lookback': 3, 'max_bars_back': 100},
         'mmxm': {
             'enabled': True,
@@ -214,8 +225,8 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
         },
         # A+ filter: risk/impulse ratio — reject wide-stop small-impulse entries
         'max_risk_impulse_ratio': 0.20,
-        # Hybrid filter config — DI+P/D mandatory, 2/3 optional (EMA/disp/FVG)
-        'min_hybrid_passes': 2,
+        # Hybrid filter config — DI+P/D mandatory, N/4 optional (EMA/disp/FVG)
+        'min_hybrid_passes': min_hybrid,
     }
 
     # Per-symbol tuning
@@ -232,7 +243,8 @@ def run_backtest(symbol: str = 'ES', days: int = 14, contracts: int = 0,
     print("=" * 110)
     print(f"{symbol} ICT OPTIMAL TRADE ENTRY (OTE) STRATEGY BACKTEST")
     size_str = f"Risk: ${risk_per_trade}/trade" if is_equity else f"Contracts: {contracts}"
-    print(f"HTF: 5m (impulse) | LTF: 3m (entry) | Days: {min(len(dates), days)} | {size_str} | T1={t1_r}R Trail={trail_r}R")
+    pd_str = "P/D OFF" if no_pd else "P/D ON"
+    print(f"HTF: {htf_interval} (impulse) | LTF: {ltf_interval} (entry) | Days: {min(len(dates), days)} | {size_str} | T1={t1_r}R Trail={trail_r}R | {pd_str} | Hybrid: {min_hybrid}/4")
     print("=" * 110)
     print()
     print(f"{'Date':<12} | {'Time':<5} | {'Dir':<8} | {'Entry':>10} | {'Stop':>10} | {'Risk':>6} | "
@@ -588,12 +600,24 @@ def simulate_trade(bars, trade: TradeSetup, tick_size, tick_value, contracts=1,
 if __name__ == '__main__':
     t1_r_val = 2
     trail_r_val = 4
+    htf_val = '5m'
+    ltf_val = '3m'
+    no_pd_val = False
+    min_hybrid_val = 2
     positional = []
     for a in sys.argv[1:]:
         if a.startswith('--t1-r='):
             t1_r_val = float(a.split('=')[1])
         elif a.startswith('--trail-r='):
             trail_r_val = float(a.split('=')[1])
+        elif a.startswith('--htf='):
+            htf_val = a.split('=')[1]
+        elif a.startswith('--ltf='):
+            ltf_val = a.split('=')[1]
+        elif a == '--no-pd':
+            no_pd_val = True
+        elif a.startswith('--min-hybrid='):
+            min_hybrid_val = int(a.split('=')[1])
         elif a.startswith('--'):
             continue
         else:
@@ -605,8 +629,12 @@ if __name__ == '__main__':
     if symbol.upper() in EQUITY_SYMBOLS:
         risk_dollars = float(positional[2]) if len(positional) > 2 else 500
         run_backtest(symbol=symbol, days=days, contracts=0,
-                     t1_r=t1_r_val, trail_r=trail_r_val, risk_per_trade=risk_dollars)
+                     t1_r=t1_r_val, trail_r=trail_r_val, risk_per_trade=risk_dollars,
+                     htf_interval=htf_val, ltf_interval=ltf_val,
+                     no_pd=no_pd_val, min_hybrid=min_hybrid_val)
     else:
         contracts = int(positional[2]) if len(positional) > 2 else 0  # 0 = auto-size
         run_backtest(symbol=symbol, days=days, contracts=contracts,
-                     t1_r=t1_r_val, trail_r=trail_r_val)
+                     t1_r=t1_r_val, trail_r=trail_r_val,
+                     htf_interval=htf_val, ltf_interval=ltf_val,
+                     no_pd=no_pd_val, min_hybrid=min_hybrid_val)

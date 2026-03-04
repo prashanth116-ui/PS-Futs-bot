@@ -565,7 +565,13 @@ class TradovateClient:
             if 'errorText' not in data:
                 logger.info("Order %d modified", order_id)
                 return True
-            logger.error("Modify error: %s", data['errorText'])
+            logger.error("Modify error for order %d: %s", order_id, data['errorText'])
+        else:
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text[:200]
+            logger.error("Modify order %d failed: HTTP %d — %s", order_id, response.status_code, body)
 
         return False
 

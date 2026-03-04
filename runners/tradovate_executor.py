@@ -110,12 +110,12 @@ class TradovateExecutor(ExecutorInterface):
         for attempt in range(self.retry_max + 1):
             try:
                 result = fn(*args, **kwargs)
-                if result is not None:
+                if result is not None and result is not False:
                     # Success — reset failure counter
                     self._consecutive_failures = 0
                     self._broker_down_alerted = False
                     return result
-                last_error = f"{operation_name} returned None"
+                last_error = f"{operation_name} returned {result}"
             except Exception as e:
                 last_error = str(e)
                 logger.warning(

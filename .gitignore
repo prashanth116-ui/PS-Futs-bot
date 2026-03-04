@@ -17,6 +17,7 @@ config/.env
 config/tradingview.env
 config/pickmytrade_accounts.json
 config/tradovate_direct.json
+config/tradovate_credentials.json
 .env
 *.pem
 *.key

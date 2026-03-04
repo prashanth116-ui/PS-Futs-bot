@@ -356,6 +356,9 @@ class LiveTrader:
                             paper_trade_id=trade.id,
                         )
                         success = result and result.get('success', False)
+                        if not success and result and result.get('permanent'):
+                            log(f"    [BROKER RETRY] {op_type} {trade.id} permanent failure — dropping")
+                            continue
                 except Exception as e:
                     log(f"    [BROKER RETRY] {op_type} {trade.id} still failing: {e}")
 
@@ -394,6 +397,9 @@ class LiveTrader:
                             paper_trade_id=trade_id,
                         )
                         success = result and result.get('success', False)
+                        if not success and result and result.get('permanent'):
+                            log(f"    [BROKER RETRY] orphaned {op_type} {trade_id} permanent failure — dropping")
+                            continue
                 except Exception as e:
                     log(f"    [BROKER RETRY] orphaned {op_type} {trade_id} still failing: {e}")
 

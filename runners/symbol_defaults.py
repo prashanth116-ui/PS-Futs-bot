@@ -316,3 +316,5 @@ def get_consec_loss_limit(symbol):
     if symbol in FUTURES_DEFAULTS:
         return FUTURES_DEFAULTS[symbol].get('max_consec_losses', 0)
     return 0
+# test
+# test comment
