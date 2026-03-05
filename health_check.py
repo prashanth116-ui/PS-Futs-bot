@@ -51,6 +51,12 @@ def main():
             "runners/plot_v10_date.py",
             "runners/notifier.py",
             "runners/risk_manager.py",
+            # Prop firm fork
+            "run_prop_paper_trading.py",
+            "runners/prop_firm/run_live.py",
+            "runners/prop_firm/run_v10_dual_entry.py",
+            "runners/prop_firm/backtest_v10_multiday.py",
+            "runners/prop_firm/risk_manager.py",
         ]
         all_ok = True
         for rf in runner_files:
@@ -111,10 +117,96 @@ def main():
             print(f"  Connection: FAILED - {e}")
             errors.append(f"TradingView: {e}")
 
-    # Check droplet
+    # Check code sync (local vs droplet)
     import subprocess
     import platform
+    import hashlib
     is_droplet = platform.system() == "Linux" and Path("/opt/tradovate-bot").exists()
+
+    SYNC_FILES = [
+        "runners/run_live.py",
+        "runners/run_v10_dual_entry.py",
+        "runners/run_v10_equity.py",
+        "runners/symbol_defaults.py",
+        "runners/risk_manager.py",
+        "runners/tradovate_client.py",
+        "runners/tradovate_executor.py",
+        "runners/webhook_executor.py",
+        "runners/backtest_v10_multiday.py",
+        "runners/notifier.py",
+        "run_paper_trading.py",
+        # Prop firm fork
+        "runners/prop_firm/symbol_defaults.py",
+        "runners/prop_firm/run_live.py",
+        "runners/prop_firm/run_v10_dual_entry.py",
+        "runners/prop_firm/backtest_v10_multiday.py",
+        "runners/prop_firm/risk_manager.py",
+        "run_prop_paper_trading.py",
+        "version.py",
+        "health_check.py",
+    ]
+
+    def file_md5(path):
+        """Compute MD5 of a file, normalizing line endings."""
+        try:
+            content = Path(path).read_bytes().replace(b'\r\n', b'\n')
+            return hashlib.md5(content).hexdigest()[:12]
+        except Exception:
+            return None
+
+    if not is_droplet:
+        DROPLET = "root@107.170.74.154"
+        SSH_OPTS = ["-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
+
+        print("\nCode Sync (local vs droplet):")
+        try:
+            # Build remote hash command for all files
+            remote_cmd = "; ".join(
+                f"md5sum /opt/tradovate-bot/{f} 2>/dev/null || echo MISSING {f}"
+                for f in SYNC_FILES
+            )
+            result = subprocess.run(
+                ["ssh"] + SSH_OPTS + [DROPLET, remote_cmd],
+                capture_output=True, text=True, timeout=15
+            )
+            # Parse remote hashes
+            remote_hashes = {}
+            for line in result.stdout.strip().split("\n"):
+                if line.startswith("MISSING"):
+                    fname = line.split(" ", 1)[1].strip()
+                    remote_hashes[fname] = None
+                else:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        rhash = parts[0][:12]
+                        rpath = parts[1].replace("/opt/tradovate-bot/", "")
+                        remote_hashes[rpath] = rhash
+
+            # Compare
+            mismatches = []
+            for f in SYNC_FILES:
+                local_hash = file_md5(f)
+                remote_hash = remote_hashes.get(f)
+                if local_hash is None and remote_hash is None:
+                    continue
+                if local_hash != remote_hash:
+                    mismatches.append(f)
+
+            if mismatches:
+                print(f"  OUT OF SYNC: {len(mismatches)} file(s)")
+                for f in mismatches:
+                    lh = file_md5(f) or "MISSING"
+                    rh = remote_hashes.get(f) or "MISSING"
+                    print(f"    {f}: local={lh} droplet={rh}")
+                errors.append(f"Code sync: {len(mismatches)} file(s) out of sync — run deploy")
+            else:
+                print(f"  All {len(SYNC_FILES)} files: IN SYNC")
+        except subprocess.TimeoutExpired:
+            print("  SKIPPED (SSH timeout)")
+        except FileNotFoundError:
+            print("  SKIPPED (no SSH client)")
+        except Exception as e:
+            print(f"  SKIPPED ({e})")
 
     if is_droplet:
         # Running on the droplet - check service locally
@@ -143,6 +235,19 @@ def main():
         except Exception as e:
             print(f"  Service: ERROR - {e}")
             errors.append(f"Service check: {e}")
+
+        # Also check prop firm service
+        print("\nProp Firm Paper Trading Service:")
+        try:
+            result = subprocess.run(["systemctl", "is-active", "prop-paper-trading"],
+                                    capture_output=True, text=True, timeout=15)
+            status = result.stdout.strip()
+            if result.returncode == 0 and status == "active":
+                print("  Service: ACTIVE")
+            else:
+                print(f"  Service: {status.upper() if status else 'NOT INSTALLED'}")
+        except Exception as e:
+            print(f"  Service: ERROR - {e}")
     else:
         # Running locally - SSH into droplet for full health check
         DROPLET = "root@107.170.74.154"

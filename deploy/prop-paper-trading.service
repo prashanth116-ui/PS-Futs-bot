@@ -1,0 +1,17 @@
+[Unit]
+Description=Prop Firm Paper Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tradovate-bot
+Environment=PATH=/opt/tradovate-bot/venv/bin:/usr/bin
+ExecStartPre=/bin/mkdir -p /opt/tradovate-bot/logs/prop_paper_trading
+ExecStart=/opt/tradovate-bot/venv/bin/python run_prop_paper_trading.py --webhook --symbols ES MES
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/opt/tradovate-bot/logs/prop_paper_trading/service.log
+StandardError=append:/opt/tradovate-bot/logs/prop_paper_trading/service.log
+
+[Install]
+WantedBy=multi-user.target

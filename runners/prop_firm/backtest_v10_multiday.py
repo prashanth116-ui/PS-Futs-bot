@@ -1,0 +1,321 @@
+"""
+V10.16-PROP Multi-Day Backtest - Validate prop firm strategy across multiple trading days.
+"""
+import sys
+sys.path.insert(0, '.')
+
+from version import STRATEGY_VERSION
+
+from datetime import time as dt_time
+from runners.tradingview_loader import fetch_futures_bars
+from runners.bar_storage import load_bars_with_history
+from runners.prop_firm.run_v10_dual_entry import run_session_v10
+from runners.prop_firm.symbol_defaults import get_symbol_config, get_session_v10_kwargs
+
+
+def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, verbose=False, fvg_mode="wick",
+                          opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False,
+                          opp_fvg_mode=None,
+                          min_fvg_ticks=5, min_risk_override=None,
+                          post_t1_trail_r=0, t2_fixed_r=0, time_decay_bars=0, time_decay_r=0):
+    """Run V10 backtest across multiple days."""
+
+    cfg = get_symbol_config(symbol)
+    tick_size = cfg['tick_size']
+    tick_value = cfg['tick_value']
+    min_risk_pts = min_risk_override if min_risk_override is not None else cfg['min_risk']
+    max_bos_risk_pts = cfg['max_bos_risk']
+    max_retrace_risk_pts = cfg.get('max_retrace_risk')
+
+    print(f'Loading {symbol} 3m data for {days}-day backtest (local + live)...')
+    # Load local stored bars + live TradingView bars for deeper history
+    all_bars = load_bars_with_history(symbol=symbol, interval='3m', n_bars=10000)
+
+    if not all_bars:
+        print('No data available')
+        return
+
+    # Get unique trading dates
+    all_dates = sorted(set(b.timestamp.date() for b in all_bars), reverse=True)
+
+    # Filter to trading days only (has session bars 4:00-16:00)
+    # Full session = ~240 bars (4:00-16:00). Allow partial days (>=10 bars) with warning.
+    FULL_SESSION_BARS = 240
+    MIN_SESSION_BARS = 10
+    trading_dates = []
+    partial_dates = {}  # date -> session_bar_count for days below full session
+    for d in all_dates:
+        day_bars = [b for b in all_bars if b.timestamp.date() == d]
+        session_bars = [b for b in day_bars if dt_time(4, 0) <= b.timestamp.time() <= dt_time(16, 0)]
+        if len(session_bars) >= MIN_SESSION_BARS:
+            trading_dates.append(d)
+            if len(session_bars) < FULL_SESSION_BARS:
+                partial_dates[d] = len(session_bars)
+        if len(trading_dates) >= days:
+            break
+
+    trading_dates = sorted(trading_dates)  # Oldest first
+
+    print(f'Found {len(trading_dates)} trading days')
+    print(f'Date range: {trading_dates[0]} to {trading_dates[-1]}')
+    print()
+    print('='*80)
+    print(f'{symbol} {STRATEGY_VERSION} MULTI-DAY BACKTEST - {len(trading_dates)} Days - {contracts} Contracts')
+    print('='*80)
+    print(f'Strategy: {STRATEGY_VERSION} Quad Entry (Hybrid Exit - T1 at {t1_r}R, Trail at {trail_r}R)')
+    print(f'  - FVG Mode: {fvg_mode.upper()} ({"high/low" if fvg_mode == "wick" else "open/close"})')
+    print('  - Entry Types: Creation, Overnight Retrace, Intraday Retrace, BOS')
+    print('  - Morning only filter: NO (parity with live runner)')
+    print(f'  - Min risk: {min_risk_pts} pts')
+    print(f'  - Max BOS risk: {max_bos_risk_pts} pts')
+    print(f'  - Max retrace risk (1-ct cap): {max_retrace_risk_pts} pts')
+    print(f'  - T1 Exit: {t1_r}R | Trail Activation: {trail_r}R | Trail Floor: {t1_r}R')
+    if opp_fvg_exit:
+        trigger = "after 6R" if opp_fvg_after_6r else "after T1"
+        opp_mode_label = (opp_fvg_mode or fvg_mode).upper()
+        print(f'  - Opposing FVG Exit: ON ({trigger}, min {opp_fvg_min_ticks} ticks, {opp_mode_label} detection)')
+    if post_t1_trail_r > 0:
+        print(f'  - Post-T1 Trail: +{post_t1_trail_r}R (instead of breakeven)')
+    # Show effective T2 fixed R (per-symbol default or CLI override)
+    effective_t2_fixed_r = t2_fixed_r if t2_fixed_r > 0 else cfg.get('t2_fixed_r', 0)
+    if effective_t2_fixed_r > 0:
+        print(f'  - T2 Fixed Exit: {effective_t2_fixed_r}R (ES/MES only)')
+    if time_decay_bars > 0:
+        print(f'  - Time Decay: Tighten to +{time_decay_r}R after {time_decay_bars} bars past T1')
+    print('='*80)
+    print()
+
+    # Track results
+    daily_results = []
+    total_trades = 0
+    total_wins = 0
+    total_losses = 0
+    total_pnl = 0
+
+    entry_type_counts = {'CREATION': 0, 'RETRACEMENT': 0, 'INTRADAY_RETRACE': 0, 'BOS_RETRACE': 0}
+
+    max_drawdown = 0
+    peak_pnl = 0
+    losing_streak = 0
+    max_losing_streak = 0
+
+    print(f'{"Date":<12} {"Trades":>7} {"Wins":>5} {"Losses":>7} {"Win%":>6} {"P/L":>12} {"Cumulative":>12}')
+    print('-'*80)
+
+    for target_date in trading_dates:
+        # Get bars for this date
+        day_bars = [b for b in all_bars if b.timestamp.date() == target_date]
+
+        premarket_start = dt_time(4, 0)
+        rth_end = dt_time(16, 0)
+        session_bars = [b for b in day_bars if premarket_start <= b.timestamp.time() <= rth_end]
+
+        if len(session_bars) < MIN_SESSION_BARS:
+            continue
+
+        # Build kwargs from centralized config with CLI overrides
+        cli_overrides = {}
+        if t1_r != cfg.get('t1_r_target', 3):
+            cli_overrides['t1_r_target'] = t1_r
+        if trail_r != cfg.get('trail_r_trigger', 4):
+            cli_overrides['trail_r_trigger'] = trail_r
+        if min_risk_override is not None:
+            cli_overrides['min_risk'] = min_risk_override
+        if t2_fixed_r > 0:
+            cli_overrides['t2_fixed_r'] = t2_fixed_r
+
+        kwargs = get_session_v10_kwargs(symbol, **cli_overrides)
+
+        # Add backtest-specific params not in centralized config
+        kwargs['fvg_mode'] = fvg_mode
+        kwargs['opposing_fvg_mode'] = opp_fvg_mode
+        kwargs['entry_min_fvg_ticks'] = min_fvg_ticks
+        kwargs['post_t1_trail_r'] = post_t1_trail_r
+        kwargs['time_decay_bars'] = time_decay_bars
+        kwargs['time_decay_r'] = time_decay_r
+
+        # CLI overrides for opposing FVG (only if explicitly passed)
+        if opp_fvg_exit:
+            kwargs['opposing_fvg_exit'] = opp_fvg_exit
+            kwargs['opposing_fvg_min_ticks'] = opp_fvg_min_ticks
+            kwargs['opposing_fvg_after_6r_only'] = opp_fvg_after_6r
+
+        # Run V10 strategy with all filters
+        results = run_session_v10(
+            session_bars,
+            all_bars,
+            **kwargs,
+        )
+
+        # Tally results
+        day_trades = len(results)
+        day_wins = sum(1 for r in results if r['total_dollars'] > 0)
+        day_losses = sum(1 for r in results if r['total_dollars'] < 0)
+        day_pnl = sum(r['total_dollars'] for r in results)
+
+        total_trades += day_trades
+        total_wins += day_wins
+        total_losses += day_losses
+        total_pnl += day_pnl
+
+        # Track entry types
+        for r in results:
+            et = r['entry_type']
+            if et in entry_type_counts:
+                entry_type_counts[et] += 1
+
+        # Track drawdown
+        if total_pnl > peak_pnl:
+            peak_pnl = total_pnl
+        drawdown = peak_pnl - total_pnl
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+        # Track losing streak
+        if day_pnl < 0:
+            losing_streak += 1
+            if losing_streak > max_losing_streak:
+                max_losing_streak = losing_streak
+        else:
+            losing_streak = 0
+
+        win_rate = (day_wins / day_trades * 100) if day_trades > 0 else 0
+
+        daily_results.append({
+            'date': target_date,
+            'trades': day_trades,
+            'wins': day_wins,
+            'losses': day_losses,
+            'pnl': day_pnl,
+            'cumulative': total_pnl,
+        })
+
+        partial_tag = f'  * PARTIAL ({partial_dates[target_date]}/{FULL_SESSION_BARS} session bars)' if target_date in partial_dates else ''
+        print(f'{target_date} {day_trades:>7} {day_wins:>5} {day_losses:>7} {win_rate:>5.1f}% ${day_pnl:>+10,.0f} ${total_pnl:>+10,.0f}{partial_tag}')
+
+        # Per-trade verbose output (matches run_v10_dual_entry.py format)
+        if verbose and results:
+            for r in results:
+                entry_tag = r['entry_type']
+                reentry_tag = ' [2nd]' if r.get('is_reentry') else ''
+                result_str = 'WIN' if r['total_dollars'] > 0.01 else 'LOSS' if r['total_dollars'] < -0.01 else 'BE'
+                cts = r.get('contracts_filled', contracts)
+                print(f"  {r['direction']} {entry_tag}{reentry_tag} @ {r['entry_time'].strftime('%H:%M')} | "
+                      f"Entry: {r['entry_price']:.2f} | Stop: {r['stop_price']:.2f} | "
+                      f"Risk: {r['risk']:.2f} pts | {cts} cts | {result_str} ${r['total_dollars']:+,.2f}")
+                for e in r['exits']:
+                    dollars = (e['pnl'] / tick_size) * tick_value
+                    print(f"    {e['type']}: {e['cts']} ct @ {e['price']:.2f} = ${dollars:+,.2f}")
+
+    print('-'*80)
+    print()
+
+    # Summary statistics
+    win_rate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+
+    winning_days = sum(1 for r in daily_results if r['pnl'] > 0)
+    losing_days = sum(1 for r in daily_results if r['pnl'] < 0)
+    breakeven_days = sum(1 for r in daily_results if r['pnl'] == 0)
+
+    best_day = max(daily_results, key=lambda x: x['pnl'])
+    worst_day = min(daily_results, key=lambda x: x['pnl'])
+
+    avg_daily_pnl = total_pnl / len(daily_results) if daily_results else 0
+
+    # Profit factor
+    gross_profit = sum(r['pnl'] for r in daily_results if r['pnl'] > 0)
+    gross_loss = abs(sum(r['pnl'] for r in daily_results if r['pnl'] < 0))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
+    print('='*80)
+    print('SUMMARY')
+    print('='*80)
+    print(f'Trading Days:      {len(daily_results)}')
+    print(f'Total Trades:      {total_trades}')
+    print(f'Total Wins:        {total_wins}')
+    print(f'Total Losses:      {total_losses}')
+    print(f'Win Rate:          {win_rate:.1f}%')
+    print()
+    print(f'Winning Days:      {winning_days}')
+    print(f'Losing Days:       {losing_days}')
+    print(f'Breakeven Days:    {breakeven_days}')
+    print(f'Day Win Rate:      {winning_days/len(daily_results)*100:.1f}%')
+    print()
+    print(f'Total P/L:         ${total_pnl:+,.2f}')
+    print(f'Avg Daily P/L:     ${avg_daily_pnl:+,.2f}')
+    print(f'Best Day:          {best_day["date"]} ${best_day["pnl"]:+,.2f}')
+    print(f'Worst Day:         {worst_day["date"]} ${worst_day["pnl"]:+,.2f}')
+    print()
+    print(f'Gross Profit:      ${gross_profit:+,.2f}')
+    print(f'Gross Loss:        ${gross_loss:+,.2f}')
+    print(f'Profit Factor:     {profit_factor:.2f}')
+    print()
+    print(f'Max Drawdown:      ${max_drawdown:,.2f}')
+    print(f'Max Losing Streak: {max_losing_streak} days')
+    print()
+    print('Entry Type Breakdown:')
+    for et, count in entry_type_counts.items():
+        pct = count / total_trades * 100 if total_trades > 0 else 0
+        print(f'  {et}: {count} ({pct:.1f}%)')
+    print('='*80)
+
+    return daily_results
+
+
+if __name__ == '__main__':
+    symbol = sys.argv[1] if len(sys.argv) > 1 else 'ES'
+    days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+    contracts = int(sys.argv[3]) if len(sys.argv) > 3 and not sys.argv[3].startswith('--') else 3
+
+    # Parse optional flags
+    t1_r = 3
+    trail_r = 4  # V10.16: Lowered from 6R
+    verbose = False
+    fvg_mode = "wick"
+    opp_fvg_exit = False
+    opp_fvg_min_ticks = 5
+    opp_fvg_after_6r = False
+    opp_fvg_mode = None
+    min_fvg_ticks = 5
+    min_risk_override = None
+    post_t1_trail_r = 0
+    t2_fixed_r = 0
+    time_decay_bars = 0
+    time_decay_r = 0
+    for arg in sys.argv[3:]:
+        if arg.startswith('--t1-r='):
+            t1_r = int(arg.split('=')[1])
+        elif arg.startswith('--trail-r='):
+            trail_r = int(arg.split('=')[1])
+        elif arg == '--verbose' or arg == '-v':
+            verbose = True
+        elif arg.startswith('--fvg-mode='):
+            fvg_mode = arg.split('=')[1]
+        elif arg == '--opp-fvg-exit':
+            opp_fvg_exit = True
+        elif arg.startswith('--opp-fvg-min-ticks='):
+            opp_fvg_min_ticks = int(arg.split('=')[1])
+        elif arg == '--opp-fvg-after-6r':
+            opp_fvg_after_6r = True
+        elif arg.startswith('--opp-fvg-mode='):
+            opp_fvg_mode = arg.split('=')[1]
+        elif arg.startswith('--min-fvg-ticks='):
+            min_fvg_ticks = int(arg.split('=')[1])
+        elif arg.startswith('--min-risk='):
+            min_risk_override = float(arg.split('=')[1])
+        elif arg.startswith('--post-t1-trail-r='):
+            post_t1_trail_r = float(arg.split('=')[1])
+        elif arg.startswith('--t2-fixed-r='):
+            t2_fixed_r = float(arg.split('=')[1])
+        elif arg.startswith('--time-decay-bars='):
+            time_decay_bars = int(arg.split('=')[1])
+        elif arg.startswith('--time-decay-r='):
+            time_decay_r = float(arg.split('=')[1])
+
+    backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
+                          verbose=verbose, fvg_mode=fvg_mode,
+                          opp_fvg_exit=opp_fvg_exit, opp_fvg_min_ticks=opp_fvg_min_ticks,
+                          opp_fvg_after_6r=opp_fvg_after_6r, opp_fvg_mode=opp_fvg_mode,
+                          min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override,
+                          post_t1_trail_r=post_t1_trail_r, t2_fixed_r=t2_fixed_r,
+                          time_decay_bars=time_decay_bars, time_decay_r=time_decay_r)

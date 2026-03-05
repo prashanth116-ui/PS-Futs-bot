@@ -1,0 +1,23 @@
+{
+  "api_url": "https://api.pickmytrade.trade/v2/add-trade-data",
+  "retry_max": 2,
+  "retry_delay_sec": 1.0,
+  "contract_months": {
+    "ES": "ESM6",
+    "NQ": "NQM6",
+    "MES": "MESM6",
+    "MNQ": "MNQM6"
+  },
+  "strategy_groups": {
+    "ict_v10_prop": {
+      "primary_account": {
+        "name": "prop_eval_1",
+        "token": "YOUR_PMT_TOKEN",
+        "account_id": "YOUR_PROP_ACCT_ID",
+        "qty_multiplier": 1.0,
+        "enabled": true
+      },
+      "mirror_accounts": []
+    }
+  }
+}
