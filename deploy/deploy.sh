@@ -29,7 +29,10 @@ rsync -avz --progress \
     strategies/ \
     tests/ \
     run_paper_trading.py \
+    run_prop_paper_trading.py \
+    deploy/ \
     health_check.py \
+    version.py \
     requirements.txt \
     "$DROPLET_USER@$DROPLET_IP:$APP_DIR/"
 

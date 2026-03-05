@@ -529,6 +529,7 @@ class TradovateClient:
         price: Optional[float] = None,
         stop_price: Optional[float] = None,
         quantity: Optional[int] = None,
+        order_type: Optional[str] = None,
     ) -> bool:
         """
         Modify an existing order.
@@ -538,6 +539,7 @@ class TradovateClient:
             price: New limit price
             stop_price: New stop price
             quantity: New quantity
+            order_type: Order type (e.g. "Stop", "Limit") — required by Tradovate API
 
         Returns:
             True if modified successfully.
@@ -551,6 +553,8 @@ class TradovateClient:
             payload['stopPrice'] = stop_price
         if quantity is not None:
             payload['orderQty'] = quantity
+        if order_type is not None:
+            payload['orderType'] = order_type
 
         with self._lock:
             response = self._request_with_401_retry(

@@ -44,6 +44,7 @@ class OrderState:
     stop_order_id: Optional[int] = None
     remaining_contracts: int = 0
     entry_order_id: Optional[int] = None
+    stop_price: float = 0.0
 
 
 class TradovateExecutor(ExecutorInterface):
@@ -206,6 +207,7 @@ class TradovateExecutor(ExecutorInterface):
             stop_order_id=stop_id,
             remaining_contracts=contracts,
             entry_order_id=entry_order.id,
+            stop_price=stop_price,
         )
 
         logger.info(
@@ -263,6 +265,8 @@ class TradovateExecutor(ExecutorInterface):
                     self.client.modify_order,
                     order_id=state.stop_order_id,
                     quantity=state.remaining_contracts,
+                    stop_price=state.stop_price,
+                    order_type="Stop",
                 )
 
         return {"success": True, "close_order_id": close_order.id}
@@ -295,6 +299,8 @@ class TradovateExecutor(ExecutorInterface):
             self.client.modify_order,
             order_id=state.stop_order_id,
             stop_price=new_stop_price,
+            quantity=state.remaining_contracts,
+            order_type="Stop",
         )
 
         if success is None or success is False:
@@ -305,6 +311,9 @@ class TradovateExecutor(ExecutorInterface):
             )
             # Mark as permanent so run_live doesn't retry endlessly
             return {"success": False, "error": "Stop modify failed", "permanent": True}
+
+        # Keep state in sync so partial_close() uses current stop price
+        state.stop_price = new_stop_price
 
         return {"success": True}
 
