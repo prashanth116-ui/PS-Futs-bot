@@ -715,14 +715,23 @@ class LiveTrader:
 
         # Cache bars and FVGs for opposing FVG exit in _manage_paper_trades
         self._cached_all_bars[symbol] = bars
+
+        # Drop last bar (potentially incomplete) — prevents phantom FVGs
+        # Entry detection delayed by 1 bar (3 min) but eliminates phantom entries
+        strategy_session_bars = session_bars[:-1]
+        strategy_all_bars = bars[:-1]
+
+        if len(strategy_session_bars) < 1:
+            return
+
         if config.get('opp_fvg_exit'):
             fvg_config = {'min_fvg_ticks': 2, 'tick_size': config['tick_size'],
                           'max_fvg_age_bars': 200, 'invalidate_on_close_through': True, 'fvg_mode': 'wick'}
-            fvgs = detect_fvgs(bars, fvg_config)
+            fvgs = detect_fvgs(strategy_all_bars, fvg_config)
             for fvg in fvgs:
                 if not fvg.mitigated:
-                    for bar_idx in range(fvg.created_bar_index + 1, len(bars)):
-                        update_fvg_mitigation(fvg, bars[bar_idx], bar_idx, fvg_config)
+                    for bar_idx in range(fvg.created_bar_index + 1, len(strategy_all_bars)):
+                        update_fvg_mitigation(fvg, strategy_all_bars[bar_idx], bar_idx, fvg_config)
                         if fvg.mitigated:
                             break
             self._cached_fvgs[symbol] = fvgs
@@ -731,8 +740,8 @@ class LiveTrader:
         # Run V10.16 strategy using centralized config (max_consec_losses=0 — handled by risk_manager)
         kwargs = get_session_v10_kwargs(symbol, max_consec_losses=0)
         results = run_session_v10(
-            session_bars,
-            bars,
+            strategy_session_bars,
+            strategy_all_bars,
             **kwargs,
         )
 
@@ -769,11 +778,18 @@ class LiveTrader:
         self.last_prices[symbol] = current_price
         log(f"  {symbol}: ${current_price:.2f} ({len(session_bars)} session bars, {len(bars)} total)")
 
+        # Drop last bar (potentially incomplete) — prevents phantom FVGs
+        strategy_session_bars = session_bars[:-1]
+        strategy_all_bars = bars[:-1]
+
+        if len(strategy_session_bars) < 1:
+            return
+
         # Run V10.16 equity strategy using centralized config
         eq_kwargs = get_session_v10_equity_kwargs(symbol, risk_per_trade=config['risk_per_trade'])
         results = run_session_v10_equity(
-            session_bars,
-            bars,
+            strategy_session_bars,
+            strategy_all_bars,
             **eq_kwargs,
         )
 
@@ -809,7 +825,7 @@ class LiveTrader:
                 symbol=symbol,
                 direction=result['direction'],
                 entry_type=result['entry_type'],
-                contracts=config['contracts'],
+                contracts=result.get('contracts', config['contracts']),
                 risk_pts=result['risk'],
             )
 
@@ -1036,9 +1052,12 @@ class LiveTrader:
 
             # === STRUCTURE TRAIL UPDATES (before exit checks) ===
 
-            # T1 trail: update between 3R and 6R (2-tick buffer)
-            # Match backtest: check single bar at i-2 with last_swing gate
-            if trade.t1_hit and not trade.touched_8r and len(bars) >= 5:
+            # T1 trail swing update: DISABLED to match backtest parity.
+            # Backtest gate `touched_4r and not t1_exited` is never True because T1
+            # exits immediately on the same bar (t1_fixed_4r=True). So the breakeven
+            # trail stays at entry_price between 3R and 4R — no swing ratchet.
+            # The trail STOP check at line ~1319 still fires using the static breakeven.
+            if False and trade.t1_hit and not trade.touched_8r and len(bars) >= 5:
                 old_t1_trail = trade.t1_trail_stop
                 check_idx = len(bars) - 3  # Equivalent to backtest's i-2
                 if trade.is_long:
@@ -1155,6 +1174,9 @@ class LiveTrader:
                     log(f"\n  [PAPER] T1 HIT: {trade.symbol} +${trade.t1_pnl:,.2f} (3R)")
                     log(f"    Breakeven trail active for {trade.contracts - cts_t1} remaining cts")
 
+                    # Update risk manager contract count
+                    self.risk_manager.record_partial_exit(trade.symbol, cts_t1, trade.t1_pnl)
+
                     # Broker: partial close T1 (1ct) + move stop to breakeven
                     if self.executor and trade.asset_type == 'futures':
                         try:
@@ -1216,6 +1238,9 @@ class LiveTrader:
                     trade.t2_hit = True
                     trade.t2_pnl = trade.calculate_pnl(t2_target, cts_t2)
                     log(f"\n  [PAPER] T2 FIXED: {trade.symbol} ${trade.t2_pnl:+,.2f} (5R)")
+
+                    # Update risk manager contract count
+                    self.risk_manager.record_partial_exit(trade.symbol, cts_t2, trade.t2_pnl)
 
                     # For 2-ct trades (no runner), trade is done
                     if not trade.has_runner:
@@ -1317,6 +1342,7 @@ class LiveTrader:
                     # All remaining contracts exit at t1_trail_stop
                     trade.t2_pnl = trade.calculate_pnl(trade.t1_trail_stop, cts_t2)
                     trade.t2_hit = True
+                    self.risk_manager.record_partial_exit(trade.symbol, cts_t2, trade.t2_pnl)
                     if trade.has_runner and cts_runner > 0:
                         trade.runner_pnl = trade.calculate_pnl(trade.t1_trail_stop, cts_runner)
                         trade.runner_exit = True
@@ -1366,6 +1392,9 @@ class LiveTrader:
                     trade.t2_hit = True
                     trade.t2_pnl = trade.calculate_pnl(trade.t2_trail_stop, cts_t2)
                     log(f"\n  [PAPER] T2 TRAIL: {trade.symbol} ${trade.t2_pnl:+,.2f}")
+
+                    # Update risk manager contract count
+                    self.risk_manager.record_partial_exit(trade.symbol, cts_t2, trade.t2_pnl)
 
                     # For 2-ct trades (no runner), trade is done
                     if not trade.has_runner:
@@ -1502,6 +1531,7 @@ class LiveTrader:
                             if not trade.t2_hit:
                                 trade.t2_pnl = trade.calculate_pnl(current_close, cts_t2)
                                 trade.t2_hit = True
+                                self.risk_manager.record_partial_exit(trade.symbol, cts_t2, trade.t2_pnl)
                                 remaining_cts += cts_t2
                             if trade.has_runner and not trade.runner_exit:
                                 trade.runner_pnl = trade.calculate_pnl(current_close, cts_runner)
@@ -1552,8 +1582,18 @@ class LiveTrader:
         # Remove closed trades from active tracking
         for trade_id in closed_trades:
             trade = self.paper_trades[trade_id]
+            # Calculate remaining contracts and P/L not yet recorded via record_partial_exit
+            remaining = trade.contracts
+            remaining_pnl = trade.total_pnl
+            if trade.t1_hit:
+                remaining -= 1
+                remaining_pnl -= trade.t1_pnl  # T1 P/L already recorded
+            if trade.t2_hit:
+                remaining -= 1
+                remaining_pnl -= trade.t2_pnl  # T2 P/L already recorded
+            remaining = max(0, remaining)
             self.risk_manager.record_trade_exit(
-                trade.symbol, trade.contracts, trade.total_pnl,
+                trade.symbol, remaining, remaining_pnl,
                 is_win=trade.total_pnl > 0,
             )
             self.paper_trade_history.append(self._snapshot_paper_trade(trade))
@@ -1622,9 +1662,18 @@ class LiveTrader:
             else:
                 self.paper_daily_losses += 1
 
-            # Record in risk manager
+            # Record in risk manager (subtract only remaining contracts and P/L)
+            remaining = trade.contracts
+            remaining_pnl = trade.total_pnl
+            if trade.t1_hit:
+                remaining -= 1
+                remaining_pnl -= trade.t1_pnl
+            if trade.t2_hit:
+                remaining -= 1
+                remaining_pnl -= trade.t2_pnl
+            remaining = max(0, remaining)
             self.risk_manager.record_trade_exit(
-                trade.symbol, trade.contracts, trade.total_pnl,
+                trade.symbol, remaining, remaining_pnl,
                 is_win=trade.total_pnl > 0,
             )
 
