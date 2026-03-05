@@ -67,7 +67,7 @@ FUTURES_DEFAULTS = {
         'max_bos_risk': 8.0,
         'max_retrace_risk': 8.0,
         'disable_bos': True,
-        'max_consec_losses': 2,
+        'max_consec_losses': 3,
         't2_fixed_r': 5,           # V10.16: Fixed T2 exit at 5R
         'opp_fvg_exit': True,
         'opp_fvg_min_ticks': 10,   # B2: after 6R, 10 ticks
@@ -95,7 +95,7 @@ FUTURES_DEFAULTS = {
         'max_bos_risk': 8.0,
         'max_retrace_risk': 8.0,
         'disable_bos': True,
-        'max_consec_losses': 2,
+        'max_consec_losses': 3,
         't2_fixed_r': 5,
         'opp_fvg_exit': True,
         'opp_fvg_min_ticks': 10,

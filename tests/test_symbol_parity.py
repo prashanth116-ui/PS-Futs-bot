@@ -329,8 +329,8 @@ class TestSymbolConfigAPI:
         assert kwargs['trail_r_trigger'] == 8
 
     def test_consec_loss_limit(self):
-        assert get_consec_loss_limit('ES') == 2
-        assert get_consec_loss_limit('MES') == 2
+        assert get_consec_loss_limit('ES') == 3
+        assert get_consec_loss_limit('MES') == 3
         assert get_consec_loss_limit('NQ') == 3
         assert get_consec_loss_limit('MNQ') == 3
         assert get_consec_loss_limit('SPY') == 0
@@ -352,7 +352,7 @@ class TestSymbolConfigAPI:
         assert cfg['max_bos_risk'] == 8.0
         assert cfg['max_retrace_risk'] == 8.0
         assert cfg['disable_bos'] is True
-        assert cfg['max_consec_losses'] == 2
+        assert cfg['max_consec_losses'] == 3
         assert cfg['t1_r_target'] == 3
         assert cfg['trail_r_trigger'] == 4
         assert cfg['t2_fixed_r'] == 5
