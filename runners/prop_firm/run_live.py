@@ -694,23 +694,14 @@ class LiveTrader:
 
         # Cache bars and FVGs for opposing FVG exit in _manage_paper_trades
         self._cached_all_bars[symbol] = bars
-
-        # Drop last bar (potentially incomplete) — prevents phantom FVGs
-        # Entry detection delayed by 1 bar (3 min) but eliminates phantom entries
-        strategy_session_bars = session_bars[:-1]
-        strategy_all_bars = bars[:-1]
-
-        if len(strategy_session_bars) < 1:
-            return
-
         if config.get('opp_fvg_exit'):
             fvg_config = {'min_fvg_ticks': 2, 'tick_size': config['tick_size'],
                           'max_fvg_age_bars': 200, 'invalidate_on_close_through': True, 'fvg_mode': 'wick'}
-            fvgs = detect_fvgs(strategy_all_bars, fvg_config)
+            fvgs = detect_fvgs(bars, fvg_config)
             for fvg in fvgs:
                 if not fvg.mitigated:
-                    for bar_idx in range(fvg.created_bar_index + 1, len(strategy_all_bars)):
-                        update_fvg_mitigation(fvg, strategy_all_bars[bar_idx], bar_idx, fvg_config)
+                    for bar_idx in range(fvg.created_bar_index + 1, len(bars)):
+                        update_fvg_mitigation(fvg, bars[bar_idx], bar_idx, fvg_config)
                         if fvg.mitigated:
                             break
             self._cached_fvgs[symbol] = fvgs
@@ -719,8 +710,8 @@ class LiveTrader:
         # Run V10.16 strategy using centralized config (max_consec_losses=0 — handled by risk_manager)
         kwargs = get_session_v10_kwargs(symbol, max_consec_losses=0)
         results = run_session_v10(
-            strategy_session_bars,
-            strategy_all_bars,
+            session_bars,
+            bars,
             **kwargs,
         )
 
