@@ -236,6 +236,7 @@ class LiveTrader:
         self.running = False
         self.last_scan_time: Dict[str, datetime] = {}
         self.processed_signals: Dict[str, set] = {s: set() for s in self.symbols}
+        self._prev_scan_signal_ids: Dict[str, set] = {s: set() for s in self.symbols}  # FVG confirmation filter
 
         # Paper trading simulation
         self.paper_trades: Dict[str, PaperTrade] = {}  # trade_id -> PaperTrade
@@ -782,6 +783,12 @@ class LiveTrader:
 
     def _process_futures_signals(self, symbol: str, results: List[Dict], config: Dict):
         """Process signals from futures strategy."""
+        # Build current scan's signal IDs for FVG confirmation filter
+        current_scan_ids = set()
+        for result in results:
+            sig_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+            current_scan_ids.add(sig_id)
+
         for result in results:
             signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
 
@@ -795,6 +802,13 @@ class LiveTrader:
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
+                continue
+
+            # FVG confirmation filter: CREATION entries must persist across 2 scans
+            # Phantom FVGs from incomplete bars disappear on next scan — never confirmed
+            # Retraces/BOS use older FVGs that are inherently confirmed
+            if result['entry_type'] == 'CREATION' and signal_id not in self._prev_scan_signal_ids[symbol]:
+                log(f"  PENDING: {result['direction']} {symbol} CREATION @ {result['entry_price']:.2f} — confirming next scan")
                 continue
 
             print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
@@ -838,8 +852,17 @@ class LiveTrader:
 
             self.processed_signals[symbol].add(signal_id)
 
+        # Update prev scan signal IDs for next scan's confirmation filter
+        self._prev_scan_signal_ids[symbol] = current_scan_ids
+
     def _process_equity_signals(self, symbol: str, results: List[Dict], config: Dict):
         """Process signals from equity strategy."""
+        # Build current scan's signal IDs for FVG confirmation filter
+        current_scan_ids = set()
+        for result in results:
+            sig_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+            current_scan_ids.add(sig_id)
+
         for result in results:
             signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
 
@@ -853,6 +876,11 @@ class LiveTrader:
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
+                continue
+
+            # FVG confirmation filter: CREATION entries must persist across 2 scans
+            if result['entry_type'] == 'CREATION' and signal_id not in self._prev_scan_signal_ids[symbol]:
+                log(f"  PENDING: {result['direction']} {symbol} CREATION @ ${result['entry_price']:.2f} — confirming next scan")
                 continue
 
             print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
@@ -884,6 +912,9 @@ class LiveTrader:
                 print("    [EQUITY LIVE NOT IMPLEMENTED]")
 
             self.processed_signals[symbol].add(signal_id)
+
+        # Update prev scan signal IDs for next scan's confirmation filter
+        self._prev_scan_signal_ids[symbol] = current_scan_ids
 
     def _execute_futures_signal(self, symbol: str, result: Dict, config: Dict):
         """Execute a futures trading signal."""
@@ -2096,6 +2127,9 @@ class LiveTrader:
 
 def main():
     """Main entry point."""
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
+
     parser = argparse.ArgumentParser(description=f'{STRATEGY_VERSION} Live Trading - Futures + Equities')
     parser.add_argument('--live', action='store_true', help='Enable live trading (default: demo)')
     parser.add_argument('--paper', action='store_true', help='Paper trading mode (signals only)')

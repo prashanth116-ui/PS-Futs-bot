@@ -146,6 +146,27 @@ class TradovateExecutor(ExecutorInterface):
 
         return None
 
+    def _get_symbol_net_position(self, symbol: str) -> int:
+        """Query broker for the current net position of a symbol.
+
+        Returns net_pos (positive=LONG, negative=SHORT, 0=flat).
+        """
+        try:
+            contract_symbol = self._get_contract_symbol(symbol)
+            contract_id = self.client.get_contract_id(contract_symbol)
+            if not contract_id:
+                logger.warning("[TRADOVATE] Could not resolve contract_id for %s", contract_symbol)
+                return 0
+
+            positions = self.client.get_positions()
+            for pos in positions:
+                if pos.contract_id == contract_id:
+                    return pos.net_pos
+            return 0
+        except Exception as e:
+            logger.warning("[TRADOVATE] Failed to query position for %s: %s", symbol, e)
+            return 0
+
     def open_position(
         self,
         symbol: str,
@@ -240,6 +261,30 @@ class TradovateExecutor(ExecutorInterface):
             "[TRADOVATE] PARTIAL CLOSE: %s %s %d [%s]",
             opposing.value, contract_symbol, contracts, paper_trade_id,
         )
+
+        # Check broker position before sending close order
+        net_pos = self._get_symbol_net_position(symbol)
+        position_matches = (direction == "LONG" and net_pos > 0) or (direction == "SHORT" and net_pos < 0)
+
+        if not position_matches:
+            logger.warning(
+                "[TRADOVATE] SKIP partial close — broker position already flat/reversed "
+                "(net_pos=%d, trade direction=%s) [%s]",
+                net_pos, direction, paper_trade_id,
+            )
+            # Still update internal state so remaining_contracts stays in sync
+            if state:
+                state.remaining_contracts = max(0, state.remaining_contracts - contracts)
+            return {"success": True, "skipped": True, "reason": "position_flat"}
+
+        # Cap close quantity to actual broker position to avoid overshooting
+        actual_pos = abs(net_pos)
+        if contracts > actual_pos:
+            logger.warning(
+                "[TRADOVATE] Reducing partial close from %d to %d (broker has %d) [%s]",
+                contracts, actual_pos, actual_pos, paper_trade_id,
+            )
+            contracts = actual_pos
 
         # Place opposing market order to close partial
         close_order = self._retry_operation(
@@ -345,8 +390,30 @@ class TradovateExecutor(ExecutorInterface):
                     paper_trade_id,
                 )
 
-        # Determine remaining contracts
+        # Check broker position before sending close order — prevents double-close
+        net_pos = self._get_symbol_net_position(symbol)
+        position_matches = (direction == "LONG" and net_pos > 0) or (direction == "SHORT" and net_pos < 0)
+
+        if not position_matches:
+            logger.warning(
+                "[TRADOVATE] SKIP close — broker position already flat/reversed "
+                "(net_pos=%d, trade direction=%s) [%s]. Stop likely already fired.",
+                net_pos, direction, paper_trade_id,
+            )
+            # Clean up order state and return — do NOT send opposing market order
+            if paper_trade_id in self._orders:
+                del self._orders[paper_trade_id]
+            return {"success": True, "skipped": True, "reason": "position_flat"}
+
+        # Determine remaining contracts, capped to actual broker position
         remaining = state.remaining_contracts if state else 0
+        actual_pos = abs(net_pos)
+        if remaining > actual_pos:
+            logger.warning(
+                "[TRADOVATE] Reducing close from %d to %d (broker has %d) [%s]",
+                remaining, actual_pos, actual_pos, paper_trade_id,
+            )
+            remaining = actual_pos
 
         if remaining > 0:
             close_order = self._retry_operation(
