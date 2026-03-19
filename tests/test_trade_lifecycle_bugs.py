@@ -548,3 +548,347 @@ class TestBug6EquityEodClose:
         assert trader.paper_daily_trades == 2
         assert len(trader.paper_trades) == 0
         assert len(trader.paper_trade_history) == 2
+
+
+# =============================================================================
+# FIX 1: MultiExecutor _aggregate_result
+# =============================================================================
+
+class TestMultiExecutorAggregateResult:
+    """MultiExecutor must return flat {"success": bool} from all public methods."""
+
+    def test_aggregate_success_when_any_backend_succeeds(self):
+        """If any executor succeeds, aggregate result is success=True."""
+        from runners.multi_executor import MultiExecutor
+
+        mock_exec1 = MagicMock()
+        mock_exec1.open_position.return_value = {"success": True, "order_id": 123}
+        mock_exec1.get_account_count.return_value = 1
+
+        mock_exec2 = MagicMock()
+        mock_exec2.open_position.return_value = {"success": False, "error": "timeout"}
+        mock_exec2.get_account_count.return_value = 1
+
+        multi = MultiExecutor([mock_exec1, mock_exec2])
+        result = multi.open_position(
+            symbol="ES", direction="LONG", contracts=3,
+            stop_price=5000.0, entry_price=5010.0, paper_trade_id="TEST_1",
+        )
+
+        assert result.get('success') is True
+        assert 'details' in result
+
+    def test_aggregate_failure_when_all_backends_fail(self):
+        """If all executors fail, aggregate result is success=False."""
+        from runners.multi_executor import MultiExecutor
+
+        mock_exec1 = MagicMock()
+        mock_exec1.partial_close.return_value = {"success": False, "error": "timeout"}
+        mock_exec1.get_account_count.return_value = 1
+
+        multi = MultiExecutor([mock_exec1])
+        result = multi.partial_close(
+            symbol="ES", direction="LONG", contracts=1, paper_trade_id="TEST_1",
+        )
+
+        assert result.get('success') is False
+
+    def test_aggregate_propagates_permanent_when_all_permanent(self):
+        """permanent=True propagated only if ALL backends report it."""
+        from runners.multi_executor import MultiExecutor
+
+        mock_exec1 = MagicMock()
+        mock_exec1.update_stop.return_value = {"success": False, "permanent": True}
+        mock_exec1.get_account_count.return_value = 1
+
+        multi = MultiExecutor([mock_exec1])
+        result = multi.update_stop(
+            symbol="ES", direction="LONG", new_stop_price=5005.0,
+            entry_price=5010.0, paper_trade_id="TEST_1",
+        )
+
+        assert result.get('success') is False
+        assert result.get('permanent') is True
+
+    def test_aggregate_no_permanent_if_any_non_permanent(self):
+        """permanent should NOT be set if any backend doesn't report it."""
+        from runners.multi_executor import MultiExecutor
+
+        mock_exec1 = MagicMock()
+        mock_exec1.update_stop.return_value = {"success": False, "permanent": True}
+        mock_exec1.get_account_count.return_value = 1
+
+        mock_exec2 = MagicMock()
+        mock_exec2.update_stop.return_value = {"success": False, "error": "timeout"}
+        mock_exec2.get_account_count.return_value = 1
+
+        multi = MultiExecutor([mock_exec1, mock_exec2])
+        result = multi.update_stop(
+            symbol="ES", direction="LONG", new_stop_price=5005.0,
+            entry_price=5010.0, paper_trade_id="TEST_1",
+        )
+
+        assert result.get('permanent') is not True
+
+
+# =============================================================================
+# FIX 2: Retry attempt limit
+# =============================================================================
+
+class TestRetryAttemptLimit:
+    """Pending broker ops should be dropped after 5 failed attempts."""
+
+    def test_op_dropped_after_5_attempts(self):
+        """After 5 failed retries, op is dropped and Telegram alert sent."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        mock_executor.update_stop.return_value = {"success": False}
+        trader.executor = mock_executor
+
+        # Queue an op with 5 prior attempts (next will be #6 → dropped)
+        trade.pending_broker_ops = [{
+            'op': 'update_stop', 'stop_price': 5000.0, '_attempts': 5,
+        }]
+
+        with patch('runners.run_live.notify_status') as mock_notify:
+            trader._retry_pending_broker_ops()
+
+        # Op should be dropped
+        assert len(trade.pending_broker_ops) == 0
+        # Telegram alert should have been sent
+        mock_notify.assert_called_once()
+        assert 'Gave up' in mock_notify.call_args[0][0]
+        # Executor should NOT have been called (dropped before retry)
+        mock_executor.update_stop.assert_not_called()
+
+    def test_op_retried_under_5_attempts(self):
+        """Under 5 attempts, the op is retried normally."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        mock_executor.update_stop.return_value = {"success": False}
+        trader.executor = mock_executor
+
+        trade.pending_broker_ops = [{
+            'op': 'update_stop', 'stop_price': 5000.0, '_attempts': 2,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        # Op should still be pending (retry failed)
+        assert len(trade.pending_broker_ops) == 1
+        assert trade.pending_broker_ops[0]['_attempts'] == 3
+        # Executor should have been called
+        mock_executor.update_stop.assert_called_once()
+
+    def test_orphaned_op_dropped_after_5_attempts(self):
+        """Orphaned ops also respect the 5-attempt limit."""
+        trader = _make_trader()
+        mock_executor = MagicMock()
+        mock_executor.close_position.return_value = {"success": False}
+        trader.executor = mock_executor
+
+        trader._orphaned_broker_ops = [{
+            'op': 'close', '_trade_id': 'PAPER_ES_1',
+            '_symbol': 'ES', '_direction': 'LONG', '_entry_price': 5000.0,
+            '_attempts': 5,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        assert len(trader._orphaned_broker_ops) == 0
+        mock_executor.close_position.assert_not_called()
+
+
+# =============================================================================
+# FIX 3: Position-aware partial_close retry guard
+# =============================================================================
+
+class TestPositionAwareRetryGuard:
+    """Partial close retry should check broker position before re-sending."""
+
+    def test_skip_retry_when_broker_already_closed(self):
+        """If broker has expected remaining contracts, skip the retry."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True, contracts=3)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        # Broker has 2 contracts = T1 already closed (3-1=2)
+        mock_executor._get_symbol_net_position.return_value = 2
+        trader.executor = mock_executor
+
+        trade.pending_broker_ops = [{
+            'op': 'partial_close', 'contracts': 1, '_attempts': 0,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        # Op should be dropped (broker already at expected remaining)
+        assert len(trade.pending_broker_ops) == 0
+        # Should NOT have called partial_close
+        mock_executor.partial_close.assert_not_called()
+
+    def test_retry_when_broker_has_more_than_expected(self):
+        """If broker has more than expected, the close didn't execute — retry."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True, contracts=3)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        # Broker still has 3 = T1 close didn't execute
+        mock_executor._get_symbol_net_position.return_value = 3
+        mock_executor.partial_close.return_value = {"success": True}
+        trader.executor = mock_executor
+
+        trade.pending_broker_ops = [{
+            'op': 'partial_close', 'contracts': 1, '_attempts': 0,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        # Op should be removed (retry succeeded)
+        assert len(trade.pending_broker_ops) == 0
+        # Should have called partial_close
+        mock_executor.partial_close.assert_called_once()
+
+    def test_skip_retry_when_broker_flat(self):
+        """If broker is flat (0), skip the retry."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True, contracts=3)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        mock_executor._get_symbol_net_position.return_value = 0
+        trader.executor = mock_executor
+
+        trade.pending_broker_ops = [{
+            'op': 'partial_close', 'contracts': 1, '_attempts': 0,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        assert len(trade.pending_broker_ops) == 0
+        mock_executor.partial_close.assert_not_called()
+
+    def test_fallback_when_position_query_fails(self):
+        """If broker position query fails, proceed with retry anyway."""
+        trader = _make_trader()
+        trade = _make_paper_trade(t1_hit=True, contracts=3)
+        trader.paper_trades[trade.id] = trade
+
+        mock_executor = MagicMock()
+        # Position query raises exception → _query_broker_position returns None
+        mock_executor._get_symbol_net_position.side_effect = Exception("connection lost")
+        mock_executor.partial_close.return_value = {"success": True}
+        trader.executor = mock_executor
+
+        trade.pending_broker_ops = [{
+            'op': 'partial_close', 'contracts': 1, '_attempts': 0,
+        }]
+
+        with patch('runners.run_live.notify_status'):
+            trader._retry_pending_broker_ops()
+
+        # Should have retried despite position query failure
+        mock_executor.partial_close.assert_called_once()
+
+    def test_multiexecutor_position_query(self):
+        """_query_broker_position works with MultiExecutor wrapping TradovateExecutor."""
+        trader = _make_trader()
+
+        mock_inner = MagicMock()
+        mock_inner._get_symbol_net_position.return_value = -3
+
+        mock_multi = MagicMock()
+        mock_multi.executors = [mock_inner]
+        # MultiExecutor doesn't have _get_symbol_net_position directly
+        del mock_multi._get_symbol_net_position
+        trader.executor = mock_multi
+
+        result = trader._query_broker_position('ES')
+        assert result == 3  # abs(-3)
+
+
+# =============================================================================
+# FIX 4: Reconciliation accounts for pending ops
+# =============================================================================
+
+class TestReconciliationPendingOps:
+    """reconcile_positions must account for pending ops when computing paper position."""
+
+    def _make_mock_executor(self, broker_net_pos: dict):
+        """Create a mock TradovateExecutor with specified positions."""
+        mock = MagicMock()
+
+        # Mock broker positions
+        mock_positions = []
+        for sym, net_pos in broker_net_pos.items():
+            pos = MagicMock()
+            pos.net_pos = net_pos
+            pos.contract_id = hash(sym)  # Unique ID per symbol
+            mock_positions.append(pos)
+
+        mock.client.get_positions.return_value = mock_positions
+
+        # Contract month mapping
+        mock.contract_months = {sym: f"{sym}M6" for sym in broker_net_pos}
+        mock.client.get_contract_id.side_effect = lambda s: hash(s.replace('M6', ''))
+
+        return mock
+
+    def test_no_pending_ops_normal_reconcile(self):
+        """Without pending ops, reconciliation works as before."""
+        from runners.tradovate_executor import TradovateExecutor
+
+        # LONG trade with T1 hit → 2 remaining → paper=+2
+        mock_exec = self._make_mock_executor({'ES': 2})
+
+        trade = _make_paper_trade(direction='LONG', t1_hit=True, contracts=3)
+        paper_trades = {trade.id: trade}
+
+        warnings = TradovateExecutor.reconcile_positions(mock_exec, paper_trades)
+        assert len(warnings) == 0  # Should match: broker=+2, paper=+2
+
+    def test_pending_partial_close_adjusts_paper_count(self):
+        """Pending partial_close should add back to paper count (broker hasn't received it)."""
+        from runners.tradovate_executor import TradovateExecutor
+
+        # Broker still has 3 (T1 close didn't execute)
+        mock_exec = self._make_mock_executor({'ES': 3})
+
+        # Paper says T1 hit (remaining=2), but the partial_close is pending
+        trade = _make_paper_trade(direction='LONG', t1_hit=True, contracts=3)
+        paper_trades = {trade.id: trade}
+        pending_ops = {trade.id: [{'op': 'partial_close', 'contracts': 1}]}
+
+        warnings = TradovateExecutor.reconcile_positions(
+            mock_exec, paper_trades, pending_ops=pending_ops,
+        )
+        # Paper adjusted: 3 - 1(T1) + 1(pending) = 3 → matches broker=3
+        assert len(warnings) == 0
+
+    def test_no_pending_ops_shows_mismatch(self):
+        """Without pending_ops adjustment, T1 pending creates a mismatch."""
+        from runners.tradovate_executor import TradovateExecutor
+
+        # Broker has 3 (T1 close didn't execute)
+        mock_exec = self._make_mock_executor({'ES': 3})
+
+        trade = _make_paper_trade(direction='LONG', t1_hit=True, contracts=3)
+        paper_trades = {trade.id: trade}
+        # No pending_ops passed → paper thinks remaining=2, broker has 3
+
+        warnings = TradovateExecutor.reconcile_positions(mock_exec, paper_trades)
+        assert len(warnings) == 1
+        assert 'broker=3 vs paper=2' in warnings[0]

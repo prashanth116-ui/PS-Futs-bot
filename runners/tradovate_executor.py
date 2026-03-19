@@ -272,9 +272,10 @@ class TradovateExecutor(ExecutorInterface):
                 "(net_pos=%d, trade direction=%s) [%s]",
                 net_pos, direction, paper_trade_id,
             )
-            # Still update internal state so remaining_contracts stays in sync
+            # Broker is flat — stop already fired and closed ALL remaining contracts.
+            # Zero out (not just subtract) to prevent phantom positions.
             if state:
-                state.remaining_contracts = max(0, state.remaining_contracts - contracts)
+                state.remaining_contracts = 0
             return {"success": True, "skipped": True, "reason": "position_flat"}
 
         # Cap close quantity to actual broker position to avoid overshooting
@@ -477,12 +478,20 @@ class TradovateExecutor(ExecutorInterface):
 
         return {"success": True}
 
-    def reconcile_positions(self, paper_trades: Dict) -> List[str]:
+    def reconcile_positions(self, paper_trades: Dict, pending_ops: Optional[Dict] = None) -> List[str]:
         """Compare broker positions vs paper state. Advisory only.
+
+        Args:
+            paper_trades: Dict of trade_id -> PaperTrade objects
+            pending_ops: Optional dict of trade_id -> list of pending broker ops.
+                         Used to adjust paper position calculation — if a partial_close
+                         is pending (not yet sent to broker), don't subtract those
+                         contracts from the paper count.
 
         Returns list of warning messages for any mismatches.
         """
         warnings = []
+        pending_ops = pending_ops or {}
         try:
             broker_positions = self.client.get_positions()
 
@@ -498,7 +507,7 @@ class TradovateExecutor(ExecutorInterface):
 
             # Build paper position map: symbol -> expected net position
             paper_map: Dict[str, int] = {}
-            for trade in paper_trades.values():
+            for trade_id, trade in paper_trades.items():
                 if not hasattr(trade, 'status') or str(trade.status) != 'PaperTradeStatus.OPEN':
                     # Also check the enum value directly
                     try:
@@ -516,6 +525,21 @@ class TradovateExecutor(ExecutorInterface):
                     remaining -= 1
                 if trade.runner_exit:
                     remaining -= max(0, trade.contracts - 2)
+
+                # Add back pending closes that broker hasn't executed yet
+                trade_pending = pending_ops.get(trade_id, [])
+                for op in trade_pending:
+                    if op.get('op') == 'partial_close':
+                        remaining += op.get('contracts', 0)
+                    elif op.get('op') == 'close':
+                        # Full close pending — broker still has all remaining
+                        remaining = trade.contracts
+                        if trade.t1_hit and not any(
+                            p.get('op') == 'partial_close' for p in trade_pending
+                        ):
+                            # T1 close already executed (not pending), subtract it
+                            remaining -= 1
+                        break
 
                 signed = remaining if trade.direction == "LONG" else -remaining
                 paper_map[trade.symbol] = paper_map.get(trade.symbol, 0) + signed

@@ -217,6 +217,7 @@ class LiveTrader:
         self.running = False
         self.last_scan_time: Dict[str, datetime] = {}
         self.processed_signals: Dict[str, set] = {s: set() for s in self.symbols}
+        self._prev_scan_signal_ids: Dict[str, set] = {s: set() for s in self.symbols}  # FVG confirmation filter
 
         # Paper trading simulation
         self.paper_trades: Dict[str, PaperTrade] = {}  # trade_id -> PaperTrade
@@ -345,6 +346,8 @@ class LiveTrader:
 
                 if success:
                     log(f"    [BROKER RETRY] {op_type} {trade.id} succeeded")
+                    if hasattr(trade, '_broker_alerted_ops'):
+                        trade._broker_alerted_ops.discard(op_type)
                 else:
                     remaining_ops.append(op)
 
@@ -425,7 +428,12 @@ class LiveTrader:
         op = {'op': op_type, **kwargs}
         trade.pending_broker_ops.append(op)
         log(f"    [BROKER] Queued {op_type} for retry: {trade.id}")
-        notify_status(f"[BROKER] {op_type} failed for {trade.id} — queued for retry")
+        # Only send Telegram alert once per trade per op type to avoid spam
+        if not hasattr(trade, '_broker_alerted_ops'):
+            trade._broker_alerted_ops = set()
+        if op_type not in trade._broker_alerted_ops:
+            notify_status(f"[BROKER] {op_type} failed for {trade.id} — queued for retry")
+            trade._broker_alerted_ops.add(op_type)
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -757,6 +765,12 @@ class LiveTrader:
 
     def _process_futures_signals(self, symbol: str, results: List[Dict], config: Dict):
         """Process signals from futures strategy."""
+        # Build current scan's signal IDs for FVG confirmation filter
+        current_scan_ids = set()
+        for result in results:
+            sig_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+            current_scan_ids.add(sig_id)
+
         for result in results:
             signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
 
@@ -770,6 +784,13 @@ class LiveTrader:
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
+                continue
+
+            # FVG confirmation filter: CREATION entries must persist across 2 scans
+            # Phantom FVGs from incomplete bars disappear on next scan — never confirmed
+            # Retraces/BOS use older FVGs that are inherently confirmed
+            if result['entry_type'] == 'CREATION' and signal_id not in self._prev_scan_signal_ids[symbol]:
+                log(f"  PENDING: {result['direction']} {symbol} CREATION @ {result['entry_price']:.2f} — confirming next scan")
                 continue
 
             print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
@@ -813,8 +834,17 @@ class LiveTrader:
 
             self.processed_signals[symbol].add(signal_id)
 
+        # Update prev scan signal IDs for next scan's confirmation filter
+        self._prev_scan_signal_ids[symbol] = current_scan_ids
+
     def _process_equity_signals(self, symbol: str, results: List[Dict], config: Dict):
         """Process signals from equity strategy."""
+        # Build current scan's signal IDs for FVG confirmation filter
+        current_scan_ids = set()
+        for result in results:
+            sig_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
+            current_scan_ids.add(sig_id)
+
         for result in results:
             signal_id = f"{symbol}_{result['entry_time'].strftime('%H%M')}_{result['direction']}"
 
@@ -828,6 +858,11 @@ class LiveTrader:
             if signal_age > self.scan_interval * 2:
                 # Old signal, just mark as processed
                 self.processed_signals[symbol].add(signal_id)
+                continue
+
+            # FVG confirmation filter: CREATION entries must persist across 2 scans
+            if result['entry_type'] == 'CREATION' and signal_id not in self._prev_scan_signal_ids[symbol]:
+                log(f"  PENDING: {result['direction']} {symbol} CREATION @ ${result['entry_price']:.2f} — confirming next scan")
                 continue
 
             print(f"\n  NEW SIGNAL: {result['direction']} {symbol}")
@@ -859,6 +894,9 @@ class LiveTrader:
                 print("    [EQUITY LIVE NOT IMPLEMENTED]")
 
             self.processed_signals[symbol].add(signal_id)
+
+        # Update prev scan signal IDs for next scan's confirmation filter
+        self._prev_scan_signal_ids[symbol] = current_scan_ids
 
     def _execute_futures_signal(self, symbol: str, result: Dict, config: Dict):
         """Execute a futures trading signal."""

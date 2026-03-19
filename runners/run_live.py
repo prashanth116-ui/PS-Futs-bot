@@ -335,6 +335,15 @@ class LiveTrader:
             remaining_ops = []
             for op in trade.pending_broker_ops:
                 op_type = op['op']
+                attempts = op.get('_attempts', 0) + 1
+                op['_attempts'] = attempts
+
+                # Drop after max attempts
+                if attempts > 5:
+                    log(f"    [BROKER] Giving up on {op_type} {trade.id} after 5 attempts")
+                    notify_status(f"[BROKER] Gave up on {op_type} {trade.id} after 5 attempts — manual intervention needed")
+                    continue
+
                 success = False
                 try:
                     if op_type == 'close':
@@ -344,6 +353,19 @@ class LiveTrader:
                         )
                         success = result and result.get('success', False)
                     elif op_type == 'partial_close':
+                        # Guard: check if broker already executed this close
+                        broker_pos = self._query_broker_position(trade.symbol)
+                        if broker_pos is not None:
+                            expected_remaining = trade.contracts
+                            if trade.t1_hit:
+                                expected_remaining -= 1
+                            if trade.t2_hit:
+                                expected_remaining -= 1
+                            if trade.runner_exit:
+                                expected_remaining -= max(0, trade.contracts - 2)
+                            if abs(broker_pos) <= expected_remaining:
+                                log(f"    [BROKER RETRY] partial_close {trade.id} — broker already at {abs(broker_pos)} cts (expected {expected_remaining}) — skipping")
+                                continue  # Drop this op — already executed
                         result = self.executor.partial_close(
                             symbol=trade.symbol, direction=trade.direction,
                             contracts=op['contracts'], paper_trade_id=trade.id,
@@ -365,6 +387,9 @@ class LiveTrader:
 
                 if success:
                     log(f"    [BROKER RETRY] {op_type} {trade.id} succeeded")
+                    # Reset alert tracker so new failures get reported
+                    if hasattr(trade, '_broker_alerted_ops'):
+                        trade._broker_alerted_ops.discard(op_type)
                 else:
                     remaining_ops.append(op)
 
@@ -376,6 +401,15 @@ class LiveTrader:
             for op in self._orphaned_broker_ops:
                 op_type = op['op']
                 trade_id = op.get('_trade_id', 'unknown')
+                attempts = op.get('_attempts', 0) + 1
+                op['_attempts'] = attempts
+
+                # Drop after max attempts
+                if attempts > 5:
+                    log(f"    [BROKER] Giving up on orphaned {op_type} {trade_id} after 5 attempts")
+                    notify_status(f"[BROKER] Gave up on orphaned {op_type} {trade_id} after 5 attempts — manual intervention needed")
+                    continue
+
                 success = False
                 try:
                     if op_type == 'close':
@@ -411,6 +445,21 @@ class LiveTrader:
 
             self._orphaned_broker_ops = still_orphaned
 
+    def _query_broker_position(self, symbol: str):
+        """Query broker for current net position. Returns abs qty or None if unavailable."""
+        try:
+            # TradovateExecutor has _get_symbol_net_position directly
+            if hasattr(self.executor, '_get_symbol_net_position'):
+                return abs(self.executor._get_symbol_net_position(symbol))
+            # MultiExecutor wraps TradovateExecutor(s) — check inner executors
+            if hasattr(self.executor, 'executors'):
+                for inner in self.executor.executors:
+                    if hasattr(inner, '_get_symbol_net_position'):
+                        return abs(inner._get_symbol_net_position(symbol))
+        except Exception:
+            pass
+        return None
+
     def _should_retry_broker_op(self, result) -> bool:
         """Check if a failed broker op should be retried.
 
@@ -436,16 +485,24 @@ class LiveTrader:
             trade.pending_broker_ops = []
 
         # Deduplicate: update existing op of same type instead of appending
+        # For update_stop: latest price wins. For partial_close: latest wins (position
+        # guard in retry checks broker state before re-sending, preventing over-close).
         for existing_op in trade.pending_broker_ops:
             if existing_op['op'] == op_type:
                 existing_op.update(kwargs)
                 log(f"    [BROKER] Updated pending {op_type} for {trade.id}")
                 return
 
-        op = {'op': op_type, **kwargs}
+        op = {'op': op_type, '_attempts': 0, **kwargs}
         trade.pending_broker_ops.append(op)
         log(f"    [BROKER] Queued {op_type} for retry: {trade.id}")
-        notify_status(f"[BROKER] {op_type} failed for {trade.id} — queued for retry")
+        # Only send Telegram alert once per trade per op type to avoid spam
+        # (retry drops permanent failures, but trail logic re-creates them each scan)
+        if not hasattr(trade, '_broker_alerted_ops'):
+            trade._broker_alerted_ops = set()
+        if op_type not in trade._broker_alerted_ops:
+            notify_status(f"[BROKER] {op_type} failed for {trade.id} — queued for retry")
+            trade._broker_alerted_ops.add(op_type)
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -1855,7 +1912,12 @@ class LiveTrader:
         if self.executor and hasattr(self.executor, 'reconcile_positions'):
             if self.last_telegram_heartbeat is None or safe_datetime_diff_seconds(now, self.last_telegram_heartbeat) >= 900:
                 try:
-                    warnings = self.executor.reconcile_positions(self.paper_trades)
+                    # Build pending ops map so reconciliation doesn't count unexecuted closes
+                    pending_ops = {}
+                    for tid, t in self.paper_trades.items():
+                        if hasattr(t, 'pending_broker_ops') and t.pending_broker_ops:
+                            pending_ops[tid] = t.pending_broker_ops
+                    warnings = self.executor.reconcile_positions(self.paper_trades, pending_ops=pending_ops)
                     for w in warnings:
                         log(f"  {w}")
                         notify_status(w)
