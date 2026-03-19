@@ -66,8 +66,9 @@ def plot_v10_date(symbol, target_date, contracts=3):
     ema_20 = calc_ema(closes, 20)
     ema_50 = calc_ema(closes, 50)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(22, 14))
+    # Create figure with space for trade table below chart
+    fig = plt.figure(figsize=(22, 16))
+    ax = fig.add_axes([0.05, 0.28, 0.90, 0.65])
 
     # Plot candlesticks
     for i, bar in enumerate(session_bars):
@@ -179,31 +180,60 @@ def plot_v10_date(symbol, target_date, contracts=3):
     ax.legend(loc='upper left', fontsize=10)
     ax.grid(True, alpha=0.3)
 
-    # Summary box
-    summary_lines = [f'{STRATEGY_VERSION} HYBRID EXIT', f'Symbol: {symbol}', f'BOS: {bos_status}', f'Trades: {len(all_results)}', f'  Creation: {creation_count}', f'  Overnight: {overnight_count}', f'  Intraday: {intraday_count}', f'  BOS: {bos_count}', '-' * 20]
-    for result in all_results:
-        entry_type = result['entry_type']
+    # Trade summary table below chart
+    table_ax = fig.add_axes([0.05, 0.02, 0.90, 0.22])
+    table_ax.axis('off')
+
+    col_labels = ['#', 'Dir', 'Type', 'Entry', 'Time', 'Risk', 'Exits', 'Result', 'P/L']
+    table_data = []
+    for t_idx, result in enumerate(all_results):
         direction = result['direction']
-        etime = result['entry_time'].strftime('%H:%M')
+        entry_type = result['entry_type'].replace('_RETRACE', '').replace('RETRACEMENT', 'OVERNIGHT')
+        entry_time = result['entry_time'].strftime('%H:%M')
         res_str = 'WIN' if result['total_dollars'] > 0 else 'LOSS' if result['total_dollars'] < 0 else 'BE'
-        summary_lines.append(f'{direction} [{entry_type}]')
-        summary_lines.append(f'  Entry: {result["entry_price"]:.2f} @ {etime}')
-        summary_lines.append(f'  Risk: {result["risk"]:.2f} pts')
-        for exit in result['exits']:
-            dollars = (exit['pnl'] / tick_size) * tick_value
-            summary_lines.append(f'  {exit["type"]}: {exit["cts"]}ct ${dollars:+,.0f}')
-        summary_lines.append(f'  {res_str}: ${result["total_dollars"]:+,.2f}')
-        summary_lines.append('')
-    summary_lines.append('-' * 20)
-    summary_lines.append(f'TOTAL: ${total_pnl:+,.2f}')
-    summary = '\n'.join(summary_lines)
+        reentry = ' (2nd)' if result.get('is_reentry') else ''
 
-    box_color = '#FFCDD2' if total_pnl < 0 else '#C8E6C9'
-    edge_color = '#F44336' if total_pnl < 0 else '#4CAF50'
-    props = dict(boxstyle='round', facecolor=box_color, alpha=0.9, edgecolor=edge_color, linewidth=2)
-    ax.text(0.98, 0.98, summary, transform=ax.transAxes, fontsize=9, verticalalignment='top', horizontalalignment='right', fontweight='bold', bbox=props, family='monospace')
+        exit_parts = []
+        for ex in result['exits']:
+            dollars = (ex['pnl'] / tick_size) * tick_value
+            short_type = ex['type'].replace('_PARTIAL', '').replace('_STRUCT', '').replace('_STOP', '').replace('_FIXED', 'F').replace('OPP_FVG', 'OPP')
+            exit_parts.append(f"{short_type}:{ex['cts']}ct ${dollars:+,.0f}")
+        exits_str = ' | '.join(exit_parts)
 
-    plt.tight_layout()
+        table_data.append([
+            str(t_idx + 1), direction, entry_type + reentry,
+            f"{result['entry_price']:.2f}", entry_time, f"{result['risk']:.2f}",
+            exits_str, res_str, f"${result['total_dollars']:+,.2f}",
+        ])
+
+    table_data.append(['', '', '', '', '', '', '', 'TOTAL', f'${total_pnl:+,.2f}'])
+
+    table = table_ax.table(cellText=table_data, colLabels=col_labels, loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.3)
+
+    # Custom column widths: give Exits the most room
+    col_widths = [0.03, 0.05, 0.10, 0.07, 0.05, 0.05, 0.35, 0.06, 0.08]
+    for i, w in enumerate(col_widths):
+        for row_key in range(len(table_data) + 1):
+            table[row_key, i].set_width(w)
+
+    for j in range(len(col_labels)):
+        table[0, j].set_facecolor('#1976D2')
+        table[0, j].set_text_props(color='white', fontweight='bold')
+
+    for i, result in enumerate(all_results):
+        row = i + 1
+        bg = '#C8E6C9' if result['total_dollars'] > 0 else '#FFCDD2' if result['total_dollars'] < 0 else '#FFF9C4'
+        for j in range(len(col_labels)):
+            table[row, j].set_facecolor(bg)
+
+    total_row = len(table_data)
+    total_bg = '#C8E6C9' if total_pnl > 0 else '#FFCDD2'
+    for j in range(len(col_labels)):
+        table[total_row, j].set_facecolor(total_bg)
+        table[total_row, j].set_text_props(fontweight='bold')
     filename = f'backtest_{symbol}_{STRATEGY_VERSION}_{target_date}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f'Saved: {filename}')
