@@ -197,6 +197,7 @@ class TestKwargsCompleteness:
         'post_t1_trail_r',        # A/B testing CLI flag (trail improvement option B)
         'time_decay_bars',        # A/B testing CLI flag (trail improvement option D)
         'time_decay_r',           # A/B testing CLI flag (trail improvement option D)
+        'confirm_creation',       # A/B testing CLI flag (FVG confirmation filter)
     }
 
     EQUITY_ALLOWLIST = {

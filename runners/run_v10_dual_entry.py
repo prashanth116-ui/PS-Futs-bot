@@ -417,6 +417,8 @@ def run_session_v10(
     t2_fixed_r=0,                     # Option C: Fixed T2 exit at this R-multiple (0=trail only)
     time_decay_bars=0,                # Option D: Bars after T1 before tightening trail (0=disabled)
     time_decay_r=0,                   # Option D: R-level to tighten to after decay
+    # FVG confirmation filter (simulate live scanner confirmation delay)
+    confirm_creation=False,           # Delay CREATION entries by 1 bar (simulate 2-scan confirmation)
 ):
     """V10: Quad entry mode with FVG creation + retracement + BOS.
 
@@ -551,11 +553,16 @@ def run_session_v10(
                 if pm_cutoff_nq and symbol in ['NQ', 'MNQ'] and entry_hour >= 14:
                     continue  # Skip NQ afternoon entries (after 14:00 EST)
 
+                # FVG confirmation filter: delay CREATION by 1 bar (simulate live 2-scan confirmation)
+                confirmed_bar_idx = session_bar_idx + 1 if confirm_creation else session_bar_idx
+                if confirm_creation and confirmed_bar_idx >= len(session_bars):
+                    continue  # FVG on last bar can't be confirmed
+
                 valid_entries[direction].append({
                     'fvg': fvg,
                     'direction': direction,
                     'entry_type': 'CREATION',
-                    'entry_bar_idx': session_bar_idx,
+                    'entry_bar_idx': confirmed_bar_idx,
                     'entry_time': creating_bar.timestamp,
                     'entry_price': entry_price,
                     'stop_price': stop_price,

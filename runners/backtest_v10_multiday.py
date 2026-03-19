@@ -17,7 +17,8 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
                           opp_fvg_exit=False, opp_fvg_min_ticks=5, opp_fvg_after_6r=False,
                           opp_fvg_mode=None,
                           min_fvg_ticks=5, min_risk_override=None,
-                          post_t1_trail_r=0, t2_fixed_r=0, time_decay_bars=0, time_decay_r=0):
+                          post_t1_trail_r=0, t2_fixed_r=0, time_decay_bars=0, time_decay_r=0,
+                          drop_last_bar=False, confirm_creation=False):
     """Run V10 backtest across multiple days."""
 
     cfg = get_symbol_config(symbol)
@@ -82,6 +83,10 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
         print(f'  - T2 Fixed Exit: {effective_t2_fixed_r}R (ES/MES only)')
     if time_decay_bars > 0:
         print(f'  - Time Decay: Tighten to +{time_decay_r}R after {time_decay_bars} bars past T1')
+    if drop_last_bar:
+        print(f'  - Drop Last Bar: ON (simulate live scanner delay)')
+    if confirm_creation:
+        print(f'  - Confirm Creation: ON (delay CREATION entries by 1 bar)')
     print('='*80)
     print()
 
@@ -140,10 +145,20 @@ def backtest_v10_multiday(symbol='ES', days=30, contracts=3, t1_r=3, trail_r=6, 
             kwargs['opposing_fvg_min_ticks'] = opp_fvg_min_ticks
             kwargs['opposing_fvg_after_6r_only'] = opp_fvg_after_6r
 
+        if confirm_creation:
+            kwargs['confirm_creation'] = True
+
+        # Optionally drop last bar to simulate live scanner behavior
+        strategy_session_bars = session_bars[:-1] if drop_last_bar else session_bars
+        strategy_all_bars = all_bars[:-1] if drop_last_bar else all_bars
+
+        if drop_last_bar and len(strategy_session_bars) < 1:
+            continue
+
         # Run V10 strategy with all filters
         results = run_session_v10(
-            session_bars,
-            all_bars,
+            strategy_session_bars,
+            strategy_all_bars,
             **kwargs,
         )
 
@@ -282,6 +297,8 @@ if __name__ == '__main__':
     t2_fixed_r = 0
     time_decay_bars = 0
     time_decay_r = 0
+    drop_last_bar = False
+    confirm_creation = False
     for arg in sys.argv[3:]:
         if arg.startswith('--t1-r='):
             t1_r = int(arg.split('=')[1])
@@ -311,6 +328,10 @@ if __name__ == '__main__':
             time_decay_bars = int(arg.split('=')[1])
         elif arg.startswith('--time-decay-r='):
             time_decay_r = float(arg.split('=')[1])
+        elif arg == '--drop-last-bar':
+            drop_last_bar = True
+        elif arg == '--confirm-creation':
+            confirm_creation = True
 
     backtest_v10_multiday(symbol=symbol, days=days, contracts=contracts, t1_r=t1_r, trail_r=trail_r,
                           verbose=verbose, fvg_mode=fvg_mode,
@@ -318,4 +339,5 @@ if __name__ == '__main__':
                           opp_fvg_after_6r=opp_fvg_after_6r, opp_fvg_mode=opp_fvg_mode,
                           min_fvg_ticks=min_fvg_ticks, min_risk_override=min_risk_override,
                           post_t1_trail_r=post_t1_trail_r, t2_fixed_r=t2_fixed_r,
-                          time_decay_bars=time_decay_bars, time_decay_r=time_decay_r)
+                          time_decay_bars=time_decay_bars, time_decay_r=time_decay_r,
+                          drop_last_bar=drop_last_bar, confirm_creation=confirm_creation)
