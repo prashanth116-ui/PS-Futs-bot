@@ -387,19 +387,31 @@ def analyze_sector(etf: str, etf_df: pd.DataFrame, spy_close: pd.Series) -> Opti
     # Deferred; use placeholder
     smart_money_pct = None  # filled later
 
-    # --- RRG Quadrant ---
-    rs_ratio = 100 + mansfield_val  # scale around 100
-    rs_ratio_series = 100 + mansfield
-    rs_momentum_series = calc_roc(rs_ratio_series, 10)
-    rs_momentum = rs_momentum_series.iloc[-1] if not np.isnan(rs_momentum_series.iloc[-1]) else 0.0
-    # Scale momentum around 100
-    rs_momentum_scaled = 100 + rs_momentum
+    # --- RRG Quadrant (JdK-standard: EMA smooth + Z-score normalization) ---
+    rs_smooth = rs_line.ewm(span=10, adjust=False).mean()
+    # Cap at 200 (not 250) to ensure valid Z-scores with ~252 trading days of data
+    lookback = min(200, len(rs_smooth) - 30)
+    if lookback < 20:
+        lookback = len(rs_smooth)  # fallback
 
-    if rs_ratio >= 100 and rs_momentum_scaled >= 100:
+    z_rs = (rs_smooth - rs_smooth.rolling(lookback).mean()) / rs_smooth.rolling(lookback).std()
+    rs_ratio_series = 100 + z_rs.fillna(0)
+    rs_ratio = rs_ratio_series.iloc[-1]
+
+    roc_rs = calc_roc(rs_ratio_series, 10)
+    roc_rs_clean = roc_rs.dropna()
+    if len(roc_rs_clean) >= lookback:
+        z_mom = (roc_rs_clean - roc_rs_clean.rolling(lookback).mean()) / roc_rs_clean.rolling(lookback).std()
+        rs_momentum_series = 100 + z_mom.fillna(0)
+    else:
+        rs_momentum_series = 100 + roc_rs.fillna(0) * 0  # fallback: flat at 100
+    rs_momentum = rs_momentum_series.iloc[-1] if not np.isnan(rs_momentum_series.iloc[-1]) else 100.0
+
+    if rs_ratio >= 100 and rs_momentum >= 100:
         quadrant = "LEADING"
-    elif rs_ratio >= 100 and rs_momentum_scaled < 100:
+    elif rs_ratio >= 100 and rs_momentum < 100:
         quadrant = "WEAKENING"
-    elif rs_ratio < 100 and rs_momentum_scaled < 100:
+    elif rs_ratio < 100 and rs_momentum < 100:
         quadrant = "LAGGING"
     else:
         quadrant = "IMPROVING"
@@ -427,7 +439,7 @@ def analyze_sector(etf: str, etf_df: pd.DataFrame, spy_close: pd.Series) -> Opti
         "acceleration": acceleration,
         "mansfield_rs": mansfield_val,
         "rs_ratio": rs_ratio,
-        "rs_momentum": rs_momentum_scaled,
+        "rs_momentum": rs_momentum,
         "cmf": cmf_val,
         "cmf_positive_days": int(cmf_positive_days),
         "breadth_pct": breadth_pct,
