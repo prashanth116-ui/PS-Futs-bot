@@ -19,3 +19,6 @@ pytz>=2024.1
 # Plotting
 matplotlib>=3.8
 mplfinance>=0.12
+
+# Supabase (rotation scanner web push)
+supabase>=2.0
