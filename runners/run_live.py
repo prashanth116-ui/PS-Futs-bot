@@ -22,11 +22,14 @@ sys.path.insert(0, '.')
 from version import STRATEGY_VERSION
 
 import argparse
+import json
+import os
 import time
 import signal
 from dataclasses import dataclass, field
 from datetime import datetime, time as dt_time
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Dict, List
 from zoneinfo import ZoneInfo
 
@@ -272,6 +275,64 @@ class LiveTrader:
         # Signal for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    # Path for trade state JSON (same dir as prices.json on the droplet)
+    TRADE_STATE_PATH = Path("/opt/tradovate-bot/data/ticker/trade_state.json")
+
+    def _write_trade_state(self):
+        """Write current trade state to JSON for the copilot to consume.
+
+        Called after trade entry/exit, heartbeat, and session start.
+        """
+        try:
+            now = get_est_now()
+
+            if self.paper_mode:
+                losses_today = self.paper_daily_losses
+                open_positions = len(self.paper_trades)
+                daily_pnl = self.paper_daily_pnl
+                daily_trades = self.paper_daily_trades
+                daily_wins = self.paper_daily_wins
+                consecutive_losses = self.risk_manager.state.consecutive_losses
+                last_trade_result = self.risk_manager.state.last_trade_result or 'none'
+                risk_status = self.risk_manager.get_status().value
+            else:
+                summary = self.risk_manager.get_summary()
+                losses_today = summary.get('daily_trades', 0) - summary.get('daily_wins', 0)
+                open_positions = summary.get('open_trades', 0)
+                daily_pnl = summary.get('daily_pnl', 0.0)
+                daily_trades = summary.get('daily_trades', 0)
+                daily_wins = summary.get('daily_wins', 0)
+                consecutive_losses = summary.get('consecutive_losses', 0)
+                last_trade_result = self.risk_manager.state.last_trade_result or 'none'
+                risk_status = summary.get('status', 'ok')
+
+            # Find most recent loss time from paper_trade_history
+            last_loss_time = None
+            for t in reversed(self.paper_trade_history):
+                if t.get('total_pnl', 0) <= 0 and t.get('exit_time'):
+                    last_loss_time = t['exit_time']
+                    break
+
+            state = {
+                'ts': int(time.time()),
+                'mode': 'paper' if self.paper_mode else 'live',
+                'lossesToday': losses_today,
+                'consecutiveLosses': consecutive_losses,
+                'openPositions': open_positions,
+                'lastTradeResult': last_trade_result,
+                'lastLossTime': last_loss_time,
+                'dailyPnl': round(daily_pnl, 2),
+                'dailyTrades': daily_trades,
+                'dailyWins': daily_wins,
+                'riskStatus': risk_status,
+                'symbols': self.symbols,
+            }
+
+            self.TRADE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.TRADE_STATE_PATH.write_text(json.dumps(state))
+        except Exception as e:
+            log(f"  [TRADE_STATE] Error writing state: {e}")
 
     def _check_broker_health(self):
         """Periodic broker health check. Attempts reconnect if down, alerts via Telegram.
@@ -546,6 +607,9 @@ class LiveTrader:
         # Send Telegram startup notification
         mode = "PAPER" if self.paper_mode else "LIVE"
         notify_status(f"{STRATEGY_VERSION} {mode} Trading started\nSymbols: {', '.join(self.symbols)}")
+
+        # Write initial trade state (zeros) for copilot
+        self._write_trade_state()
 
         self._trading_loop()
 
@@ -1002,6 +1066,7 @@ class LiveTrader:
                 # Use limit order at entry price
                 if self.order_manager.execute_entry(trade):
                     self.risk_manager.record_trade_entry(symbol, config['contracts'])
+                    self._write_trade_state()
                     print(f"    ENTRY SENT: {trade.id}")
             else:
                 print("    Price moved past entry, skipping")
@@ -1084,6 +1149,7 @@ class LiveTrader:
 
         # Track in risk manager (paper mode parity with live execution)
         self.risk_manager.record_trade_entry(symbol, contracts)
+        self._write_trade_state()
 
         sizing_note = " (no runner)" if not has_runner else ""
         log(f"    [PAPER] OPENED: {result['direction']} {contracts} {symbol}{sizing_note}")
@@ -1655,6 +1721,8 @@ class LiveTrader:
                 self._orphaned_broker_ops.extend(trade.pending_broker_ops)
                 log(f"    [BROKER] {len(trade.pending_broker_ops)} op(s) orphaned from {trade.id}")
             del self.paper_trades[trade_id]
+        if closed_trades:
+            self._write_trade_state()
 
     def _close_paper_trades_eod(self):
         """Calculate P/L for all open paper trades at EOD shutdown.
@@ -1718,6 +1786,7 @@ class LiveTrader:
 
             # Snapshot for divergence tracking
             self.paper_trade_history.append(self._snapshot_paper_trade(trade))
+            self._write_trade_state()
 
             log(f"    [EOD] {trade.symbol} {trade.direction} @ {current_price:.2f}")
             log(f"      T1: ${trade.t1_pnl:+,.2f} | T2: ${trade.t2_pnl:+,.2f}" +
@@ -1832,6 +1901,7 @@ class LiveTrader:
                     trade.realized_pnl,
                     is_win=False
                 )
+                self._write_trade_state()
                 continue
 
             # Check T1 (4R target)
@@ -1873,9 +1943,12 @@ class LiveTrader:
                     trade.exits[-1]['pnl_dollars'],
                     is_win=trade.realized_pnl > 0
                 )
+                self._write_trade_state()
 
     def _print_status(self):
         """Print heartbeat status line for log monitoring."""
+        self._write_trade_state()
+
         now = get_est_now()
         timestamp = now.strftime('%H:%M:%S')
 
