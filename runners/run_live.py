@@ -36,6 +36,8 @@ from zoneinfo import ZoneInfo
 from runners.tradingview_loader import fetch_futures_bars
 from runners.run_v10_dual_entry import run_session_v10, is_swing_high, is_swing_low
 from strategies.ict.signals.fvg import detect_fvgs, update_fvg_mitigation
+from strategies.ict.signals.sweep import find_swing_highs, find_swing_lows, detect_sweeps, SessionLevels
+from strategies.ict.signals.mss import detect_mss
 from runners.run_v10_equity import run_session_v10_equity
 from runners.tradovate_client import TradovateClient, create_client
 from runners.order_manager import OrderManager
@@ -278,6 +280,7 @@ class LiveTrader:
 
     # Path for trade state JSON (same dir as prices.json on the droplet)
     TRADE_STATE_PATH = Path("/opt/tradovate-bot/data/ticker/trade_state.json")
+    SIGNAL_STATE_PATH = Path("/opt/tradovate-bot/data/ticker/signal_state.json")
 
     def _write_trade_state(self):
         """Write current trade state to JSON for the copilot to consume.
@@ -333,6 +336,207 @@ class LiveTrader:
             self.TRADE_STATE_PATH.write_text(json.dumps(state))
         except Exception as e:
             log(f"  [TRADE_STATE] Error writing state: {e}")
+
+    def _write_signal_state(self):
+        """Write ICT signal conditions to JSON for the copilot to consume.
+
+        Computes FVG, displacement, liquidity sweep, MSS, and breaker/OB
+        conditions from cached bars and FVGs. Called once per scan cycle.
+        """
+        try:
+            symbols_data = {}
+
+            # Process each futures symbol (MES/MNQ share bars with ES/NQ)
+            processed_base = set()
+            for symbol in self.futures_symbols:
+                base_sym = symbol.replace('M', '') if symbol.startswith('M') and len(symbol) == 3 else symbol
+                bars = self._cached_all_bars.get(symbol) or self._cached_all_bars.get(base_sym)
+                if not bars or len(bars) < 30:
+                    continue
+
+                # Avoid recomputing for MES when ES already done (same data)
+                if base_sym in processed_base:
+                    if base_sym in symbols_data:
+                        symbols_data[symbol] = symbols_data[base_sym]
+                    continue
+                processed_base.add(base_sym)
+
+                config = self.FUTURES_SYMBOLS.get(symbol, {})
+                tick_size = config.get('tick_size', 0.25)
+                price = self.last_prices.get(symbol, 0) or self.last_prices.get(base_sym, 0)
+                if price == 0:
+                    continue
+
+                sig = self._compute_signal_conditions(symbol, base_sym, bars, tick_size, price)
+                symbols_data[symbol] = sig
+                # Also write under base symbol if different
+                if symbol != base_sym:
+                    symbols_data[base_sym] = sig
+
+            state = {
+                'ts': int(time.time()),
+                'symbols': symbols_data,
+            }
+
+            self.SIGNAL_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.SIGNAL_STATE_PATH.write_text(json.dumps(state))
+        except Exception as e:
+            log(f"  [SIGNAL_STATE] Error writing state: {e}")
+
+    def _compute_signal_conditions(self, symbol, base_sym, bars, tick_size, price):
+        """Compute ICT signal conditions for a single symbol from cached data."""
+
+        # ── FVG fields ──────────────────────────────────────────────
+        fvgs = self._cached_fvgs.get(symbol) or self._cached_fvgs.get(base_sym) or []
+        active_fvgs = [f for f in fvgs if not f.mitigated]
+        fvg_present = len(active_fvgs) > 0
+
+        nearest_fvg_level = 0.0
+        in_fvg = False
+        fvg_retest = False
+
+        if active_fvgs:
+            # Find closest FVG midpoint to current price
+            nearest_fvg = min(active_fvgs, key=lambda f: abs(f.midpoint - price))
+            nearest_fvg_level = nearest_fvg.midpoint
+
+            # Check if price is inside any FVG
+            for f in active_fvgs:
+                if f.low <= price <= f.high:
+                    in_fvg = True
+                    break
+
+            # Check FVG retest: price was outside FVG 2-5 bars ago, now inside
+            if len(bars) >= 6:
+                for f in active_fvgs:
+                    if f.low <= price <= f.high:
+                        # Price is inside now — was it outside 2-5 bars ago?
+                        for offset in range(2, min(6, len(bars))):
+                            past_bar = bars[-offset]
+                            past_price = past_bar.close
+                            if past_price < f.low or past_price > f.high:
+                                fvg_retest = True
+                                break
+                    if fvg_retest:
+                        break
+
+        # ── Displacement ────────────────────────────────────────────
+        displacement = False
+        if len(bars) >= 20:
+            # 20-bar average body size
+            bodies = [abs(b.close - b.open) for b in bars[-20:]]
+            avg_body = sum(bodies) / len(bodies) if bodies else 0
+            if avg_body > 0:
+                for b in bars[-3:]:
+                    if abs(b.close - b.open) > avg_body * 1.0:
+                        displacement = True
+                        break
+
+        # ── Liquidity Sweep ─────────────────────────────────────────
+        liquidity_sweep = False
+        sweep_config = {
+            'lookback_bars': 30,
+            'min_sweep_ticks': 2,
+            'tick_size': tick_size,
+            'require_close_back_inside': True,
+            'swing_left_bars': 3,
+            'swing_right_bars': 1,
+        }
+
+        # Build prior session levels from bars
+        prior_session = None
+        if len(bars) >= 10:
+            current_date = bars[-1].timestamp.date()
+            prior_bars = [b for b in bars if b.timestamp.date() < current_date]
+            if prior_bars:
+                # Get most recent prior day
+                prior_date = prior_bars[-1].timestamp.date()
+                prior_day_bars = [b for b in prior_bars if b.timestamp.date() == prior_date]
+                if prior_day_bars:
+                    pdh = max(b.high for b in prior_day_bars)
+                    pdl = min(b.low for b in prior_day_bars)
+                    prior_session = SessionLevels(high=pdh, low=pdl)
+
+        sweep_bars = bars[-30:] if len(bars) >= 30 else bars
+        sweeps = detect_sweeps(sweep_bars, sweep_config, prior_session=prior_session)
+        liquidity_sweep = len(sweeps) > 0
+
+        # ── MSS ─────────────────────────────────────────────────────
+        mss_result = None
+        mss_direction = None
+        if len(bars) >= 10:
+            lookback = bars[-30:] if len(bars) >= 30 else bars
+            swing_highs = find_swing_highs(lookback[:-1], left_bars=3, right_bars=1)
+            swing_lows = find_swing_lows(lookback[:-1], left_bars=3, right_bars=1)
+            mss_config = {'tick_size': tick_size, 'mss_lookback_bars': 20}
+            mss_event = detect_mss(
+                bar=bars[-1],
+                bar_index=len(lookback) - 1,
+                swing_highs=swing_highs,
+                swing_lows=swing_lows,
+                config=mss_config,
+            )
+            if mss_event:
+                mss_result = True
+                mss_direction = mss_event.direction
+            else:
+                mss_result = False
+
+        # ── Breaker / OB Level ──────────────────────────────────────
+        breaker = False
+        nearest_ob_level = 0.0
+
+        if len(bars) >= 10:
+            lookback = bars[-30:] if len(bars) >= 30 else bars
+            swing_highs = find_swing_highs(lookback, left_bars=2, right_bars=2)
+            swing_lows = find_swing_lows(lookback, left_bars=2, right_bars=2)
+
+            ob_candidates = []
+
+            # Bullish OBs from swing lows: last bullish candle before swing low
+            for sl in swing_lows[-3:]:
+                for j in range(sl.bar_index - 1, max(sl.bar_index - 5, -1), -1):
+                    if j < 0 or j >= len(lookback):
+                        continue
+                    b = lookback[j]
+                    if b.close > b.open:  # bullish candle before swing low = bearish OB
+                        mid = (b.open + b.close) / 2
+                        body_size = abs(b.close - b.open)
+                        ob_candidates.append({'mid': mid, 'body': body_size, 'type': 'bearish'})
+                        break
+
+            # Bearish OBs from swing highs: last bearish candle before swing high
+            for sh in swing_highs[-3:]:
+                for j in range(sh.bar_index - 1, max(sh.bar_index - 5, -1), -1):
+                    if j < 0 or j >= len(lookback):
+                        continue
+                    b = lookback[j]
+                    if b.close < b.open:  # bearish candle before swing high = bullish OB
+                        mid = (b.open + b.close) / 2
+                        body_size = abs(b.close - b.open)
+                        ob_candidates.append({'mid': mid, 'body': body_size, 'type': 'bullish'})
+                        break
+
+            if ob_candidates:
+                nearest_ob = min(ob_candidates, key=lambda o: abs(o['mid'] - price))
+                nearest_ob_level = nearest_ob['mid']
+                # Breaker = price is within 2x OB body size of the midpoint
+                if nearest_ob['body'] > 0 and abs(price - nearest_ob['mid']) <= nearest_ob['body'] * 2:
+                    breaker = True
+
+        return {
+            'fvgPresent': fvg_present,
+            'nearestFVGLevel': round(nearest_fvg_level, 2),
+            'inFVG': in_fvg,
+            'fvgRetest': fvg_retest,
+            'displacement': displacement,
+            'liquiditySweep': liquidity_sweep,
+            'mss': mss_result if mss_result is not None else False,
+            'breaker': breaker,
+            'nearestOBLevel': round(nearest_ob_level, 2),
+            'activeFVGCount': len(active_fvgs),
+            'mssDirection': mss_direction,
+        }
 
     def _check_broker_health(self):
         """Periodic broker health check. Attempts reconnect if down, alerts via Telegram.
@@ -738,6 +942,12 @@ class LiveTrader:
                     # Debug: dump paper_trades contents
                     for tid, t in self.paper_trades.items():
                         log(f"  paper_trades[{tid}] = {type(t).__name__}: {t!r}")
+
+                # Write ICT signal state for copilot
+                try:
+                    self._write_signal_state()
+                except Exception as e:
+                    log(f"  Error in _write_signal_state: {e}")
 
                 # Periodic broker health check (every 15 min)
                 self._check_broker_health()

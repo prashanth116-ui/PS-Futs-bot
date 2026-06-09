@@ -79,6 +79,7 @@ _bar_fetch_times = {}   # dataset_key -> last fetch timestamp
 
 DISK_PATH = Path("/opt/tradovate-bot/data/ticker/prices.json")
 TRADE_STATE_PATH = Path("/opt/tradovate-bot/data/ticker/trade_state.json")
+SIGNAL_STATE_PATH = Path("/opt/tradovate-bot/data/ticker/signal_state.json")
 BAR_DISK_DIR = Path("/opt/tradovate-bot/data/ticker/bars")
 FETCH_INTERVAL = 30  # seconds between price fetches
 DAILY_REFRESH_INTERVAL = 3600  # refresh daily bars every hour
@@ -337,6 +338,8 @@ class TickerHandler(BaseHTTPRequestHandler):
             self._serve_bars(parsed)
         elif path == "/trade-state":
             self._serve_trade_state()
+        elif path == "/signal-state":
+            self._serve_signal_state()
         elif path == "/health":
             self._serve_health()
         else:
@@ -463,6 +466,26 @@ class TickerHandler(BaseHTTPRequestHandler):
 
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "public, max-age=5")
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(payload.encode())
+
+    def _serve_signal_state(self):
+        """Serve ICT signal state JSON written by run_live.py."""
+        try:
+            if SIGNAL_STATE_PATH.exists():
+                data = json.loads(SIGNAL_STATE_PATH.read_text())
+                payload = json.dumps({"ok": True, **data})
+                self.send_response(200)
+            else:
+                payload = json.dumps({"ok": False, "error": "no data"})
+                self.send_response(200)
+        except Exception as e:
+            payload = json.dumps({"ok": False, "error": str(e)})
+            self.send_response(500)
+
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "public, max-age=10")
         self._cors_headers()
         self.end_headers()
         self.wfile.write(payload.encode())
