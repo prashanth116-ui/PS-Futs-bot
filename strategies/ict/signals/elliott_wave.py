@@ -1,16 +1,11 @@
 """
-Elliott Wave Detector — Phase 1 (Foundation)
+Elliott Wave Detector — Phase 1 + Phase 2
 
 Ports core logic from Pine Script V2 (tradingview/elliott_wave_detector.pine)
 to Python for use in the backtesting/live trading pipeline.
 
-Phase 1 scope:
-  - Zigzag construction (build_zigzag)
-  - Impulse pattern detection via 3 cardinal rules + W5 rule (check_impulse_rules)
-  - Enrichment with confidence scoring (enrich_pattern)
-  - Invalidation checking (check_invalidation)
-
-NOT in Phase 1: ABC correction, Fibonacci targets, multi-timeframe, trading signals.
+Phase 1: Zigzag construction, impulse detection, enrichment, invalidation.
+Phase 2: ABC correction tracking, flat/zigzag classification, Fibonacci targets.
 
 Usage:
     from strategies.ict.signals.elliott_wave import detect_elliott_waves
@@ -18,6 +13,11 @@ Usage:
     result = detect_elliott_waves(bars, scales=[4, 8, 16])
     for p in result.valid_patterns:
         print(f"{p.direction_str} impulse, confidence={p.confidence}%")
+        if p.correction:
+            print(f"  correction: {p.correction.correction_type}")
+    for idx, fib in result.fib_targets.items():
+        for lvl in fib.levels:
+            print(f"  {lvl.label}: {lvl.price:.2f}")
 """
 
 from __future__ import annotations
@@ -73,6 +73,28 @@ class WavePoints:
 
 
 @dataclass
+class CorrectionPoints:
+    """The 3 wave points (A, B, C) of a correction."""
+
+    a: ZigzagPoint
+    b: ZigzagPoint
+    c: ZigzagPoint
+
+    def as_list(self) -> list[ZigzagPoint]:
+        """Return ordered list A, B, C."""
+        return [self.a, self.b, self.c]
+
+
+@dataclass
+class FibTarget:
+    """A single Fibonacci retracement level."""
+
+    ratio: float  # e.g. 0.382, 0.5, 0.618
+    price: float  # computed target price
+    label: str  # e.g. "38.2%"
+
+
+@dataclass
 class ImpulsePattern:
     """A detected 5-wave impulse with enrichment data."""
 
@@ -94,6 +116,9 @@ class ImpulsePattern:
     is_valid: bool = True
     invalidated_at_bar: int | None = None
 
+    # Phase 2: correction (set by track_abc)
+    correction: CorrectivePattern | None = None
+
     @property
     def is_bullish(self) -> bool:
         return self.direction == 1
@@ -108,6 +133,37 @@ class ImpulsePattern:
 
 
 @dataclass
+class CorrectivePattern:
+    """A detected ABC correction after an impulse."""
+
+    impulse: ImpulsePattern
+    points: CorrectionPoints
+    correction_type: str  # "zigzag" or "flat"
+    direction: int  # opposite of impulse direction
+    completed_at_bar: int
+    b_retrace_ratio: float  # |B-A| / |A-W5|, used for flat/zigzag classification
+    c_retrace_ratio: float  # |C-W5| / |W5-W0|, must be < 0.854
+    confidence_boost: int = 15  # added to parent impulse on completion
+    is_valid: bool = True
+
+
+@dataclass
+class FibTargets:
+    """Collection of Fibonacci retracement targets after an impulse."""
+
+    impulse: ImpulsePattern
+    levels: list[FibTarget] = field(default_factory=list)
+    impulse_range: float = 0.0  # |W5 - W0|
+
+    def get_level(self, ratio: float) -> FibTarget | None:
+        """Get a specific Fibonacci level by ratio, or None if not found."""
+        for lvl in self.levels:
+            if abs(lvl.ratio - ratio) < 1e-6:
+                return lvl
+        return None
+
+
+@dataclass
 class ElliottWaveResult:
     """Top-level result container from detect_elliott_waves."""
 
@@ -115,6 +171,7 @@ class ElliottWaveResult:
     zigzags: dict[int, list[ZigzagPoint]] = field(default_factory=dict)
     bars_analyzed: int = 0
     scales: list[int] = field(default_factory=list)
+    fib_targets: dict[int, FibTargets] = field(default_factory=dict)
 
     @property
     def valid_patterns(self) -> list[ImpulsePattern]:
@@ -126,6 +183,16 @@ class ElliottWaveResult:
         if not valid:
             return None
         return max(valid, key=lambda p: p.detected_at_bar)
+
+    @property
+    def corrections(self) -> list[CorrectivePattern]:
+        """All completed corrections across all patterns."""
+        return [p.correction for p in self.patterns if p.correction is not None]
+
+    @property
+    def patterns_with_corrections(self) -> list[ImpulsePattern]:
+        """Patterns that have completed ABC corrections."""
+        return [p for p in self.patterns if p.correction is not None]
 
     def patterns_at_scale(self, scale: int) -> list[ImpulsePattern]:
         return [p for p in self.patterns if p.scale == scale]
@@ -446,6 +513,147 @@ def check_invalidation(pattern: ImpulsePattern, bars: list[Bar]) -> None:
 
 
 # =============================================================================
+# ABC Correction Tracking (Phase 2)
+# =============================================================================
+
+
+def track_abc(
+    impulse: ImpulsePattern,
+    zigzag: list[ZigzagPoint],
+    bars: list[Bar],
+) -> CorrectivePattern | None:
+    """
+    State machine: find A, B, C correction after impulse W5.
+
+    For a bullish impulse (W5 is a high):
+      - Wave A: first low pivot after W5
+      - Wave B: next high pivot after A (retrace back up)
+      - Wave C: next low pivot after B (continue down)
+
+    For a bearish impulse (W5 is a low):
+      - Wave A: first high pivot after W5
+      - Wave B: next low pivot after A (retrace back down)
+      - Wave C: next high pivot after B (continue up)
+
+    Classification:
+      - B retrace > 90% of A move → "flat"
+      - Otherwise → "zigzag"
+
+    Validation:
+      - |C - W5| / |W5 - W0| < 0.854 (max retrace rule)
+
+    Returns CorrectivePattern if complete and valid, else None.
+    """
+    w5 = impulse.waves.w5
+    w0 = impulse.waves.w0
+
+    # Correction direction is opposite to impulse
+    corr_dir = -impulse.direction
+
+    # Direction of Wave A pivot: opposite to W5
+    # Bullish impulse: W5 is high (+1), A is low (-1)
+    # Bearish impulse: W5 is low (-1), A is high (+1)
+    a_dir = -w5.direction
+
+    # Scan zigzag points chronologically after W5
+    after_w5 = [p for p in zigzag if p.bar_index > w5.bar_index]
+    if not after_w5:
+        return None
+
+    # Find Wave A: first pivot in a_dir
+    wave_a = None
+    for p in after_w5:
+        if p.direction == a_dir:
+            wave_a = p
+            break
+    if wave_a is None:
+        return None
+
+    # Find Wave B: next pivot opposite to A (same as W5 direction)
+    wave_b = None
+    for p in after_w5:
+        if p.bar_index > wave_a.bar_index and p.direction == -a_dir:
+            wave_b = p
+            break
+    if wave_b is None:
+        return None
+
+    # Find Wave C: next pivot same direction as A
+    wave_c = None
+    for p in after_w5:
+        if p.bar_index > wave_b.bar_index and p.direction == a_dir:
+            wave_c = p
+            break
+    if wave_c is None:
+        return None
+
+    # B retrace ratio: |B - A| / |A - W5|
+    a_move = abs(wave_a.price - w5.price)
+    b_retrace = abs(wave_b.price - wave_a.price)
+    b_retrace_ratio = b_retrace / a_move if a_move > 0 else 0.0
+
+    # Classify: flat if B retraces > 90% of A move
+    correction_type = "flat" if b_retrace_ratio > 0.90 else "zigzag"
+
+    # C retrace ratio: |C - W5| / |W5 - W0| (how much of impulse is retraced)
+    impulse_range = abs(w5.price - w0.price)
+    c_retrace = abs(wave_c.price - w5.price)
+    c_retrace_ratio = c_retrace / impulse_range if impulse_range > 0 else 0.0
+
+    # Validate: max retrace rule — correction must not retrace > 85.4%
+    if c_retrace_ratio >= 0.854:
+        return None
+
+    return CorrectivePattern(
+        impulse=impulse,
+        points=CorrectionPoints(a=wave_a, b=wave_b, c=wave_c),
+        correction_type=correction_type,
+        direction=corr_dir,
+        completed_at_bar=wave_c.bar_index,
+        b_retrace_ratio=b_retrace_ratio,
+        c_retrace_ratio=c_retrace_ratio,
+    )
+
+
+# =============================================================================
+# Fibonacci Targets (Phase 2)
+# =============================================================================
+
+
+_FIB_RATIOS = [
+    (0.236, "23.6%"),
+    (0.382, "38.2%"),
+    (0.5, "50.0%"),
+    (0.618, "61.8%"),
+    (0.786, "78.6%"),
+]
+
+
+def compute_fib_targets(impulse: ImpulsePattern) -> FibTargets:
+    """
+    Compute Fibonacci retracement levels after an impulse.
+
+    Bullish impulse: targets below W5 (retracement = W5 - range * ratio)
+    Bearish impulse: targets above W5 (retracement = W5 + range * ratio)
+    """
+    w5_price = impulse.waves.w5.price
+    w0_price = impulse.waves.w0.price
+    imp_range = abs(w5_price - w0_price)
+
+    levels = []
+    for ratio, label in _FIB_RATIOS:
+        if impulse.direction == 1:
+            # Bullish: retracement goes down from W5
+            price = w5_price - imp_range * ratio
+        else:
+            # Bearish: retracement goes up from W5
+            price = w5_price + imp_range * ratio
+        levels.append(FibTarget(ratio=ratio, price=price, label=label))
+
+    return FibTargets(impulse=impulse, levels=levels, impulse_range=imp_range)
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -463,7 +671,8 @@ def detect_elliott_waves(
     2. For each scale: build zigzag, check impulse rules at each 6-point
        window, enrich matches, check invalidation
     3. Deduplicate by (scale, w0.bar_index, w5.bar_index)
-    4. Return ElliottWaveResult
+    4. Phase 2: track ABC corrections and compute Fibonacci targets
+    5. Return ElliottWaveResult
     """
     if scales is None:
         scales = [4, 8, 16]
@@ -533,5 +742,22 @@ def detect_elliott_waves(
             check_invalidation(pattern, bars)
 
             result.patterns.append(pattern)
+
+    # Phase 2: track ABC corrections and compute Fibonacci targets
+    for idx, pattern in enumerate(result.patterns):
+        if not pattern.is_valid:
+            continue
+
+        # Find the zigzag for this pattern's scale
+        zigzag = result.zigzags.get(pattern.scale, [])
+
+        # Track ABC correction
+        correction = track_abc(pattern, zigzag, bars)
+        if correction is not None:
+            pattern.correction = correction
+            pattern.confidence = min(pattern.confidence + correction.confidence_boost, 100)
+
+        # Compute Fibonacci targets
+        result.fib_targets[idx] = compute_fib_targets(pattern)
 
     return result

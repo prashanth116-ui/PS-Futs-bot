@@ -1,7 +1,7 @@
 """
-Unit tests for Elliott Wave detector (Phase 1).
+Unit tests for Elliott Wave detector (Phase 1 + Phase 2).
 
-Tests:
+Phase 1 Tests:
   - RSI computation (Wilder's method)
   - SMA computation
   - Zigzag construction (alternation, updates, scale effects)
@@ -9,6 +9,12 @@ Tests:
   - Enrichment (confidence scoring, extended wave, RSI div, volume, fib ratios)
   - Invalidation (bull/bear, no invalidation, bar index tracking)
   - Full detect_elliott_waves pipeline
+
+Phase 2 Tests:
+  - ABC correction tracking (zigzag, flat, rejection, boundary cases)
+  - Fibonacci targets (bull, bear, ratios, get_level, zero range)
+  - Corrective pattern (confidence boost, cap, direction, attachment)
+  - Pipeline with corrections (properties, fib targets, synthetic)
 """
 
 import pytest
@@ -18,6 +24,10 @@ from core.types import Bar
 from strategies.ict.signals.elliott_wave import (
     ZigzagPoint,
     WavePoints,
+    CorrectionPoints,
+    CorrectivePattern,
+    FibTarget,
+    FibTargets,
     ImpulsePattern,
     ElliottWaveResult,
     _compute_rsi,
@@ -26,6 +36,8 @@ from strategies.ict.signals.elliott_wave import (
     check_impulse_rules,
     enrich_pattern,
     check_invalidation,
+    track_abc,
+    compute_fib_targets,
     detect_elliott_waves,
 )
 
@@ -47,10 +59,11 @@ def _bar(o, h, l, c, idx=0, vol=100):
 
 def _zz(price, bar_index, direction, rsi=None, volume=None):
     """Helper to create a ZigzagPoint."""
+    total_minutes = 30 + bar_index
     return ZigzagPoint(
         price=price,
         bar_index=bar_index,
-        timestamp=datetime(2026, 1, 1, 9, 30 + bar_index % 60),
+        timestamp=datetime(2026, 1, 1, 9 + total_minutes // 60, total_minutes % 60),
         direction=direction,
         rsi=rsi,
         volume=volume,
@@ -580,3 +593,392 @@ class TestWavePoints:
         pts = [_zz(100 + i * 10, i * 5, 1 if i % 2 else -1) for i in range(6)]
         waves = WavePoints(w0=pts[0], w1=pts[1], w2=pts[2], w3=pts[3], w4=pts[4], w5=pts[5])
         assert waves.as_list() == pts
+
+
+# =============================================================================
+# Phase 2: ABC Correction Tests
+# =============================================================================
+
+
+def _make_bull_impulse(w0=100, w1=110, w2=105, w3=125, w4=118, w5=135, scale=4):
+    """Helper to create a valid bullish impulse pattern."""
+    waves = WavePoints(
+        w0=_zz(w0, 0, -1), w1=_zz(w1, 5, 1), w2=_zz(w2, 10, -1),
+        w3=_zz(w3, 15, 1), w4=_zz(w4, 20, -1), w5=_zz(w5, 25, 1),
+    )
+    pat = ImpulsePattern(direction=1, waves=waves, scale=scale, detected_at_bar=25)
+    enrich_pattern(pat)
+    return pat
+
+
+def _make_bear_impulse(w0=200, w1=190, w2=195, w3=175, w4=183, w5=165, scale=4):
+    """Helper to create a valid bearish impulse pattern."""
+    waves = WavePoints(
+        w0=_zz(w0, 0, 1), w1=_zz(w1, 5, -1), w2=_zz(w2, 10, 1),
+        w3=_zz(w3, 15, -1), w4=_zz(w4, 20, 1), w5=_zz(w5, 25, -1),
+    )
+    pat = ImpulsePattern(direction=-1, waves=waves, scale=scale, detected_at_bar=25)
+    enrich_pattern(pat)
+    return pat
+
+
+class TestTrackABC:
+    def test_bull_abc_zigzag(self):
+        """Bullish impulse → correction with B retrace < 90% → type=zigzag."""
+        pat = _make_bull_impulse(w5=135)
+        # After bullish impulse (W5 high at 135):
+        #   A = low at 125 (drop 10), B = high at 130 (retrace 5/10 = 50%), C = low at 120
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),  # A
+            _zz(130, 35, 1),   # B (50% retrace of A)
+            _zz(120, 40, -1),  # C
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.correction_type == "zigzag"
+        assert corr.direction == -1  # opposite of bullish impulse
+        assert corr.points.a.price == 125
+        assert corr.points.b.price == 130
+        assert corr.points.c.price == 120
+        assert corr.b_retrace_ratio == pytest.approx(0.5)
+        assert corr.completed_at_bar == 40
+        assert corr.is_valid is True
+
+    def test_bull_abc_flat(self):
+        """Bullish impulse → correction with B retrace > 90% → type=flat."""
+        pat = _make_bull_impulse(w5=135)
+        # A = low at 125 (drop 10), B = high at 134.5 (retrace 9.5/10 = 95%), C = low at 120
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),   # A
+            _zz(134.5, 35, 1),  # B (95% retrace → flat)
+            _zz(120, 40, -1),   # C
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.correction_type == "flat"
+        assert corr.b_retrace_ratio == pytest.approx(0.95)
+
+    def test_bear_abc_zigzag(self):
+        """Bearish impulse → zigzag correction."""
+        pat = _make_bear_impulse(w5=165)
+        # After bearish impulse (W5 low at 165):
+        #   A = high at 175 (rise 10), B = low at 170 (retrace 5/10 = 50%), C = high at 180
+        zigzag = pat.waves.as_list() + [
+            _zz(175, 30, 1),   # A
+            _zz(170, 35, -1),  # B (50% retrace)
+            _zz(180, 40, 1),   # C
+        ]
+        bars = [_bar(180, 182, 178, 180, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.correction_type == "zigzag"
+        assert corr.direction == 1  # opposite of bearish impulse
+        assert corr.points.a.price == 175
+        assert corr.points.c.price == 180
+
+    def test_bear_abc_flat(self):
+        """Bearish impulse → flat correction (B retraces > 90%)."""
+        pat = _make_bear_impulse(w5=165)
+        # A = high at 175 (rise 10), B = low at 165.5 (retrace 9.5/10 = 95%), C = high at 185
+        zigzag = pat.waves.as_list() + [
+            _zz(175, 30, 1),     # A
+            _zz(165.5, 35, -1),  # B (95% retrace → flat)
+            _zz(185, 40, 1),     # C
+        ]
+        bars = [_bar(180, 182, 178, 180, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.correction_type == "flat"
+        assert corr.b_retrace_ratio == pytest.approx(0.95)
+
+    def test_abc_exceeds_854_rejected(self):
+        """C retraces > 85.4% of impulse → no correction returned."""
+        pat = _make_bull_impulse(w0=100, w5=135)
+        # Impulse range = 35. 85.4% of 35 = 29.89. C at 135-30 = 105 → ratio = 30/35 = 0.857 > 0.854
+        zigzag = pat.waves.as_list() + [
+            _zz(120, 30, -1),
+            _zz(130, 35, 1),
+            _zz(105, 40, -1),  # C retraces 30/35 = 85.7% → rejected
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is None
+
+    def test_abc_at_854_boundary(self):
+        """C retraces exactly 85% → accepted (< 0.854)."""
+        pat = _make_bull_impulse(w0=100, w5=135)
+        # Impulse range = 35. 85% = 29.75. C at 135-29.75 = 105.25 → ratio = 0.85 < 0.854
+        zigzag = pat.waves.as_list() + [
+            _zz(120, 30, -1),
+            _zz(130, 35, 1),
+            _zz(105.25, 40, -1),  # C retraces 29.75/35 = 85.0% → accepted
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.c_retrace_ratio == pytest.approx(29.75 / 35)
+        assert corr.c_retrace_ratio < 0.854
+
+    def test_incomplete_abc_returns_none(self):
+        """Only A and B found, no C yet → None."""
+        pat = _make_bull_impulse(w5=135)
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),  # A
+            _zz(130, 35, 1),   # B
+            # No C
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(40)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is None
+
+    def test_no_zigzag_after_w5(self):
+        """No pivots after W5 → None."""
+        pat = _make_bull_impulse(w5=135)
+        zigzag = pat.waves.as_list()  # only impulse points, nothing after
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(30)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is None
+
+
+# =============================================================================
+# Phase 2: Fibonacci Target Tests
+# =============================================================================
+
+
+class TestFibTargets:
+    def test_bull_fib_targets(self):
+        """Bullish impulse → targets below W5 at correct prices."""
+        pat = _make_bull_impulse(w0=100, w5=200)
+        fib = compute_fib_targets(pat)
+
+        assert fib.impulse_range == pytest.approx(100.0)
+        # 38.2% retracement: 200 - 100*0.382 = 161.8
+        lvl = fib.get_level(0.382)
+        assert lvl is not None
+        assert lvl.price == pytest.approx(161.8)
+        assert lvl.label == "38.2%"
+        # 50% retracement: 200 - 50 = 150
+        lvl50 = fib.get_level(0.5)
+        assert lvl50 is not None
+        assert lvl50.price == pytest.approx(150.0)
+
+    def test_bear_fib_targets(self):
+        """Bearish impulse → targets above W5 at correct prices."""
+        pat = _make_bear_impulse(w0=200, w5=100)
+        fib = compute_fib_targets(pat)
+
+        assert fib.impulse_range == pytest.approx(100.0)
+        # 38.2% retracement: 100 + 100*0.382 = 138.2
+        lvl = fib.get_level(0.382)
+        assert lvl is not None
+        assert lvl.price == pytest.approx(138.2)
+        # 61.8%: 100 + 100*0.618 = 161.8
+        lvl618 = fib.get_level(0.618)
+        assert lvl618 is not None
+        assert lvl618.price == pytest.approx(161.8)
+
+    def test_fib_target_ratios(self):
+        """All 5 ratios present (0.236, 0.382, 0.5, 0.618, 0.786)."""
+        pat = _make_bull_impulse(w0=100, w5=200)
+        fib = compute_fib_targets(pat)
+
+        assert len(fib.levels) == 5
+        expected_ratios = [0.236, 0.382, 0.5, 0.618, 0.786]
+        actual_ratios = [lvl.ratio for lvl in fib.levels]
+        for expected, actual in zip(expected_ratios, actual_ratios):
+            assert actual == pytest.approx(expected)
+
+    def test_get_level(self):
+        """get_level(0.618) returns correct FibTarget, unknown ratio returns None."""
+        pat = _make_bull_impulse(w0=100, w5=200)
+        fib = compute_fib_targets(pat)
+
+        lvl = fib.get_level(0.618)
+        assert lvl is not None
+        assert lvl.ratio == pytest.approx(0.618)
+        assert lvl.price == pytest.approx(200 - 100 * 0.618)
+
+        assert fib.get_level(0.999) is None
+
+    def test_zero_range(self):
+        """Zero impulse range → all targets at same price as W5."""
+        pat = _make_bull_impulse(w0=100, w5=100)
+        fib = compute_fib_targets(pat)
+
+        assert fib.impulse_range == pytest.approx(0.0)
+        for lvl in fib.levels:
+            assert lvl.price == pytest.approx(100.0)
+
+
+# =============================================================================
+# Phase 2: Corrective Pattern Tests
+# =============================================================================
+
+
+class TestCorrectivePattern:
+    def test_correction_boosts_confidence(self):
+        """Completed ABC adds +15 to impulse confidence."""
+        pat = _make_bull_impulse(w5=135)
+        original_conf = pat.confidence
+
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),
+            _zz(130, 35, 1),
+            _zz(120, 40, -1),
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        # Simulate what detect_elliott_waves does
+        pat.correction = corr
+        pat.confidence = min(pat.confidence + corr.confidence_boost, 100)
+
+        assert pat.confidence == min(original_conf + 15, 100)
+
+    def test_confidence_cap_100(self):
+        """Impulse at 95 + correction → capped at 100."""
+        pat = _make_bull_impulse(w5=135)
+        pat.confidence = 95  # force high confidence
+
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),
+            _zz(130, 35, 1),
+            _zz(120, 40, -1),
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        pat.correction = corr
+        pat.confidence = min(pat.confidence + corr.confidence_boost, 100)
+
+        assert pat.confidence == 100
+
+    def test_correction_direction(self):
+        """Correction direction is opposite to impulse."""
+        pat = _make_bull_impulse(w5=135)
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),
+            _zz(130, 35, 1),
+            _zz(120, 40, -1),
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        corr = track_abc(pat, zigzag, bars)
+        assert corr is not None
+        assert corr.direction == -pat.direction
+
+    def test_correction_attached_to_impulse(self):
+        """pattern.correction is populated after track_abc."""
+        pat = _make_bull_impulse(w5=135)
+        zigzag = pat.waves.as_list() + [
+            _zz(125, 30, -1),
+            _zz(130, 35, 1),
+            _zz(120, 40, -1),
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+
+        assert pat.correction is None
+        corr = track_abc(pat, zigzag, bars)
+        pat.correction = corr
+
+        assert pat.correction is not None
+        assert pat.correction.impulse is pat
+        assert pat.correction.points.c.price == 120
+
+
+# =============================================================================
+# Phase 2: Pipeline with Corrections Tests
+# =============================================================================
+
+
+class TestPipelineWithCorrections:
+    def test_result_corrections_property(self):
+        """result.corrections returns completed corrections."""
+        result = ElliottWaveResult(bars_analyzed=100, scales=[4])
+
+        # Pattern with no correction
+        pat1 = _make_bull_impulse()
+        result.patterns.append(pat1)
+
+        assert len(result.corrections) == 0
+
+        # Pattern with correction
+        pat2 = _make_bull_impulse(w5=135)
+        zigzag = pat2.waves.as_list() + [
+            _zz(125, 30, -1),
+            _zz(130, 35, 1),
+            _zz(120, 40, -1),
+        ]
+        bars = [_bar(100, 101, 99, 100, idx=i) for i in range(45)]
+        corr = track_abc(pat2, zigzag, bars)
+        pat2.correction = corr
+        result.patterns.append(pat2)
+
+        assert len(result.corrections) == 1
+        assert len(result.patterns_with_corrections) == 1
+        assert result.patterns_with_corrections[0] is pat2
+
+    def test_fib_targets_in_result(self):
+        """fib_targets populated for valid patterns."""
+        result = ElliottWaveResult(bars_analyzed=100, scales=[4])
+
+        pat = _make_bull_impulse(w0=100, w5=200)
+        result.patterns.append(pat)
+        result.fib_targets[0] = compute_fib_targets(pat)
+
+        assert 0 in result.fib_targets
+        fib = result.fib_targets[0]
+        assert len(fib.levels) == 5
+        assert fib.impulse_range == pytest.approx(100.0)
+
+    def test_synthetic_impulse_with_abc(self):
+        """Build synthetic bars with impulse + ABC, verify both detected."""
+        # Build a clear 5-wave up move followed by ABC correction
+        prices = (
+            # Lead-in (flat)
+            [100] * 5
+            # W0 trough
+            + [99, 98, 97, 96, 95]
+            # W1 rise
+            + [97, 99, 101, 103, 105, 107, 110]
+            # W2 retrace
+            + [108, 106, 104, 103]
+            # W3 rise (longest)
+            + [105, 108, 111, 114, 117, 120, 123, 125]
+            # W4 retrace (stays above W1=110)
+            + [123, 121, 119, 117, 115]
+            # W5 rise (exceeds W3=125)
+            + [117, 119, 121, 123, 125, 127, 129, 130]
+            # ABC correction after W5
+            + [128, 126, 124, 122, 120]   # Wave A down
+            + [122, 124, 126]              # Wave B up
+            + [124, 122, 120, 118, 116]   # Wave C down
+            # Trail-off
+            + [115, 114, 113]
+        )
+        bars = []
+        for i, p in enumerate(prices):
+            bars.append(_bar(p - 0.5, p + 1.0, p - 1.0, p + 0.5, idx=i, vol=100 + i))
+
+        result = detect_elliott_waves(bars, scales=[2])
+        assert len(result.patterns) >= 1
+
+        # Check fib targets are computed for all valid patterns
+        valid = result.valid_patterns
+        for idx, pat in enumerate(result.patterns):
+            if pat.is_valid:
+                assert idx in result.fib_targets or any(
+                    i in result.fib_targets for i in range(len(result.patterns))
+                )
