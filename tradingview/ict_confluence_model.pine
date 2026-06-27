@@ -74,30 +74,16 @@ minFvgSize  = i_minFvgTicks * tickVal
 // SESSION HELPERS
 // ============================================================================
 
-inNYSession() =>
-    not i_sessionFilter or not na(time(timeframe.period, "0930-1600", "America/New_York"))
+inNYSession = not i_sessionFilter or not na(time(timeframe.period, "0930-1600", "America/New_York"))
+inMidday    = i_middayFilter and not na(time(timeframe.period, "1200-1400", "America/New_York"))
+inPMCutoff  = i_pmCutoff and not na(time(timeframe.period, "1400-1600", "America/New_York"))
+sessionOK   = inNYSession and not inMidday and not inPMCutoff
+isEOD       = not na(time(timeframe.period, "1600-1601", "America/New_York"))
 
-inMidday() =>
-    i_middayFilter and not na(time(timeframe.period, "1200-1400", "America/New_York"))
-
-inPMCutoff() =>
-    i_pmCutoff and not na(time(timeframe.period, "1400-1600", "America/New_York"))
-
-sessionOK() =>
-    inNYSession() and not inMidday() and not inPMCutoff()
-
-isEOD() =>
-    not na(time(timeframe.period, "1600-1601", "America/New_York"))
-
-// PO3 windows — swing highs reverse down in these windows, swing lows reverse up
-isPO3High() =>
-    not na(time(timeframe.period, "1000-1200", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
-
-isPO3Low() =>
-    not na(time(timeframe.period, "0930-1030", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
-
-f_po3Label() =>
-    isPO3High() and isPO3Low() ? "HIGH+LOW" : isPO3High() ? "HIGH" : isPO3Low() ? "LOW" : "OFF"
+// PO3 windows
+po3High = not na(time(timeframe.period, "1000-1200", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
+po3Low  = not na(time(timeframe.period, "0930-1030", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
+po3Label = po3High and po3Low ? "HIGH+LOW" : po3High ? "HIGH" : po3Low ? "LOW" : "OFF"
 
 // New-day detection for daily reset
 var int _prevDay = na
@@ -112,7 +98,6 @@ _prevDay := _curDay
 swingHigh = ta.pivothigh(high, i_swingLeft, i_swingRight)
 swingLow  = ta.pivotlow(low, i_swingLeft, i_swingRight)
 
-// Swing markers (offset back by swingRight bars)
 plotshape(i_showSwings and not na(swingHigh), title="Swing High", style=shape.triangledown,
      location=location.abovebar, color=color.red, size=size.tiny, offset=-i_swingRight)
 plotshape(i_showSwings and not na(swingLow), title="Swing Low", style=shape.triangleup,
@@ -124,8 +109,9 @@ plotshape(i_showSwings and not na(swingLow), title="Swing Low", style=shape.tria
 
 avgBody = ta.sma(math.abs(close - open), i_avgBodyLen)
 bodySize = math.abs(close - open)
-isBearishDisp = close < open and bodySize > avgBody * i_dispBodyMult and not na(avgBody) and avgBody > 0
-isBullishDisp = close > open and bodySize > avgBody * i_dispBodyMult and not na(avgBody) and avgBody > 0
+dispOK = not na(avgBody) and avgBody > 0
+isBearishDisp = close < open and bodySize > avgBody * i_dispBodyMult and dispOK
+isBullishDisp = close > open and bodySize > avgBody * i_dispBodyMult and dispOK
 
 // ============================================================================
 // DETECTION: MSS STRUCTURE TRACKING
@@ -146,12 +132,9 @@ if not na(mssPivotLow)
     mssRecentLow     := mssPivotLow
     mssRecentLowBar  := bar_index - i_mssPivotLen
 
-// BEARISH MSS: close breaks below recent swing low
 bearishMSS = not na(mssRecentLow) and close < mssRecentLow and (bar_index - mssRecentLowBar) <= i_mssLookback
-// BULLISH MSS: close breaks above recent swing high
 bullishMSS = not na(mssRecentHigh) and close > mssRecentHigh and (bar_index - mssRecentHighBar) <= i_mssLookback
 
-// Reset on new day
 if isNewDay
     mssRecentHigh    := na
     mssRecentLow     := na
@@ -162,7 +145,6 @@ if isNewDay
 // DETECTION: FVG
 // ============================================================================
 
-// Bullish FVG: gap up (bar[0].low > bar[2].high)
 bullFVG     = low > high[2]
 bullFVG_top = low
 bullFVG_bot = high[2]
@@ -170,7 +152,6 @@ bullFVG_sz  = bullFVG_top - bullFVG_bot
 bullFVG_mid = (bullFVG_top + bullFVG_bot) / 2.0
 bullFVG_ok  = bullFVG and bullFVG_sz >= minFvgSize
 
-// Bearish FVG: gap down (bar[0].high < bar[2].low)
 bearFVG     = high < low[2]
 bearFVG_top = low[2]
 bearFVG_bot = high
@@ -178,16 +159,17 @@ bearFVG_sz  = bearFVG_top - bearFVG_bot
 bearFVG_mid = (bearFVG_top + bearFVG_bot) / 2.0
 bearFVG_ok  = bearFVG and bearFVG_sz >= minFvgSize
 
-// FVG arrays (parallel arrays, max 5 each direction)
-var float[] fvgTopArr  = array.new_float(0)
-var float[] fvgBotArr  = array.new_float(0)
-var float[] fvgMidArr  = array.new_float(0)
-var int[]   fvgDirArr  = array.new_int(0)    // +1 bullish, -1 bearish
-var int[]   fvgBarArr  = array.new_int(0)
+// FVG arrays (parallel arrays, max 5)
+var float[] fvgTopArr    = array.new_float(0)
+var float[] fvgBotArr    = array.new_float(0)
+var float[] fvgMidArr    = array.new_float(0)
+var int[]   fvgDirArr    = array.new_int(0)
+var int[]   fvgBarArr    = array.new_int(0)
 var bool[]  fvgActiveArr = array.new_bool(0)
-var box[]   fvgBoxArr  = array.new_box(0)
+var box[]   fvgBoxArr    = array.new_box(0)
 
-f_addFvg(float ftop, float fbot, float fmid, int fdir) =>
+// Inline FVG add (avoids function return-type ambiguity)
+if bullFVG_ok
     if array.size(fvgTopArr) >= 5
         array.pop(fvgTopArr)
         array.pop(fvgBotArr)
@@ -196,37 +178,46 @@ f_addFvg(float ftop, float fbot, float fmid, int fdir) =>
         array.pop(fvgBarArr)
         array.pop(fvgActiveArr)
         if array.size(fvgBoxArr) > 5
-            ob = array.pop(fvgBoxArr)
-            box.delete(ob)
-    array.unshift(fvgTopArr, ftop)
-    array.unshift(fvgBotArr, fbot)
-    array.unshift(fvgMidArr, fmid)
-    array.unshift(fvgDirArr, fdir)
+            box.delete(array.pop(fvgBoxArr))
+    array.unshift(fvgTopArr, bullFVG_top)
+    array.unshift(fvgBotArr, bullFVG_bot)
+    array.unshift(fvgMidArr, bullFVG_mid)
+    array.unshift(fvgDirArr, 1)
     array.unshift(fvgBarArr, bar_index)
     array.unshift(fvgActiveArr, true)
     if i_showFvgBoxes
-        bxColor = fdir == 1 ? i_bullFvgColor : i_bearFvgColor
-        bx = box.new(bar_index - 2, ftop, bar_index + 30, fbot, border_color=na, bgcolor=bxColor)
-        array.unshift(fvgBoxArr, bx)
+        array.unshift(fvgBoxArr, box.new(bar_index - 2, bullFVG_top, bar_index + 30, bullFVG_bot, border_color=na, bgcolor=i_bullFvgColor))
 
-if bullFVG_ok
-    f_addFvg(bullFVG_top, bullFVG_bot, bullFVG_mid, 1)
 if bearFVG_ok
-    f_addFvg(bearFVG_top, bearFVG_bot, bearFVG_mid, -1)
+    if array.size(fvgTopArr) >= 5
+        array.pop(fvgTopArr)
+        array.pop(fvgBotArr)
+        array.pop(fvgMidArr)
+        array.pop(fvgDirArr)
+        array.pop(fvgBarArr)
+        array.pop(fvgActiveArr)
+        if array.size(fvgBoxArr) > 5
+            box.delete(array.pop(fvgBoxArr))
+    array.unshift(fvgTopArr, bearFVG_top)
+    array.unshift(fvgBotArr, bearFVG_bot)
+    array.unshift(fvgMidArr, bearFVG_mid)
+    array.unshift(fvgDirArr, -1)
+    array.unshift(fvgBarArr, bar_index)
+    array.unshift(fvgActiveArr, true)
+    if i_showFvgBoxes
+        array.unshift(fvgBoxArr, box.new(bar_index - 2, bearFVG_top, bar_index + 30, bearFVG_bot, border_color=na, bgcolor=i_bearFvgColor))
 
-// Mitigation: close passes through FVG
+// Mitigation
 if array.size(fvgTopArr) > 0
     for i = array.size(fvgTopArr) - 1 to 0
         if i < array.size(fvgActiveArr) and array.get(fvgActiveArr, i)
             ftop = array.get(fvgTopArr, i)
             fbot = array.get(fvgBotArr, i)
             fdir = array.get(fvgDirArr, i)
-            // Bullish FVG mitigated when price closes below bottom
             if fdir == 1 and close < fbot
                 array.set(fvgActiveArr, i, false)
                 if i < array.size(fvgBoxArr)
                     box.set_bgcolor(array.get(fvgBoxArr, i), i_mitigatedColor)
-            // Bearish FVG mitigated when price closes above top
             if fdir == -1 and close > ftop
                 array.set(fvgActiveArr, i, false)
                 if i < array.size(fvgBoxArr)
@@ -246,7 +237,6 @@ if isNewDay
     array.clear(fvgBoxArr)
 
 // Find nearest unmitigated FVG for entry
-// direction: +1 = bullish (for LONG entry), -1 = bearish (for SHORT entry)
 f_findEntryFvg(int direction) =>
     _top = float(na)
     _bot = float(na)
@@ -270,7 +260,6 @@ f_findEntryFvg(int direction) =>
 // ============================================================================
 // DUAL-TRACK STATE MACHINE
 // ============================================================================
-// States: 0=IDLE, 1=PENDING, 2=IN_TRADE
 
 // --- SHORT track state ---
 var int   stShort           = 0
@@ -279,13 +268,12 @@ var int   stShort_swingBar  = 0
 var bool  stShort_po3Active = false
 var bool  stShort_dispSeen  = false
 var float stShort_dispBody  = 0.0
-// Trade state
 var float stShort_entry     = na
 var float stShort_stop      = na
 var float stShort_t1        = na
 var float stShort_t2        = na
-var float stShort_trailPx   = na   // R-level activation price
-var float stShort_trailStop = na   // current trail stop
+var float stShort_trailPx   = na
+var float stShort_trailStop = na
 var float stShort_riskPts   = na
 var int   stShort_contracts = 0
 var bool  stShort_t1Hit     = false
@@ -302,7 +290,6 @@ var int   stLong_swingBar   = 0
 var bool  stLong_po3Active  = false
 var bool  stLong_dispSeen   = false
 var float stLong_dispBody   = 0.0
-// Trade state
 var float stLong_entry      = na
 var float stLong_stop       = na
 var float stLong_t1         = na
@@ -346,7 +333,7 @@ var line entLineLong    = na
 var line t1LineLong     = na
 var line t2LineLong     = na
 
-// Exit info for labels (reset each bar)
+// Exit info (reset each bar)
 var string exitLabel = ""
 var float  exitR     = 0.0
 exitLabel := ""
@@ -368,101 +355,108 @@ if isNewDay
     sessTotalR := 0.0
 
 // ============================================================================
-// SHORT TRACK STATE MACHINE
+// SHORT TRACK: IDLE -> PENDING
 // ============================================================================
 
-// --- IDLE -> PENDING: swing high detected ---
 if stShort == 0 and not na(swingHigh)
     stShort           := 1
     stShort_swingPx   := swingHigh
     stShort_swingBar  := bar_index - i_swingRight
-    stShort_po3Active := isPO3High()
+    stShort_po3Active := po3High
     stShort_dispSeen  := false
     stShort_dispBody  := 0.0
     alertShortPending := true
 
-// --- PENDING: check displacement + MSS ---
+// ============================================================================
+// SHORT TRACK: PENDING -> check displacement + MSS
+// ============================================================================
+
+// Pre-compute entry variables outside nested blocks to flatten nesting
+var float _sEntryPx  = na
+var float _sStopPx   = na
+var float _sRiskPts  = na
+var string _sCombo   = ""
+var string _sConf    = ""
+var int    _sCts     = 0
+var bool   _sValid   = false
+
+_sValid := false
+
 if stShort == 1
-    // Expire if too old
     if bar_index - stShort_swingBar > i_maxPendingAge
         stShort := 0
-    else
-        // Check for bearish displacement (selling away from swing high)
-        if isBearishDisp and close < stShort_swingPx
-            stShort_dispSeen := true
-            stShort_dispBody := bodySize
 
-        // Check for bearish MSS (close breaks below recent swing low)
-        if bearishMSS and sessionOK()
-            // Determine combo
-            has_po3  = stShort_po3Active
-            has_disp = stShort_dispSeen
+if stShort == 1
+    if isBearishDisp and close < stShort_swingPx
+        stShort_dispSeen := true
+        stShort_dispBody := bodySize
 
-            // BLOCK: PO3 + MSS without displacement (40% WR)
-            blocked = has_po3 and not has_disp
+// Check for short entry via bearish MSS
+if stShort == 1 and bearishMSS and sessionOK
+    _has_po3  = stShort_po3Active
+    _has_disp = stShort_dispSeen
+    _blocked  = _has_po3 and not _has_disp
+    if not _blocked
+        _sCombo := _has_po3 and _has_disp ? "PO3+Disp+MSS" : _has_disp ? "Disp+MSS" : "MSS"
+        _sConf  := _has_po3 and _has_disp ? "MAX" : _has_disp ? "HIGH" : "NORMAL"
+        _sCts   := _has_po3 and _has_disp ? 3 : 2
+        [_fTop, _fBot, _fMid] = f_findEntryFvg(-1)
+        _sEntryPx := not na(_fMid) ? _fMid : close
+        _sStopPx  := stShort_swingPx + slBuffer
+        _sRiskPts := _sStopPx - _sEntryPx
+        _sValid   := _sRiskPts > 0 and _sRiskPts >= i_minRiskPts and _sRiskPts <= i_maxRiskPts and _sStopPx > _sEntryPx
 
-            if not blocked
-                // Combo label + confidence + contracts
-                combo  = has_po3 and has_disp ? "PO3+Disp+MSS" : has_disp ? "Disp+MSS" : "MSS"
-                conf   = has_po3 and has_disp ? "MAX" : has_disp ? "HIGH" : "NORMAL"
-                cts    = has_po3 and has_disp ? 3 : 2
+// Execute short entry
+if stShort == 1 and _sValid
+    stShort          := 2
+    stShort_entry    := _sEntryPx
+    stShort_stop     := _sStopPx
+    stShort_riskPts  := _sRiskPts
+    stShort_t1       := _sEntryPx - (_sRiskPts * i_t1R)
+    stShort_t2       := _sEntryPx - (_sRiskPts * i_t2FixedR)
+    stShort_trailPx  := _sEntryPx - (_sRiskPts * i_trailR)
+    stShort_trailStop := na
+    stShort_contracts := _sCts
+    stShort_t1Hit    := false
+    stShort_t2Hit    := false
+    stShort_maxR     := 0.0
+    stShort_combo    := _sCombo
+    stShort_conf     := _sConf
+    stShort_tradeBar := bar_index
+    alertShortEntry  := true
+    if i_showMSS
+        label.new(bar_index, high + (4 * tickVal),
+             _sCombo + "\nSHORT " + str.tostring(_sCts) + "ct" +
+             "\nE: " + str.tostring(_sEntryPx, "#.##") + "  SL: " + str.tostring(_sStopPx, "#.##") +
+             "\nRisk: " + str.tostring(_sRiskPts, "#.##") + " pts",
+             style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
 
-                // Find bearish FVG for entry
-                [fTop, fBot, fMid] = f_findEntryFvg(-1)
-                entryPx = not na(fMid) ? fMid : close
+// ============================================================================
+// SHORT TRACK: IN_TRADE
+// ============================================================================
 
-                // Stop = swing high + buffer
-                stopPx = stShort_swingPx + slBuffer
-                riskPts = stopPx - entryPx
-
-                // Validate risk
-                if riskPts > 0 and riskPts >= i_minRiskPts and riskPts <= i_maxRiskPts
-                    // Validate stop is above entry (correct side for short)
-                    if stopPx > entryPx
-                        stShort          := 2
-                        stShort_entry    := entryPx
-                        stShort_stop     := stopPx
-                        stShort_riskPts  := riskPts
-                        stShort_t1       := entryPx - (riskPts * i_t1R)
-                        stShort_t2       := entryPx - (riskPts * i_t2FixedR)
-                        stShort_trailPx  := entryPx - (riskPts * i_trailR)
-                        stShort_trailStop := na
-                        stShort_contracts := cts
-                        stShort_t1Hit    := false
-                        stShort_t2Hit    := false
-                        stShort_maxR     := 0.0
-                        stShort_combo    := combo
-                        stShort_conf     := conf
-                        stShort_tradeBar := bar_index
-                        alertShortEntry  := true
-
-                        if i_showMSS
-                            lbl = label.new(bar_index, high + (4 * tickVal), combo + "\nSHORT " + str.tostring(cts) + "ct",
-                                 style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
-
-// --- IN_TRADE: manage short position ---
 if stShort == 2
-    curR = not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - close) / stShort_riskPts : 0.0
-    rHigh = not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - low) / stShort_riskPts : 0.0
+    curR = stShort_riskPts > 0 ? (stShort_entry - close) / stShort_riskPts : 0.0
+    rHigh = stShort_riskPts > 0 ? (stShort_entry - low) / stShort_riskPts : 0.0
     stShort_maxR := math.max(stShort_maxR, rHigh)
 
     tradeExited = false
     tradeExitType = ""
     tradeExitR = 0.0
 
-    // T1 check FIRST (benefit of doubt on same bar)
+    // T1 check FIRST (benefit of doubt)
     if not stShort_t1Hit and low <= stShort_t1
         stShort_t1Hit := true
-        stShort_stop  := stShort_entry  // move to breakeven
+        stShort_stop  := stShort_entry
         if i_showTradeLines
             label.new(bar_index, low - (2 * tickVal), "T1",
                  style=label.style_label_up, color=color.green, textcolor=color.white, size=size.tiny)
 
-    // Trail activation at trailR
+    // Trail activation
     if stShort_t1Hit and low <= stShort_trailPx and na(stShort_trailStop)
-        stShort_trailStop := stShort_entry - (stShort_riskPts * i_t1R)  // floor at T1
+        stShort_trailStop := stShort_entry - (stShort_riskPts * i_t1R)
 
-    // Trail update (ratchet down)
+    // Trail update
     if not na(stShort_trailStop)
         newTrail = high[1] + trailBuffer
         if newTrail < stShort_trailStop
@@ -476,14 +470,14 @@ if stShort == 2
         tradeExitType := "T2 TARGET"
         tradeExitR    := i_t2FixedR
 
-    // Stop loss check (after T1/trail)
+    // Stop loss (after T1/trail)
     if not tradeExited and high >= stShort_stop
         tradeExited   := true
         tradeExitType := stShort_t1Hit ? "TRAIL STOP" : "STOP LOSS"
-        tradeExitR    := not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - stShort_stop) / stShort_riskPts : -1.0
+        tradeExitR    := stShort_riskPts > 0 ? (stShort_entry - stShort_stop) / stShort_riskPts : -1.0
 
     // EOD exit
-    if not tradeExited and isEOD()
+    if not tradeExited and isEOD
         tradeExited   := true
         tradeExitType := "EOD"
         tradeExitR    := curR
@@ -497,13 +491,10 @@ if stShort == 2
         exitLabel := "S:" + tradeExitType
         exitR     := tradeExitR
         alertTradeExit := true
-
         if i_showTradeLines
             exitColor = tradeExitType == "STOP LOSS" ? color.red : tradeExitType == "TRAIL STOP" ? color.orange : color.green
             label.new(bar_index, high + (2 * tickVal), tradeExitType + " " + str.tostring(tradeExitR, "#.#") + "R",
                  style=label.style_label_down, color=exitColor, textcolor=color.white, size=size.tiny)
-
-        // Reset
         stShort       := 0
         stShort_entry := na
         stShort_stop  := na
@@ -516,107 +507,113 @@ if stShort == 2
         line.delete(entLineShort)
         line.delete(t1LineShort)
         line.delete(t2LineShort)
-        slLineShort   := na
-        entLineShort  := na
-        t1LineShort   := na
-        t2LineShort   := na
+        slLineShort  := na
+        entLineShort := na
+        t1LineShort  := na
+        t2LineShort  := na
 
 // ============================================================================
-// LONG TRACK STATE MACHINE
+// LONG TRACK: IDLE -> PENDING
 // ============================================================================
 
-// --- IDLE -> PENDING: swing low detected ---
 if stLong == 0 and not na(swingLow)
     stLong           := 1
     stLong_swingPx   := swingLow
     stLong_swingBar  := bar_index - i_swingRight
-    stLong_po3Active := isPO3Low()
+    stLong_po3Active := po3Low
     stLong_dispSeen  := false
     stLong_dispBody  := 0.0
     alertLongPending := true
 
-// --- PENDING: check displacement + MSS ---
+// ============================================================================
+// LONG TRACK: PENDING -> check displacement + MSS
+// ============================================================================
+
+var float _lEntryPx  = na
+var float _lStopPx   = na
+var float _lRiskPts  = na
+var string _lCombo   = ""
+var string _lConf    = ""
+var int    _lCts     = 0
+var bool   _lValid   = false
+
+_lValid := false
+
 if stLong == 1
-    // Expire if too old
     if bar_index - stLong_swingBar > i_maxPendingAge
         stLong := 0
-    else
-        // Check for bullish displacement (buying away from swing low)
-        if isBullishDisp and close > stLong_swingPx
-            stLong_dispSeen := true
-            stLong_dispBody := bodySize
 
-        // Check for bullish MSS (close breaks above recent swing high)
-        if bullishMSS and sessionOK()
-            // Determine combo
-            has_po3  = stLong_po3Active
-            has_disp = stLong_dispSeen
+if stLong == 1
+    if isBullishDisp and close > stLong_swingPx
+        stLong_dispSeen := true
+        stLong_dispBody := bodySize
 
-            // BLOCK: PO3 + MSS without displacement (40% WR)
-            blocked = has_po3 and not has_disp
+// Check for long entry via bullish MSS
+if stLong == 1 and bullishMSS and sessionOK
+    _has_po3  = stLong_po3Active
+    _has_disp = stLong_dispSeen
+    _blocked  = _has_po3 and not _has_disp
+    if not _blocked
+        _lCombo := _has_po3 and _has_disp ? "PO3+Disp+MSS" : _has_disp ? "Disp+MSS" : "MSS"
+        _lConf  := _has_po3 and _has_disp ? "MAX" : _has_disp ? "HIGH" : "NORMAL"
+        _lCts   := _has_po3 and _has_disp ? 3 : 2
+        [_fTop, _fBot, _fMid] = f_findEntryFvg(1)
+        _lEntryPx := not na(_fMid) ? _fMid : close
+        _lStopPx  := stLong_swingPx - slBuffer
+        _lRiskPts := _lEntryPx - _lStopPx
+        _lValid   := _lRiskPts > 0 and _lRiskPts >= i_minRiskPts and _lRiskPts <= i_maxRiskPts and _lStopPx < _lEntryPx
 
-            if not blocked
-                // Combo label + confidence + contracts
-                combo  = has_po3 and has_disp ? "PO3+Disp+MSS" : has_disp ? "Disp+MSS" : "MSS"
-                conf   = has_po3 and has_disp ? "MAX" : has_disp ? "HIGH" : "NORMAL"
-                cts    = has_po3 and has_disp ? 3 : 2
+// Execute long entry
+if stLong == 1 and _lValid
+    stLong           := 2
+    stLong_entry     := _lEntryPx
+    stLong_stop      := _lStopPx
+    stLong_riskPts   := _lRiskPts
+    stLong_t1        := _lEntryPx + (_lRiskPts * i_t1R)
+    stLong_t2        := _lEntryPx + (_lRiskPts * i_t2FixedR)
+    stLong_trailPx   := _lEntryPx + (_lRiskPts * i_trailR)
+    stLong_trailStop := na
+    stLong_contracts := _lCts
+    stLong_t1Hit     := false
+    stLong_t2Hit     := false
+    stLong_maxR      := 0.0
+    stLong_combo     := _lCombo
+    stLong_conf      := _lConf
+    stLong_tradeBar  := bar_index
+    alertLongEntry   := true
+    if i_showMSS
+        label.new(bar_index, low - (4 * tickVal),
+             _lCombo + "\nLONG " + str.tostring(_lCts) + "ct" +
+             "\nE: " + str.tostring(_lEntryPx, "#.##") + "  SL: " + str.tostring(_lStopPx, "#.##") +
+             "\nRisk: " + str.tostring(_lRiskPts, "#.##") + " pts",
+             style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
 
-                // Find bullish FVG for entry
-                [fTop, fBot, fMid] = f_findEntryFvg(1)
-                entryPx = not na(fMid) ? fMid : close
+// ============================================================================
+// LONG TRACK: IN_TRADE
+// ============================================================================
 
-                // Stop = swing low - buffer
-                stopPx = stLong_swingPx - slBuffer
-                riskPts = entryPx - stopPx
-
-                // Validate risk
-                if riskPts > 0 and riskPts >= i_minRiskPts and riskPts <= i_maxRiskPts
-                    // Validate stop is below entry (correct side for long)
-                    if stopPx < entryPx
-                        stLong           := 2
-                        stLong_entry     := entryPx
-                        stLong_stop      := stopPx
-                        stLong_riskPts   := riskPts
-                        stLong_t1        := entryPx + (riskPts * i_t1R)
-                        stLong_t2        := entryPx + (riskPts * i_t2FixedR)
-                        stLong_trailPx   := entryPx + (riskPts * i_trailR)
-                        stLong_trailStop := na
-                        stLong_contracts := cts
-                        stLong_t1Hit     := false
-                        stLong_t2Hit     := false
-                        stLong_maxR      := 0.0
-                        stLong_combo     := combo
-                        stLong_conf      := conf
-                        stLong_tradeBar  := bar_index
-                        alertLongEntry   := true
-
-                        if i_showMSS
-                            lbl = label.new(bar_index, low - (4 * tickVal), combo + "\nLONG " + str.tostring(cts) + "ct",
-                                 style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
-
-// --- IN_TRADE: manage long position ---
 if stLong == 2
-    curR = not na(stLong_riskPts) and stLong_riskPts > 0 ? (close - stLong_entry) / stLong_riskPts : 0.0
-    rHigh = not na(stLong_riskPts) and stLong_riskPts > 0 ? (high - stLong_entry) / stLong_riskPts : 0.0
+    curR = stLong_riskPts > 0 ? (close - stLong_entry) / stLong_riskPts : 0.0
+    rHigh = stLong_riskPts > 0 ? (high - stLong_entry) / stLong_riskPts : 0.0
     stLong_maxR := math.max(stLong_maxR, rHigh)
 
     tradeExited = false
     tradeExitType = ""
     tradeExitR = 0.0
 
-    // T1 check FIRST (benefit of doubt)
+    // T1 check FIRST
     if not stLong_t1Hit and high >= stLong_t1
         stLong_t1Hit := true
-        stLong_stop  := stLong_entry  // breakeven
+        stLong_stop  := stLong_entry
         if i_showTradeLines
             label.new(bar_index, high + (2 * tickVal), "T1",
                  style=label.style_label_down, color=color.green, textcolor=color.white, size=size.tiny)
 
     // Trail activation
     if stLong_t1Hit and high >= stLong_trailPx and na(stLong_trailStop)
-        stLong_trailStop := stLong_entry + (stLong_riskPts * i_t1R)  // floor at T1
+        stLong_trailStop := stLong_entry + (stLong_riskPts * i_t1R)
 
-    // Trail update (ratchet up)
+    // Trail update
     if not na(stLong_trailStop)
         newTrail = low[1] - trailBuffer
         if newTrail > stLong_trailStop
@@ -634,10 +631,10 @@ if stLong == 2
     if not tradeExited and low <= stLong_stop
         tradeExited   := true
         tradeExitType := stLong_t1Hit ? "TRAIL STOP" : "STOP LOSS"
-        tradeExitR    := not na(stLong_riskPts) and stLong_riskPts > 0 ? (stLong_stop - stLong_entry) / stLong_riskPts : -1.0
+        tradeExitR    := stLong_riskPts > 0 ? (stLong_stop - stLong_entry) / stLong_riskPts : -1.0
 
     // EOD exit
-    if not tradeExited and isEOD()
+    if not tradeExited and isEOD
         tradeExited   := true
         tradeExitType := "EOD"
         tradeExitR    := curR
@@ -651,13 +648,10 @@ if stLong == 2
         exitLabel := "L:" + tradeExitType
         exitR     := tradeExitR
         alertTradeExit := true
-
         if i_showTradeLines
             exitColor = tradeExitType == "STOP LOSS" ? color.red : tradeExitType == "TRAIL STOP" ? color.orange : color.green
             label.new(bar_index, low - (2 * tickVal), tradeExitType + " " + str.tostring(tradeExitR, "#.#") + "R",
                  style=label.style_label_up, color=exitColor, textcolor=color.white, size=size.tiny)
-
-        // Reset
         stLong        := 0
         stLong_entry  := na
         stLong_stop   := na
@@ -670,13 +664,13 @@ if stLong == 2
         line.delete(entLineLong)
         line.delete(t1LineLong)
         line.delete(t2LineLong)
-        slLineLong    := na
-        entLineLong   := na
-        t1LineLong    := na
-        t2LineLong    := na
+        slLineLong   := na
+        entLineLong  := na
+        t1LineLong   := na
+        t2LineLong   := na
 
 // ============================================================================
-// DISPLACEMENT LABELS (drawn after state machine so we know context)
+// DISPLACEMENT LABELS
 // ============================================================================
 
 if i_showDisp and isBearishDisp
@@ -732,7 +726,7 @@ if stLong == 2 and i_showTradeLines
 
 shortBg = not i_showBgTint ? na : stShort == 1 ? color.new(color.orange, 95) : stShort == 2 ? color.new(color.red, 97) : na
 longBg  = not i_showBgTint ? na : stLong == 1 ? color.new(color.orange, 95) : stLong == 2 ? color.new(color.green, 97) : na
-middayBg = i_showBgTint and inMidday() ? color.new(color.gray, 95) : na
+middayBg = i_showBgTint and inMidday ? color.new(color.gray, 95) : na
 
 bgcolor(middayBg, title="Midday Block")
 bgcolor(shortBg, title="Short Track")
@@ -751,85 +745,72 @@ f_stateClr(int st) =>
 var table tbl = table.new(position.top_right, 2, 20, bgcolor=color.new(color.black, 80))
 
 if barstate.islast and i_showTable
-    // Row 0: Title
     table.cell(tbl, 0, 0, "ICT Confluence", text_color=color.white, text_size=size.small)
     table.cell(tbl, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.small)
 
-    // Row 1: PO3 Phase
-    po3Str = f_po3Label()
-    po3Clr = po3Str == "OFF" ? color.gray : color.green
+    po3Clr = po3Label == "OFF" ? color.gray : color.green
     table.cell(tbl, 0, 1, "PO3 Phase", text_color=color.white, text_size=size.tiny)
-    table.cell(tbl, 1, 1, po3Str, text_color=po3Clr, text_size=size.tiny)
+    table.cell(tbl, 1, 1, po3Label, text_color=po3Clr, text_size=size.tiny)
 
-    // Row 2: Session
-    sessStr = inMidday() ? "MIDDAY BLOCK" : inPMCutoff() ? "PM CUTOFF" : sessionOK() ? "OK" : "BLOCKED"
+    sessStr = inMidday ? "MIDDAY BLOCK" : inPMCutoff ? "PM CUTOFF" : sessionOK ? "OK" : "BLOCKED"
     sessClr = sessStr == "OK" ? color.green : sessStr == "MIDDAY BLOCK" ? color.orange : color.red
     table.cell(tbl, 0, 2, "Session", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 2, sessStr, text_color=sessClr, text_size=size.tiny)
 
-    // Row 3-8: SHORT Track
+    // SHORT Track
     table.cell(tbl, 0, 3, "SHORT", text_color=color.white, text_size=size.small)
     table.cell(tbl, 1, 3, f_stateStr(stShort), text_color=f_stateClr(stShort), text_size=size.small)
 
-    // Swing
     swShortStr = stShort >= 1 and not na(stShort_swingPx) ? str.tostring(stShort_swingPx, "#.##") : "---"
     table.cell(tbl, 0, 4, "Swing H", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 4, swShortStr + (stShort >= 1 and stShort_po3Active ? " PO3" : ""), text_color=stShort >= 1 ? color.red : color.gray, text_size=size.tiny)
 
-    // Disp
     dispShortStr = stShort >= 1 ? (stShort_dispSeen ? "YES" : "---") : "---"
     table.cell(tbl, 0, 5, "Disp", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 5, dispShortStr, text_color=stShort_dispSeen and stShort >= 1 ? color.red : color.gray, text_size=size.tiny)
 
-    // Combo / Confidence
     table.cell(tbl, 0, 6, "Combo", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 6, stShort == 2 ? stShort_combo : "---", text_color=stShort == 2 ? color.white : color.gray, text_size=size.tiny)
 
-    table.cell(tbl, 0, 7, "Conf/Cts", text_color=color.white, text_size=size.tiny)
     confShortStr = stShort == 2 ? stShort_conf + " " + str.tostring(stShort_contracts) + "ct" : "---"
     confShortClr = stShort == 2 ? (stShort_conf == "MAX" ? color.green : stShort_conf == "HIGH" ? color.yellow : color.white) : color.gray
+    table.cell(tbl, 0, 7, "Conf/Cts", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 7, confShortStr, text_color=confShortClr, text_size=size.tiny)
 
-    // Trade info
     tradeShortStr = stShort == 2 and not na(stShort_entry) ? "E:" + str.tostring(stShort_entry, "#.##") + " SL:" + str.tostring(stShort_stop, "#.##") : "---"
     curRShort = stShort == 2 and not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - close) / stShort_riskPts : 0.0
     table.cell(tbl, 0, 8, "Trade", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 8, stShort == 2 ? tradeShortStr + " (" + str.tostring(curRShort, "#.#") + "R)" : "---", text_color=stShort == 2 ? (curRShort > 0 ? color.green : color.red) : color.gray, text_size=size.tiny)
 
-    // Row 9-14: LONG Track
+    // LONG Track
     table.cell(tbl, 0, 9, "LONG", text_color=color.white, text_size=size.small)
     table.cell(tbl, 1, 9, f_stateStr(stLong), text_color=stLong == 2 ? color.green : f_stateClr(stLong), text_size=size.small)
 
-    // Swing
     swLongStr = stLong >= 1 and not na(stLong_swingPx) ? str.tostring(stLong_swingPx, "#.##") : "---"
     table.cell(tbl, 0, 10, "Swing L", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 10, swLongStr + (stLong >= 1 and stLong_po3Active ? " PO3" : ""), text_color=stLong >= 1 ? color.green : color.gray, text_size=size.tiny)
 
-    // Disp
     dispLongStr = stLong >= 1 ? (stLong_dispSeen ? "YES" : "---") : "---"
     table.cell(tbl, 0, 11, "Disp", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 11, dispLongStr, text_color=stLong_dispSeen and stLong >= 1 ? color.green : color.gray, text_size=size.tiny)
 
-    // Combo / Confidence
     table.cell(tbl, 0, 12, "Combo", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 12, stLong == 2 ? stLong_combo : "---", text_color=stLong == 2 ? color.white : color.gray, text_size=size.tiny)
 
-    table.cell(tbl, 0, 13, "Conf/Cts", text_color=color.white, text_size=size.tiny)
     confLongStr = stLong == 2 ? stLong_conf + " " + str.tostring(stLong_contracts) + "ct" : "---"
     confLongClr = stLong == 2 ? (stLong_conf == "MAX" ? color.green : stLong_conf == "HIGH" ? color.yellow : color.white) : color.gray
+    table.cell(tbl, 0, 13, "Conf/Cts", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 13, confLongStr, text_color=confLongClr, text_size=size.tiny)
 
-    // Trade info
     tradeLongStr = stLong == 2 and not na(stLong_entry) ? "E:" + str.tostring(stLong_entry, "#.##") + " SL:" + str.tostring(stLong_stop, "#.##") : "---"
     curRLong = stLong == 2 and not na(stLong_riskPts) and stLong_riskPts > 0 ? (close - stLong_entry) / stLong_riskPts : 0.0
     table.cell(tbl, 0, 14, "Trade", text_color=color.white, text_size=size.tiny)
     table.cell(tbl, 1, 14, stLong == 2 ? tradeLongStr + " (" + str.tostring(curRLong, "#.#") + "R)" : "---", text_color=stLong == 2 ? (curRLong > 0 ? color.green : color.red) : color.gray, text_size=size.tiny)
 
-    // Separator
     table.cell(tbl, 0, 15, "", text_size=size.tiny)
     table.cell(tbl, 1, 15, "", text_size=size.tiny)
 
-    // Row 16-17: Session stats
+    // Session stats
     totalTrades = sessWins + sessLosses
     winRate = totalTrades > 0 ? (sessWins * 100.0) / totalTrades : 0.0
     table.cell(tbl, 0, 16, "W/L", text_color=color.white, text_size=size.tiny)
@@ -840,18 +821,17 @@ if barstate.islast and i_showTable
     table.cell(tbl, 1, 17, str.tostring(sessTotalR, "#.#") + "R",
          text_color=sessTotalR > 0 ? color.green : sessTotalR < 0 ? color.red : color.gray, text_size=size.tiny)
 
-    // Displacement info
     table.cell(tbl, 0, 18, "Avg Body", text_color=color.white, text_size=size.tiny)
-    table.cell(tbl, 1, 18, str.tostring(nz(avgBody, 0), "#.##") + " / Thresh: " + str.tostring(nz(avgBody * i_dispBodyMult, 0), "#.##"),
+    table.cell(tbl, 1, 18, str.tostring(nz(avgBody, 0), "#.##") + " / " + str.tostring(nz(avgBody * i_dispBodyMult, 0), "#.##"),
          text_color=color.white, text_size=size.tiny)
 
-    // MSS tracking
-    mssStr = not na(mssRecentHigh) or not na(mssRecentLow) ? "H:" + (na(mssRecentHigh) ? "---" : str.tostring(mssRecentHigh, "#.##")) + " L:" + (na(mssRecentLow) ? "---" : str.tostring(mssRecentLow, "#.##")) : "---"
+    mssHStr = na(mssRecentHigh) ? "---" : str.tostring(mssRecentHigh, "#.##")
+    mssLStr = na(mssRecentLow) ? "---" : str.tostring(mssRecentLow, "#.##")
     table.cell(tbl, 0, 19, "MSS Pivots", text_color=color.white, text_size=size.tiny)
-    table.cell(tbl, 1, 19, mssStr, text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 19, "H:" + mssHStr + " L:" + mssLStr, text_color=color.white, text_size=size.tiny)
 
 // ============================================================================
-// ALERTS: alertcondition() (static, for TradingView alert dialog)
+// ALERTS: alertcondition()
 // ============================================================================
 
 alertcondition(alertShortPending, title="1. SHORT Pending",
@@ -870,7 +850,7 @@ alertcondition(alertTradeExit, title="5. Trade Exit",
      message='{"model":"ICT_CONFLUENCE","event":"TRADE_EXIT","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
 
 // ============================================================================
-// ALERTS: alert() with dynamic JSON (for webhook automation)
+// ALERTS: alert() with dynamic JSON
 // ============================================================================
 
 if alertShortPending
