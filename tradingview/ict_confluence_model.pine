@@ -1,0 +1,936 @@
+// ICT Confluence Model — PO3 + Displacement + MSS
+// @version=5
+// Dual-track state machine detecting ICT confluence setups on 3-minute charts.
+// Each track (SHORT from swing highs, LONG from swing lows) runs independently:
+//   IDLE(0) -> PENDING(1) -> IN_TRADE(2)
+//
+// Combo filter (from 65-day backtest):
+//   PO3 + Disp + MSS -> MAX confidence, 3 contracts
+//   Disp + MSS       -> HIGH confidence, 2 contracts
+//   MSS only         -> NORMAL confidence, 2 contracts
+//   PO3 + MSS (no D) -> BLOCKED (40% WR)
+//
+// Apply to ES or NQ 3-minute chart. No request.security() needed.
+indicator("ICT Confluence Model", overlay=true, max_boxes_count=200, max_labels_count=300, max_lines_count=200)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// --- Instrument ---
+i_tickSize      = input.float(0.25, "Tick Size", minval=0.01, step=0.01, group="Instrument")
+i_instrumentMode = input.string("ES", "Instrument", options=["ES", "NQ", "MES", "MNQ", "Custom"], group="Instrument")
+
+// --- Swing Detection ---
+i_swingLeft     = input.int(3, "Swing Left Bars", minval=1, maxval=10, group="Swing Detection")
+i_swingRight    = input.int(1, "Swing Right Bars", minval=1, maxval=5, group="Swing Detection")
+i_maxPendingAge = input.int(30, "Max Pending Age (bars)", minval=5, maxval=100, tooltip="Expire pending setup after this many bars", group="Swing Detection")
+
+// --- Displacement ---
+i_dispBodyMult  = input.float(2.0, "Displacement Body Multiplier", minval=1.0, step=0.1, group="Displacement")
+i_avgBodyLen    = input.int(20, "Average Body Length", minval=5, group="Displacement")
+
+// --- MSS ---
+i_mssPivotLen   = input.int(2, "MSS Pivot Length", minval=1, maxval=5, group="MSS")
+i_mssLookback   = input.int(20, "MSS Lookback (bars)", minval=5, maxval=50, group="MSS")
+
+// --- Risk / Entry ---
+i_t1R           = input.float(3.0, "T1 Target (R)", minval=1.0, step=0.5, group="Risk / Entry")
+i_trailR        = input.float(4.0, "Trail Activation (R)", minval=1.0, step=0.5, group="Risk / Entry")
+i_t2FixedR      = input.float(5.0, "T2 Fixed Exit (R)", minval=2.0, step=0.5, group="Risk / Entry")
+i_minRiskPts    = input.float(1.5, "Min Risk (points)", minval=0.25, step=0.25, tooltip="ES=1.5, NQ=6.0", group="Risk / Entry")
+i_maxRiskPts    = input.float(10.0, "Max Risk (points)", minval=1.0, step=0.5, group="Risk / Entry")
+i_slBufferTicks = input.int(2, "SL Buffer (ticks)", minval=0, maxval=10, group="Risk / Entry")
+i_trailBufferTicks = input.int(6, "Trail Buffer (ticks)", minval=1, maxval=20, group="Risk / Entry")
+i_minFvgTicks   = input.int(5, "Min FVG Size (ticks)", minval=1, group="Risk / Entry")
+
+// --- Session ---
+i_sessionFilter = input.bool(true, "Enable Session Filter", group="Session")
+i_middayFilter  = input.bool(true, "Enable Midday Filter (12:00-14:00)", group="Session")
+i_pmCutoff      = input.bool(false, "Enable PM Cutoff (14:00, NQ-style)", group="Session")
+
+// --- Visuals ---
+i_showSwings    = input.bool(true, "Show Swing Markers", group="Visuals")
+i_showDisp      = input.bool(true, "Show Displacement Labels", group="Visuals")
+i_showMSS       = input.bool(true, "Show MSS Labels", group="Visuals")
+i_showFvgBoxes  = input.bool(true, "Show FVG Boxes", group="Visuals")
+i_showTradeLines = input.bool(true, "Show Trade Lines", group="Visuals")
+i_showBgTint    = input.bool(true, "Show Background Tint", group="Visuals")
+i_showTable     = input.bool(true, "Show Dashboard", group="Visuals")
+i_bullFvgColor  = input.color(color.new(color.green, 75), "Bullish FVG", group="Visuals")
+i_bearFvgColor  = input.color(color.new(color.red, 75), "Bearish FVG", group="Visuals")
+i_mitigatedColor = input.color(color.new(color.gray, 85), "Mitigated FVG", group="Visuals")
+
+// ============================================================================
+// DERIVED CONSTANTS
+// ============================================================================
+
+tickVal     = i_tickSize
+slBuffer    = i_slBufferTicks * tickVal
+trailBuffer = i_trailBufferTicks * tickVal
+minFvgSize  = i_minFvgTicks * tickVal
+
+// ============================================================================
+// SESSION HELPERS
+// ============================================================================
+
+inNYSession() =>
+    not i_sessionFilter or not na(time(timeframe.period, "0930-1600", "America/New_York"))
+
+inMidday() =>
+    i_middayFilter and not na(time(timeframe.period, "1200-1400", "America/New_York"))
+
+inPMCutoff() =>
+    i_pmCutoff and not na(time(timeframe.period, "1400-1600", "America/New_York"))
+
+sessionOK() =>
+    inNYSession() and not inMidday() and not inPMCutoff()
+
+isEOD() =>
+    not na(time(timeframe.period, "1600-1601", "America/New_York"))
+
+// PO3 windows — swing highs reverse down in these windows, swing lows reverse up
+isPO3High() =>
+    not na(time(timeframe.period, "1000-1200", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
+
+isPO3Low() =>
+    not na(time(timeframe.period, "0930-1030", "America/New_York")) or not na(time(timeframe.period, "1400-1530", "America/New_York"))
+
+f_po3Label() =>
+    isPO3High() and isPO3Low() ? "HIGH+LOW" : isPO3High() ? "HIGH" : isPO3Low() ? "LOW" : "OFF"
+
+// New-day detection for daily reset
+var int _prevDay = na
+_curDay  = dayofweek
+isNewDay = na(_prevDay) or _curDay != _prevDay
+_prevDay := _curDay
+
+// ============================================================================
+// DETECTION: SWING POINTS
+// ============================================================================
+
+swingHigh = ta.pivothigh(high, i_swingLeft, i_swingRight)
+swingLow  = ta.pivotlow(low, i_swingLeft, i_swingRight)
+
+// Swing markers (offset back by swingRight bars)
+plotshape(i_showSwings and not na(swingHigh), title="Swing High", style=shape.triangledown,
+     location=location.abovebar, color=color.red, size=size.tiny, offset=-i_swingRight)
+plotshape(i_showSwings and not na(swingLow), title="Swing Low", style=shape.triangleup,
+     location=location.belowbar, color=color.green, size=size.tiny, offset=-i_swingRight)
+
+// ============================================================================
+// DETECTION: DISPLACEMENT
+// ============================================================================
+
+avgBody = ta.sma(math.abs(close - open), i_avgBodyLen)
+bodySize = math.abs(close - open)
+isBearishDisp = close < open and bodySize > avgBody * i_dispBodyMult and not na(avgBody) and avgBody > 0
+isBullishDisp = close > open and bodySize > avgBody * i_dispBodyMult and not na(avgBody) and avgBody > 0
+
+// ============================================================================
+// DETECTION: MSS STRUCTURE TRACKING
+// ============================================================================
+
+mssPivotHigh = ta.pivothigh(high, i_mssPivotLen, i_mssPivotLen)
+mssPivotLow  = ta.pivotlow(low, i_mssPivotLen, i_mssPivotLen)
+
+var float mssRecentHigh    = na
+var float mssRecentLow     = na
+var int   mssRecentHighBar = 0
+var int   mssRecentLowBar  = 0
+
+if not na(mssPivotHigh)
+    mssRecentHigh    := mssPivotHigh
+    mssRecentHighBar := bar_index - i_mssPivotLen
+if not na(mssPivotLow)
+    mssRecentLow     := mssPivotLow
+    mssRecentLowBar  := bar_index - i_mssPivotLen
+
+// BEARISH MSS: close breaks below recent swing low
+bearishMSS = not na(mssRecentLow) and close < mssRecentLow and (bar_index - mssRecentLowBar) <= i_mssLookback
+// BULLISH MSS: close breaks above recent swing high
+bullishMSS = not na(mssRecentHigh) and close > mssRecentHigh and (bar_index - mssRecentHighBar) <= i_mssLookback
+
+// Reset on new day
+if isNewDay
+    mssRecentHigh    := na
+    mssRecentLow     := na
+    mssRecentHighBar := 0
+    mssRecentLowBar  := 0
+
+// ============================================================================
+// DETECTION: FVG
+// ============================================================================
+
+// Bullish FVG: gap up (bar[0].low > bar[2].high)
+bullFVG     = low > high[2]
+bullFVG_top = low
+bullFVG_bot = high[2]
+bullFVG_sz  = bullFVG_top - bullFVG_bot
+bullFVG_mid = (bullFVG_top + bullFVG_bot) / 2.0
+bullFVG_ok  = bullFVG and bullFVG_sz >= minFvgSize
+
+// Bearish FVG: gap down (bar[0].high < bar[2].low)
+bearFVG     = high < low[2]
+bearFVG_top = low[2]
+bearFVG_bot = high
+bearFVG_sz  = bearFVG_top - bearFVG_bot
+bearFVG_mid = (bearFVG_top + bearFVG_bot) / 2.0
+bearFVG_ok  = bearFVG and bearFVG_sz >= minFvgSize
+
+// FVG arrays (parallel arrays, max 5 each direction)
+var float[] fvgTopArr  = array.new_float(0)
+var float[] fvgBotArr  = array.new_float(0)
+var float[] fvgMidArr  = array.new_float(0)
+var int[]   fvgDirArr  = array.new_int(0)    // +1 bullish, -1 bearish
+var int[]   fvgBarArr  = array.new_int(0)
+var bool[]  fvgActiveArr = array.new_bool(0)
+var box[]   fvgBoxArr  = array.new_box(0)
+
+f_addFvg(float ftop, float fbot, float fmid, int fdir) =>
+    if array.size(fvgTopArr) >= 5
+        array.pop(fvgTopArr)
+        array.pop(fvgBotArr)
+        array.pop(fvgMidArr)
+        array.pop(fvgDirArr)
+        array.pop(fvgBarArr)
+        array.pop(fvgActiveArr)
+        if array.size(fvgBoxArr) > 5
+            ob = array.pop(fvgBoxArr)
+            box.delete(ob)
+    array.unshift(fvgTopArr, ftop)
+    array.unshift(fvgBotArr, fbot)
+    array.unshift(fvgMidArr, fmid)
+    array.unshift(fvgDirArr, fdir)
+    array.unshift(fvgBarArr, bar_index)
+    array.unshift(fvgActiveArr, true)
+    if i_showFvgBoxes
+        bxColor = fdir == 1 ? i_bullFvgColor : i_bearFvgColor
+        bx = box.new(bar_index - 2, ftop, bar_index + 30, fbot, border_color=na, bgcolor=bxColor)
+        array.unshift(fvgBoxArr, bx)
+
+if bullFVG_ok
+    f_addFvg(bullFVG_top, bullFVG_bot, bullFVG_mid, 1)
+if bearFVG_ok
+    f_addFvg(bearFVG_top, bearFVG_bot, bearFVG_mid, -1)
+
+// Mitigation: close passes through FVG
+if array.size(fvgTopArr) > 0
+    for i = array.size(fvgTopArr) - 1 to 0
+        if i < array.size(fvgActiveArr) and array.get(fvgActiveArr, i)
+            ftop = array.get(fvgTopArr, i)
+            fbot = array.get(fvgBotArr, i)
+            fdir = array.get(fvgDirArr, i)
+            // Bullish FVG mitigated when price closes below bottom
+            if fdir == 1 and close < fbot
+                array.set(fvgActiveArr, i, false)
+                if i < array.size(fvgBoxArr)
+                    box.set_bgcolor(array.get(fvgBoxArr, i), i_mitigatedColor)
+            // Bearish FVG mitigated when price closes above top
+            if fdir == -1 and close > ftop
+                array.set(fvgActiveArr, i, false)
+                if i < array.size(fvgBoxArr)
+                    box.set_bgcolor(array.get(fvgBoxArr, i), i_mitigatedColor)
+
+// Reset FVGs on new day
+if isNewDay
+    if array.size(fvgBoxArr) > 0
+        for i = 0 to array.size(fvgBoxArr) - 1
+            box.delete(array.get(fvgBoxArr, i))
+    array.clear(fvgTopArr)
+    array.clear(fvgBotArr)
+    array.clear(fvgMidArr)
+    array.clear(fvgDirArr)
+    array.clear(fvgBarArr)
+    array.clear(fvgActiveArr)
+    array.clear(fvgBoxArr)
+
+// Find nearest unmitigated FVG for entry
+// direction: +1 = bullish (for LONG entry), -1 = bearish (for SHORT entry)
+f_findEntryFvg(int direction) =>
+    _top = float(na)
+    _bot = float(na)
+    _mid = float(na)
+    _dist = 999999.0
+    if array.size(fvgTopArr) > 0
+        for i = 0 to array.size(fvgTopArr) - 1
+            if i < array.size(fvgActiveArr) and array.get(fvgActiveArr, i)
+                if array.get(fvgDirArr, i) == direction
+                    ft = array.get(fvgTopArr, i)
+                    fb = array.get(fvgBotArr, i)
+                    fm = array.get(fvgMidArr, i)
+                    d = math.abs(fm - close)
+                    if d < _dist
+                        _dist := d
+                        _top  := ft
+                        _bot  := fb
+                        _mid  := fm
+    [_top, _bot, _mid]
+
+// ============================================================================
+// DUAL-TRACK STATE MACHINE
+// ============================================================================
+// States: 0=IDLE, 1=PENDING, 2=IN_TRADE
+
+// --- SHORT track state ---
+var int   stShort           = 0
+var float stShort_swingPx   = na
+var int   stShort_swingBar  = 0
+var bool  stShort_po3Active = false
+var bool  stShort_dispSeen  = false
+var float stShort_dispBody  = 0.0
+// Trade state
+var float stShort_entry     = na
+var float stShort_stop      = na
+var float stShort_t1        = na
+var float stShort_t2        = na
+var float stShort_trailPx   = na   // R-level activation price
+var float stShort_trailStop = na   // current trail stop
+var float stShort_riskPts   = na
+var int   stShort_contracts = 0
+var bool  stShort_t1Hit     = false
+var bool  stShort_t2Hit     = false
+var float stShort_maxR      = 0.0
+var string stShort_combo    = ""
+var string stShort_conf     = ""
+var int   stShort_tradeBar  = 0
+
+// --- LONG track state ---
+var int   stLong            = 0
+var float stLong_swingPx    = na
+var int   stLong_swingBar   = 0
+var bool  stLong_po3Active  = false
+var bool  stLong_dispSeen   = false
+var float stLong_dispBody   = 0.0
+// Trade state
+var float stLong_entry      = na
+var float stLong_stop       = na
+var float stLong_t1         = na
+var float stLong_t2         = na
+var float stLong_trailPx    = na
+var float stLong_trailStop  = na
+var float stLong_riskPts    = na
+var int   stLong_contracts  = 0
+var bool  stLong_t1Hit      = false
+var bool  stLong_t2Hit      = false
+var float stLong_maxR       = 0.0
+var string stLong_combo     = ""
+var string stLong_conf      = ""
+var int   stLong_tradeBar   = 0
+
+// --- Session stats ---
+var int   sessWins   = 0
+var int   sessLosses = 0
+var float sessTotalR = 0.0
+
+// --- Alert flags (reset each bar) ---
+var bool alertShortPending = false
+var bool alertLongPending  = false
+var bool alertShortEntry   = false
+var bool alertLongEntry    = false
+var bool alertTradeExit    = false
+
+alertShortPending := false
+alertLongPending  := false
+alertShortEntry   := false
+alertLongEntry    := false
+alertTradeExit    := false
+
+// --- Trade line drawing state ---
+var line slLineShort    = na
+var line entLineShort   = na
+var line t1LineShort    = na
+var line t2LineShort    = na
+var line slLineLong     = na
+var line entLineLong    = na
+var line t1LineLong     = na
+var line t2LineLong     = na
+
+// Exit info for labels (reset each bar)
+var string exitLabel = ""
+var float  exitR     = 0.0
+exitLabel := ""
+exitR     := 0.0
+
+// ============================================================================
+// DAILY RESET
+// ============================================================================
+
+if isNewDay
+    if stShort != 2
+        stShort := 0
+    if stLong != 2
+        stLong  := 0
+    stShort_dispSeen := false
+    stLong_dispSeen  := false
+    sessWins   := 0
+    sessLosses := 0
+    sessTotalR := 0.0
+
+// ============================================================================
+// SHORT TRACK STATE MACHINE
+// ============================================================================
+
+// --- IDLE -> PENDING: swing high detected ---
+if stShort == 0 and not na(swingHigh)
+    stShort           := 1
+    stShort_swingPx   := swingHigh
+    stShort_swingBar  := bar_index - i_swingRight
+    stShort_po3Active := isPO3High()
+    stShort_dispSeen  := false
+    stShort_dispBody  := 0.0
+    alertShortPending := true
+
+// --- PENDING: check displacement + MSS ---
+if stShort == 1
+    // Expire if too old
+    if bar_index - stShort_swingBar > i_maxPendingAge
+        stShort := 0
+    else
+        // Check for bearish displacement (selling away from swing high)
+        if isBearishDisp and close < stShort_swingPx
+            stShort_dispSeen := true
+            stShort_dispBody := bodySize
+
+        // Check for bearish MSS (close breaks below recent swing low)
+        if bearishMSS and sessionOK()
+            // Determine combo
+            has_po3  = stShort_po3Active
+            has_disp = stShort_dispSeen
+
+            // BLOCK: PO3 + MSS without displacement (40% WR)
+            blocked = has_po3 and not has_disp
+
+            if not blocked
+                // Combo label + confidence + contracts
+                combo  = has_po3 and has_disp ? "PO3+Disp+MSS" : has_disp ? "Disp+MSS" : "MSS"
+                conf   = has_po3 and has_disp ? "MAX" : has_disp ? "HIGH" : "NORMAL"
+                cts    = has_po3 and has_disp ? 3 : 2
+
+                // Find bearish FVG for entry
+                [fTop, fBot, fMid] = f_findEntryFvg(-1)
+                entryPx = not na(fMid) ? fMid : close
+
+                // Stop = swing high + buffer
+                stopPx = stShort_swingPx + slBuffer
+                riskPts = stopPx - entryPx
+
+                // Validate risk
+                if riskPts > 0 and riskPts >= i_minRiskPts and riskPts <= i_maxRiskPts
+                    // Validate stop is above entry (correct side for short)
+                    if stopPx > entryPx
+                        stShort          := 2
+                        stShort_entry    := entryPx
+                        stShort_stop     := stopPx
+                        stShort_riskPts  := riskPts
+                        stShort_t1       := entryPx - (riskPts * i_t1R)
+                        stShort_t2       := entryPx - (riskPts * i_t2FixedR)
+                        stShort_trailPx  := entryPx - (riskPts * i_trailR)
+                        stShort_trailStop := na
+                        stShort_contracts := cts
+                        stShort_t1Hit    := false
+                        stShort_t2Hit    := false
+                        stShort_maxR     := 0.0
+                        stShort_combo    := combo
+                        stShort_conf     := conf
+                        stShort_tradeBar := bar_index
+                        alertShortEntry  := true
+
+                        if i_showMSS
+                            lbl = label.new(bar_index, high + (4 * tickVal), combo + "\nSHORT " + str.tostring(cts) + "ct",
+                                 style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+
+// --- IN_TRADE: manage short position ---
+if stShort == 2
+    curR = not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - close) / stShort_riskPts : 0.0
+    rHigh = not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - low) / stShort_riskPts : 0.0
+    stShort_maxR := math.max(stShort_maxR, rHigh)
+
+    tradeExited = false
+    tradeExitType = ""
+    tradeExitR = 0.0
+
+    // T1 check FIRST (benefit of doubt on same bar)
+    if not stShort_t1Hit and low <= stShort_t1
+        stShort_t1Hit := true
+        stShort_stop  := stShort_entry  // move to breakeven
+        if i_showTradeLines
+            label.new(bar_index, low - (2 * tickVal), "T1",
+                 style=label.style_label_up, color=color.green, textcolor=color.white, size=size.tiny)
+
+    // Trail activation at trailR
+    if stShort_t1Hit and low <= stShort_trailPx and na(stShort_trailStop)
+        stShort_trailStop := stShort_entry - (stShort_riskPts * i_t1R)  // floor at T1
+
+    // Trail update (ratchet down)
+    if not na(stShort_trailStop)
+        newTrail = high[1] + trailBuffer
+        if newTrail < stShort_trailStop
+            stShort_trailStop := newTrail
+        stShort_stop := stShort_trailStop
+
+    // T2 fixed exit
+    if not stShort_t2Hit and low <= stShort_t2
+        stShort_t2Hit := true
+        tradeExited   := true
+        tradeExitType := "T2 TARGET"
+        tradeExitR    := i_t2FixedR
+
+    // Stop loss check (after T1/trail)
+    if not tradeExited and high >= stShort_stop
+        tradeExited   := true
+        tradeExitType := stShort_t1Hit ? "TRAIL STOP" : "STOP LOSS"
+        tradeExitR    := not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - stShort_stop) / stShort_riskPts : -1.0
+
+    // EOD exit
+    if not tradeExited and isEOD()
+        tradeExited   := true
+        tradeExitType := "EOD"
+        tradeExitR    := curR
+
+    if tradeExited
+        sessTotalR += tradeExitR
+        if tradeExitR > 0
+            sessWins += 1
+        else
+            sessLosses += 1
+        exitLabel := "S:" + tradeExitType
+        exitR     := tradeExitR
+        alertTradeExit := true
+
+        if i_showTradeLines
+            exitColor = tradeExitType == "STOP LOSS" ? color.red : tradeExitType == "TRAIL STOP" ? color.orange : color.green
+            label.new(bar_index, high + (2 * tickVal), tradeExitType + " " + str.tostring(tradeExitR, "#.#") + "R",
+                 style=label.style_label_down, color=exitColor, textcolor=color.white, size=size.tiny)
+
+        // Reset
+        stShort       := 0
+        stShort_entry := na
+        stShort_stop  := na
+        stShort_t1    := na
+        stShort_t2    := na
+        stShort_trailPx   := na
+        stShort_trailStop := na
+        stShort_riskPts   := na
+        line.delete(slLineShort)
+        line.delete(entLineShort)
+        line.delete(t1LineShort)
+        line.delete(t2LineShort)
+        slLineShort   := na
+        entLineShort  := na
+        t1LineShort   := na
+        t2LineShort   := na
+
+// ============================================================================
+// LONG TRACK STATE MACHINE
+// ============================================================================
+
+// --- IDLE -> PENDING: swing low detected ---
+if stLong == 0 and not na(swingLow)
+    stLong           := 1
+    stLong_swingPx   := swingLow
+    stLong_swingBar  := bar_index - i_swingRight
+    stLong_po3Active := isPO3Low()
+    stLong_dispSeen  := false
+    stLong_dispBody  := 0.0
+    alertLongPending := true
+
+// --- PENDING: check displacement + MSS ---
+if stLong == 1
+    // Expire if too old
+    if bar_index - stLong_swingBar > i_maxPendingAge
+        stLong := 0
+    else
+        // Check for bullish displacement (buying away from swing low)
+        if isBullishDisp and close > stLong_swingPx
+            stLong_dispSeen := true
+            stLong_dispBody := bodySize
+
+        // Check for bullish MSS (close breaks above recent swing high)
+        if bullishMSS and sessionOK()
+            // Determine combo
+            has_po3  = stLong_po3Active
+            has_disp = stLong_dispSeen
+
+            // BLOCK: PO3 + MSS without displacement (40% WR)
+            blocked = has_po3 and not has_disp
+
+            if not blocked
+                // Combo label + confidence + contracts
+                combo  = has_po3 and has_disp ? "PO3+Disp+MSS" : has_disp ? "Disp+MSS" : "MSS"
+                conf   = has_po3 and has_disp ? "MAX" : has_disp ? "HIGH" : "NORMAL"
+                cts    = has_po3 and has_disp ? 3 : 2
+
+                // Find bullish FVG for entry
+                [fTop, fBot, fMid] = f_findEntryFvg(1)
+                entryPx = not na(fMid) ? fMid : close
+
+                // Stop = swing low - buffer
+                stopPx = stLong_swingPx - slBuffer
+                riskPts = entryPx - stopPx
+
+                // Validate risk
+                if riskPts > 0 and riskPts >= i_minRiskPts and riskPts <= i_maxRiskPts
+                    // Validate stop is below entry (correct side for long)
+                    if stopPx < entryPx
+                        stLong           := 2
+                        stLong_entry     := entryPx
+                        stLong_stop      := stopPx
+                        stLong_riskPts   := riskPts
+                        stLong_t1        := entryPx + (riskPts * i_t1R)
+                        stLong_t2        := entryPx + (riskPts * i_t2FixedR)
+                        stLong_trailPx   := entryPx + (riskPts * i_trailR)
+                        stLong_trailStop := na
+                        stLong_contracts := cts
+                        stLong_t1Hit     := false
+                        stLong_t2Hit     := false
+                        stLong_maxR      := 0.0
+                        stLong_combo     := combo
+                        stLong_conf      := conf
+                        stLong_tradeBar  := bar_index
+                        alertLongEntry   := true
+
+                        if i_showMSS
+                            lbl = label.new(bar_index, low - (4 * tickVal), combo + "\nLONG " + str.tostring(cts) + "ct",
+                                 style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
+
+// --- IN_TRADE: manage long position ---
+if stLong == 2
+    curR = not na(stLong_riskPts) and stLong_riskPts > 0 ? (close - stLong_entry) / stLong_riskPts : 0.0
+    rHigh = not na(stLong_riskPts) and stLong_riskPts > 0 ? (high - stLong_entry) / stLong_riskPts : 0.0
+    stLong_maxR := math.max(stLong_maxR, rHigh)
+
+    tradeExited = false
+    tradeExitType = ""
+    tradeExitR = 0.0
+
+    // T1 check FIRST (benefit of doubt)
+    if not stLong_t1Hit and high >= stLong_t1
+        stLong_t1Hit := true
+        stLong_stop  := stLong_entry  // breakeven
+        if i_showTradeLines
+            label.new(bar_index, high + (2 * tickVal), "T1",
+                 style=label.style_label_down, color=color.green, textcolor=color.white, size=size.tiny)
+
+    // Trail activation
+    if stLong_t1Hit and high >= stLong_trailPx and na(stLong_trailStop)
+        stLong_trailStop := stLong_entry + (stLong_riskPts * i_t1R)  // floor at T1
+
+    // Trail update (ratchet up)
+    if not na(stLong_trailStop)
+        newTrail = low[1] - trailBuffer
+        if newTrail > stLong_trailStop
+            stLong_trailStop := newTrail
+        stLong_stop := stLong_trailStop
+
+    // T2 fixed exit
+    if not stLong_t2Hit and high >= stLong_t2
+        stLong_t2Hit  := true
+        tradeExited   := true
+        tradeExitType := "T2 TARGET"
+        tradeExitR    := i_t2FixedR
+
+    // Stop loss (after T1/trail)
+    if not tradeExited and low <= stLong_stop
+        tradeExited   := true
+        tradeExitType := stLong_t1Hit ? "TRAIL STOP" : "STOP LOSS"
+        tradeExitR    := not na(stLong_riskPts) and stLong_riskPts > 0 ? (stLong_stop - stLong_entry) / stLong_riskPts : -1.0
+
+    // EOD exit
+    if not tradeExited and isEOD()
+        tradeExited   := true
+        tradeExitType := "EOD"
+        tradeExitR    := curR
+
+    if tradeExited
+        sessTotalR += tradeExitR
+        if tradeExitR > 0
+            sessWins += 1
+        else
+            sessLosses += 1
+        exitLabel := "L:" + tradeExitType
+        exitR     := tradeExitR
+        alertTradeExit := true
+
+        if i_showTradeLines
+            exitColor = tradeExitType == "STOP LOSS" ? color.red : tradeExitType == "TRAIL STOP" ? color.orange : color.green
+            label.new(bar_index, low - (2 * tickVal), tradeExitType + " " + str.tostring(tradeExitR, "#.#") + "R",
+                 style=label.style_label_up, color=exitColor, textcolor=color.white, size=size.tiny)
+
+        // Reset
+        stLong        := 0
+        stLong_entry  := na
+        stLong_stop   := na
+        stLong_t1     := na
+        stLong_t2     := na
+        stLong_trailPx    := na
+        stLong_trailStop  := na
+        stLong_riskPts    := na
+        line.delete(slLineLong)
+        line.delete(entLineLong)
+        line.delete(t1LineLong)
+        line.delete(t2LineLong)
+        slLineLong    := na
+        entLineLong   := na
+        t1LineLong    := na
+        t2LineLong    := na
+
+// ============================================================================
+// DISPLACEMENT LABELS (drawn after state machine so we know context)
+// ============================================================================
+
+if i_showDisp and isBearishDisp
+    label.new(bar_index, high + (2 * tickVal), "DISP",
+         style=label.style_label_down, color=color.red, textcolor=color.white, size=size.tiny)
+if i_showDisp and isBullishDisp
+    label.new(bar_index, low - (2 * tickVal), "DISP",
+         style=label.style_label_up, color=color.green, textcolor=color.white, size=size.tiny)
+
+// ============================================================================
+// TRADE LINES (re-drawn each bar while in trade)
+// ============================================================================
+
+if stShort == 2 and i_showTradeLines
+    line.delete(entLineShort)
+    line.delete(slLineShort)
+    line.delete(t1LineShort)
+    line.delete(t2LineShort)
+    entLineShort := line.new(stShort_tradeBar, stShort_entry, bar_index + 5, stShort_entry, color=color.white, style=line.style_solid, width=1)
+    slLineShort  := line.new(stShort_tradeBar, stShort_stop, bar_index + 5, stShort_stop, color=color.red, style=line.style_dotted, width=2)
+    if not stShort_t1Hit
+        t1LineShort := line.new(stShort_tradeBar, stShort_t1, bar_index + 5, stShort_t1, color=color.green, style=line.style_dotted, width=1)
+    else
+        line.delete(t1LineShort)
+        t1LineShort := na
+    if not stShort_t2Hit
+        t2LineShort := line.new(stShort_tradeBar, stShort_t2, bar_index + 5, stShort_t2, color=color.teal, style=line.style_dotted, width=1)
+    else
+        line.delete(t2LineShort)
+        t2LineShort := na
+
+if stLong == 2 and i_showTradeLines
+    line.delete(entLineLong)
+    line.delete(slLineLong)
+    line.delete(t1LineLong)
+    line.delete(t2LineLong)
+    entLineLong := line.new(stLong_tradeBar, stLong_entry, bar_index + 5, stLong_entry, color=color.white, style=line.style_solid, width=1)
+    slLineLong  := line.new(stLong_tradeBar, stLong_stop, bar_index + 5, stLong_stop, color=color.red, style=line.style_dotted, width=2)
+    if not stLong_t1Hit
+        t1LineLong := line.new(stLong_tradeBar, stLong_t1, bar_index + 5, stLong_t1, color=color.green, style=line.style_dotted, width=1)
+    else
+        line.delete(t1LineLong)
+        t1LineLong := na
+    if not stLong_t2Hit
+        t2LineLong := line.new(stLong_tradeBar, stLong_t2, bar_index + 5, stLong_t2, color=color.teal, style=line.style_dotted, width=1)
+    else
+        line.delete(t2LineLong)
+        t2LineLong := na
+
+// ============================================================================
+// BACKGROUND TINT
+// ============================================================================
+
+shortBg = not i_showBgTint ? na : stShort == 1 ? color.new(color.orange, 95) : stShort == 2 ? color.new(color.red, 97) : na
+longBg  = not i_showBgTint ? na : stLong == 1 ? color.new(color.orange, 95) : stLong == 2 ? color.new(color.green, 97) : na
+middayBg = i_showBgTint and inMidday() ? color.new(color.gray, 95) : na
+
+bgcolor(middayBg, title="Midday Block")
+bgcolor(shortBg, title="Short Track")
+bgcolor(longBg, title="Long Track")
+
+// ============================================================================
+// DASHBOARD TABLE
+// ============================================================================
+
+f_stateStr(int st) =>
+    st == 0 ? "IDLE" : st == 1 ? "PENDING" : st == 2 ? "IN_TRADE" : "?"
+
+f_stateClr(int st) =>
+    st == 0 ? color.gray : st == 1 ? color.orange : st == 2 ? color.red : color.gray
+
+var table tbl = table.new(position.top_right, 2, 20, bgcolor=color.new(color.black, 80))
+
+if barstate.islast and i_showTable
+    // Row 0: Title
+    table.cell(tbl, 0, 0, "ICT Confluence", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.small)
+
+    // Row 1: PO3 Phase
+    po3Str = f_po3Label()
+    po3Clr = po3Str == "OFF" ? color.gray : color.green
+    table.cell(tbl, 0, 1, "PO3 Phase", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 1, po3Str, text_color=po3Clr, text_size=size.tiny)
+
+    // Row 2: Session
+    sessStr = inMidday() ? "MIDDAY BLOCK" : inPMCutoff() ? "PM CUTOFF" : sessionOK() ? "OK" : "BLOCKED"
+    sessClr = sessStr == "OK" ? color.green : sessStr == "MIDDAY BLOCK" ? color.orange : color.red
+    table.cell(tbl, 0, 2, "Session", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 2, sessStr, text_color=sessClr, text_size=size.tiny)
+
+    // Row 3-8: SHORT Track
+    table.cell(tbl, 0, 3, "SHORT", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, f_stateStr(stShort), text_color=f_stateClr(stShort), text_size=size.small)
+
+    // Swing
+    swShortStr = stShort >= 1 and not na(stShort_swingPx) ? str.tostring(stShort_swingPx, "#.##") : "---"
+    table.cell(tbl, 0, 4, "Swing H", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 4, swShortStr + (stShort >= 1 and stShort_po3Active ? " PO3" : ""), text_color=stShort >= 1 ? color.red : color.gray, text_size=size.tiny)
+
+    // Disp
+    dispShortStr = stShort >= 1 ? (stShort_dispSeen ? "YES" : "---") : "---"
+    table.cell(tbl, 0, 5, "Disp", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 5, dispShortStr, text_color=stShort_dispSeen and stShort >= 1 ? color.red : color.gray, text_size=size.tiny)
+
+    // Combo / Confidence
+    table.cell(tbl, 0, 6, "Combo", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 6, stShort == 2 ? stShort_combo : "---", text_color=stShort == 2 ? color.white : color.gray, text_size=size.tiny)
+
+    table.cell(tbl, 0, 7, "Conf/Cts", text_color=color.white, text_size=size.tiny)
+    confShortStr = stShort == 2 ? stShort_conf + " " + str.tostring(stShort_contracts) + "ct" : "---"
+    confShortClr = stShort == 2 ? (stShort_conf == "MAX" ? color.green : stShort_conf == "HIGH" ? color.yellow : color.white) : color.gray
+    table.cell(tbl, 1, 7, confShortStr, text_color=confShortClr, text_size=size.tiny)
+
+    // Trade info
+    tradeShortStr = stShort == 2 and not na(stShort_entry) ? "E:" + str.tostring(stShort_entry, "#.##") + " SL:" + str.tostring(stShort_stop, "#.##") : "---"
+    curRShort = stShort == 2 and not na(stShort_riskPts) and stShort_riskPts > 0 ? (stShort_entry - close) / stShort_riskPts : 0.0
+    table.cell(tbl, 0, 8, "Trade", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 8, stShort == 2 ? tradeShortStr + " (" + str.tostring(curRShort, "#.#") + "R)" : "---", text_color=stShort == 2 ? (curRShort > 0 ? color.green : color.red) : color.gray, text_size=size.tiny)
+
+    // Row 9-14: LONG Track
+    table.cell(tbl, 0, 9, "LONG", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 9, f_stateStr(stLong), text_color=stLong == 2 ? color.green : f_stateClr(stLong), text_size=size.small)
+
+    // Swing
+    swLongStr = stLong >= 1 and not na(stLong_swingPx) ? str.tostring(stLong_swingPx, "#.##") : "---"
+    table.cell(tbl, 0, 10, "Swing L", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 10, swLongStr + (stLong >= 1 and stLong_po3Active ? " PO3" : ""), text_color=stLong >= 1 ? color.green : color.gray, text_size=size.tiny)
+
+    // Disp
+    dispLongStr = stLong >= 1 ? (stLong_dispSeen ? "YES" : "---") : "---"
+    table.cell(tbl, 0, 11, "Disp", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 11, dispLongStr, text_color=stLong_dispSeen and stLong >= 1 ? color.green : color.gray, text_size=size.tiny)
+
+    // Combo / Confidence
+    table.cell(tbl, 0, 12, "Combo", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 12, stLong == 2 ? stLong_combo : "---", text_color=stLong == 2 ? color.white : color.gray, text_size=size.tiny)
+
+    table.cell(tbl, 0, 13, "Conf/Cts", text_color=color.white, text_size=size.tiny)
+    confLongStr = stLong == 2 ? stLong_conf + " " + str.tostring(stLong_contracts) + "ct" : "---"
+    confLongClr = stLong == 2 ? (stLong_conf == "MAX" ? color.green : stLong_conf == "HIGH" ? color.yellow : color.white) : color.gray
+    table.cell(tbl, 1, 13, confLongStr, text_color=confLongClr, text_size=size.tiny)
+
+    // Trade info
+    tradeLongStr = stLong == 2 and not na(stLong_entry) ? "E:" + str.tostring(stLong_entry, "#.##") + " SL:" + str.tostring(stLong_stop, "#.##") : "---"
+    curRLong = stLong == 2 and not na(stLong_riskPts) and stLong_riskPts > 0 ? (close - stLong_entry) / stLong_riskPts : 0.0
+    table.cell(tbl, 0, 14, "Trade", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 14, stLong == 2 ? tradeLongStr + " (" + str.tostring(curRLong, "#.#") + "R)" : "---", text_color=stLong == 2 ? (curRLong > 0 ? color.green : color.red) : color.gray, text_size=size.tiny)
+
+    // Separator
+    table.cell(tbl, 0, 15, "", text_size=size.tiny)
+    table.cell(tbl, 1, 15, "", text_size=size.tiny)
+
+    // Row 16-17: Session stats
+    totalTrades = sessWins + sessLosses
+    winRate = totalTrades > 0 ? (sessWins * 100.0) / totalTrades : 0.0
+    table.cell(tbl, 0, 16, "W/L", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 16, str.tostring(sessWins) + "/" + str.tostring(sessLosses) + " (" + str.tostring(winRate, "#") + "%)",
+         text_color=sessWins > sessLosses ? color.green : sessLosses > sessWins ? color.red : color.gray, text_size=size.tiny)
+
+    table.cell(tbl, 0, 17, "Total R", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 17, str.tostring(sessTotalR, "#.#") + "R",
+         text_color=sessTotalR > 0 ? color.green : sessTotalR < 0 ? color.red : color.gray, text_size=size.tiny)
+
+    // Displacement info
+    table.cell(tbl, 0, 18, "Avg Body", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 18, str.tostring(nz(avgBody, 0), "#.##") + " / Thresh: " + str.tostring(nz(avgBody * i_dispBodyMult, 0), "#.##"),
+         text_color=color.white, text_size=size.tiny)
+
+    // MSS tracking
+    mssStr = not na(mssRecentHigh) or not na(mssRecentLow) ? "H:" + (na(mssRecentHigh) ? "---" : str.tostring(mssRecentHigh, "#.##")) + " L:" + (na(mssRecentLow) ? "---" : str.tostring(mssRecentLow, "#.##")) : "---"
+    table.cell(tbl, 0, 19, "MSS Pivots", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 1, 19, mssStr, text_color=color.white, text_size=size.tiny)
+
+// ============================================================================
+// ALERTS: alertcondition() (static, for TradingView alert dialog)
+// ============================================================================
+
+alertcondition(alertShortPending, title="1. SHORT Pending",
+     message='{"model":"ICT_CONFLUENCE","event":"SHORT_PENDING","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
+
+alertcondition(alertLongPending, title="2. LONG Pending",
+     message='{"model":"ICT_CONFLUENCE","event":"LONG_PENDING","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
+
+alertcondition(alertShortEntry, title="3. SHORT Entry",
+     message='{"model":"ICT_CONFLUENCE","event":"SHORT_ENTRY","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
+
+alertcondition(alertLongEntry, title="4. LONG Entry",
+     message='{"model":"ICT_CONFLUENCE","event":"LONG_ENTRY","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
+
+alertcondition(alertTradeExit, title="5. Trade Exit",
+     message='{"model":"ICT_CONFLUENCE","event":"TRADE_EXIT","symbol":"{{ticker}}","tf":"{{interval}}","close":"{{close}}"}')
+
+// ============================================================================
+// ALERTS: alert() with dynamic JSON (for webhook automation)
+// ============================================================================
+
+if alertShortPending
+    alert('{"model":"ICT_CONFLUENCE","event":"SHORT_PENDING",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"swingHigh":' + str.tostring(nz(stShort_swingPx), "#.####") + ',' +
+          '"po3":' + (stShort_po3Active ? "true" : "false") + ',' +
+          '"state":"PENDING"}', alert.freq_once_per_bar)
+
+if alertLongPending
+    alert('{"model":"ICT_CONFLUENCE","event":"LONG_PENDING",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"swingLow":' + str.tostring(nz(stLong_swingPx), "#.####") + ',' +
+          '"po3":' + (stLong_po3Active ? "true" : "false") + ',' +
+          '"state":"PENDING"}', alert.freq_once_per_bar)
+
+if alertShortEntry
+    alert('{"model":"ICT_CONFLUENCE","event":"SHORT_ENTRY",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"combo":"' + stShort_combo + '",' +
+          '"confidence":"' + stShort_conf + '",' +
+          '"contracts":' + str.tostring(stShort_contracts) + ',' +
+          '"entry":' + str.tostring(nz(stShort_entry), "#.####") + ',' +
+          '"stop":' + str.tostring(nz(stShort_stop), "#.####") + ',' +
+          '"risk":' + str.tostring(nz(stShort_riskPts), "#.####") + ',' +
+          '"t1":' + str.tostring(nz(stShort_t1), "#.####") + ',' +
+          '"t2":' + str.tostring(nz(stShort_t2), "#.####") + ',' +
+          '"po3":' + (stShort_po3Active ? "true" : "false") + ',' +
+          '"state":"IN_TRADE"}', alert.freq_once_per_bar)
+
+if alertLongEntry
+    alert('{"model":"ICT_CONFLUENCE","event":"LONG_ENTRY",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"combo":"' + stLong_combo + '",' +
+          '"confidence":"' + stLong_conf + '",' +
+          '"contracts":' + str.tostring(stLong_contracts) + ',' +
+          '"entry":' + str.tostring(nz(stLong_entry), "#.####") + ',' +
+          '"stop":' + str.tostring(nz(stLong_stop), "#.####") + ',' +
+          '"risk":' + str.tostring(nz(stLong_riskPts), "#.####") + ',' +
+          '"t1":' + str.tostring(nz(stLong_t1), "#.####") + ',' +
+          '"t2":' + str.tostring(nz(stLong_t2), "#.####") + ',' +
+          '"po3":' + (stLong_po3Active ? "true" : "false") + ',' +
+          '"state":"IN_TRADE"}', alert.freq_once_per_bar)
+
+if alertTradeExit
+    alert('{"model":"ICT_CONFLUENCE","event":"TRADE_EXIT",' +
+          '"symbol":"' + syminfo.ticker + '",' +
+          '"tf":"' + timeframe.period + '",' +
+          '"exitType":"' + exitLabel + '",' +
+          '"exitR":' + str.tostring(exitR, "#.#") + ',' +
+          '"close":' + str.tostring(close, "#.##") + ',' +
+          '"sessionWins":' + str.tostring(sessWins) + ',' +
+          '"sessionLosses":' + str.tostring(sessLosses) + ',' +
+          '"totalR":' + str.tostring(sessTotalR, "#.#") + ',' +
+          '"state":"IDLE"}', alert.freq_once_per_bar)
+
+// ============================================================================
+// END
+// ============================================================================
